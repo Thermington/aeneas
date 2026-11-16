@@ -4,7 +4,9 @@ import { engine, type NotifyEvent } from "../sync/engine";
 import { db } from "../sync/db";
 import { stopActivity } from "../sync/planner";
 import { SOURCE } from "../sync/actions";
-import { notify } from "../tauri/bridge";
+import { isTauri, notify, openExternal } from "../tauri/bridge";
+import { APP_VERSION, RELEASES_URL, versionNotice } from "../lib/appUpdate";
+import { useHubVersion } from "../lib/hubIdentity";
 import { useEscape } from "../lib/keys";
 import { go } from "../lib/router";
 
@@ -293,3 +295,30 @@ export function MonitorBanner() {
     </>
   );
 }
+
+/**
+ * A newer Aeneas app is out (the hub runs a later release than this app): the Windows and Android apps update only by
+ * installing the new one, so they say so once for each newer version, with a button to its download page.
+ */
+export function AppUpdateBanner() {
+  const hubVersion = useHubVersion();
+  const notice = versionNotice(APP_VERSION, hubVersion, isTauri);
+  const [dismissed, setDismissed] = useState<string | null>(() => { try { return localStorage.getItem(APP_UPDATE_KEY); } catch { return null; } });
+  const shown = notice?.kind === "app-older" && !!hubVersion && dismissed !== hubVersion;
+  const dismiss = useCallback(() => {
+    if (!hubVersion) return;
+    try { localStorage.setItem(APP_UPDATE_KEY, hubVersion); } catch { /* private window */ }
+    setDismissed(hubVersion);
+  }, [hubVersion]);
+  // Esc closes banners (Settings, Keyboard); for this one that is Dismiss.
+  useEscape(useCallback(() => { if (shown) dismiss(); }, [shown, dismiss]));
+  if (!shown || !notice) return null;
+  return (
+    <div className="banner sensor" role="status">
+      <div className="grow">{notice.text}</div>
+      <button className="small" onClick={() => void openExternal(RELEASES_URL)}>Get the new app</button>
+      <button className="small ghost" onClick={dismiss} aria-label="Dismiss the notice about a newer app">Dismiss</button>
+    </div>
+  );
+}
+const APP_UPDATE_KEY = "ea.appUpdate.dismissed";

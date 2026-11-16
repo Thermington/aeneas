@@ -8,7 +8,7 @@ import { db, META, setMeta, type RejectedEdit } from "../sync/db";
 import { engine } from "../sync/engine";
 import { ROUTE_LABEL } from "../sync/route";
 import { useHubReady, useMeta, useSyncState } from "../sync/hooks";
-import { CAPTURE_SHORTCUTS, autostartEnabled, getCaptureShortcut, getWidget, isAndroid, isTauri, isWindowsApp, notificationsAllowed, notify, onWidgetChanged, setAutostart, setCaptureShortcut, setWidget, setupFilePath } from "../tauri/bridge";
+import { CAPTURE_SHORTCUTS, autostartEnabled, getCaptureShortcut, getWidget, isAndroid, isTauri, isWindowsApp, notificationsAllowed, notify, onWidgetChanged, openExternal, setAutostart, setCaptureShortcut, setWidget, setupFilePath } from "../tauri/bridge";
 import { applySetupFile, type SetupFileResult } from "../tauri/setupFile";
 import { checkForUpdate, manifestCheck, promptInstall, shellVersion, subscribePwa, type PwaState } from "../pwa";
 import { fmtDateTime } from "../lib/time";
@@ -30,9 +30,9 @@ import { saveBlob } from "../lib/download";
 import { listedKeys } from "../lib/keys";
 import { refusedSentence, refusedValues } from "../lib/errors";
 import { localDate } from "../lib/planner";
+import { APP_VERSION, RELEASES_URL, versionNotice } from "../lib/appUpdate";
 
 /** This app's own version, from the build (the hub's comes from the hub). */
-const APP_VERSION: string = import.meta.env.VITE_APP_VERSION ?? "unknown";
 
 const SETUP_STATE: Record<SetupFileResult["state"], string> = {
   "not-desktop": "only on the desktop app",
@@ -132,7 +132,7 @@ function SettingsHome() {
         <NavRow href="/settings/planner" title="Planner" summary="Plan rules, week and renewals" />
         <NavRow href="/settings/data" title="Data" summary="Export notes, clear this device" />
         {isWindowsApp && <NavRow href="/settings/windows" title="Windows app" summary={windows} />}
-        <NavRow href="/settings/about" title="About" summary={isWindowsApp ? "Hub updates, versions and keyboard shortcuts" : "Hub updates, install and keyboard shortcuts"} />
+        <NavRow href="/settings/about" title="About" summary={isTauri ? "Hub updates, versions and keyboard shortcuts" : "Hub updates, install and keyboard shortcuts"} />
       </nav>
     </div>
   );
@@ -585,6 +585,7 @@ function About() {
   const [hubVersion, setHubVersion] = useState("");
   const hubName = hubLabel(useHubIdentity());
   const [appMsg, setAppMsg] = useState("");
+  const notice = versionNotice(APP_VERSION, hubVersion, isTauri);
 
   useEffect(() => subscribePwa(setPwa), []);
   useEffect(() => {
@@ -653,6 +654,14 @@ function About() {
             <dt>hub</dt>
             <dd>{engine.client ? `${hubName ? `${hubName}, ` : ""}${hubVersion || "checking"}` : "not configured"}</dd>
           </dl>
+          {notice && <div role="status">{notice.text}</div>}
+          {notice?.kind === "app-older" && (
+            <div className="row">
+              <button className="primary" onClick={() => void openExternal(RELEASES_URL)}>
+                Get the new app
+              </button>
+            </div>
+          )}
         </div>
       )}
       <Keyboard />

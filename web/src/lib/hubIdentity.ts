@@ -16,6 +16,15 @@ function load(): HubIdentity | null {
 }
 let current: HubIdentity | null = load();
 
+/** The version the hub reports (CONTRACT, Health), from the same answer: the Windows and Android apps compare theirs. */
+let version: string | null = null;
+const versionListeners = new Set<(v: string | null) => void>();
+function setVersion(next: string | null): void {
+  if (next === version) return;
+  version = next;
+  for (const fn of versionListeners) fn(next);
+}
+
 function set(next: HubIdentity | null): void {
   if (JSON.stringify(next) === JSON.stringify(current)) return;
   current = next;
@@ -33,11 +42,12 @@ export async function refreshHubIdentity(): Promise<void> {
   try {
     const h = await c.health();
     if (h.version === undefined) return; // not accepted with this key: say nothing new
+    setVersion(typeof h.version === "string" ? h.version : null);
     set(h.hub && (h.hub.name || h.hub.color) ? { name: h.hub.name ?? null, color: h.hub.color ?? null } : null);
   } catch { /* offline: keep what we had */ }
 }
 
-export function forgetHubIdentity(): void { set(null); }
+export function forgetHubIdentity(): void { set(null); setVersion(null); }
 
 /** Asks once each time the engine gets a hub client (start, pairing, switching hubs). */
 let askedFor: unknown = null;
@@ -75,4 +85,15 @@ export function useHubTitle(screen = ""): void {
   useEffect(() => {
     document.title = title;
   }, [title]);
+}
+
+/** The hub's version as it last answered, or null before it has (or on a hub it does not accept the key of). */
+export function useHubVersion(): string | null {
+  const [v, setV] = useState(version);
+  useEffect(() => {
+    versionListeners.add(setV);
+    setV(version);
+    return () => { versionListeners.delete(setV); };
+  }, []);
+  return v;
 }

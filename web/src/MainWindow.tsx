@@ -2,7 +2,7 @@ import { Suspense, type ReactNode } from "react";
 import type { Route } from "./lib/router";
 import { ScreenStart, Shell, screenOf } from "./components/Shell";
 import { ReminderBanner } from "./components/ReminderBanner";
-import { ActivityBanner, DigestToast, DiskBanner, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
+import { ActivityBanner, DigestToast, DiskBanner, AppUpdateBanner, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
 import { UpdateToast } from "./components/UpdateToast";
 import { IfModule, ModuleGate } from "./components/ModuleGate";
 
@@ -17,6 +17,7 @@ export function MainWindow({ route, view }: { route: Route; view: ReactNode }) {
         <ReminderBanner />
         <ActivityBanner />
         <DiskBanner />
+        <AppUpdateBanner />
         <IfModule id="sensors"><SensorBanner /></IfModule>
         <IfModule id="homelab"><MonitorBanner /></IfModule>
       </div>
