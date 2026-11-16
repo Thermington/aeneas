@@ -179,6 +179,15 @@ public enum ContactsMirror {
         for e in live where mine(e) { if let id = appleId(e) { linked[id] = e } }
         var unlinked = live.filter { appleId($0) == nil }
         let byId = Dictionary(contacts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // Linked under another device id to a card that is on this device: this device under a new id (installed
+        // again, or paired again and given a new id). The link moves to this device; counting only links with this
+        // id made every card a second person. A card id belongs to one device's Contacts, so another device's links
+        // (to cards not here) are still left alone.
+        for e in live.sorted(by: { ($0.updated_at, $0.id) > ($1.updated_at, $1.id) }) where !mine(e) {
+            guard let id = appleId(e), byId[id] != nil, linked[id] == nil else { continue }
+            linked[id] = e
+            p.links.append(.init(personId: e.id, contactId: id))
+        }
 
         for c in contacts where !ignored.contains(c.id) {
             if let e = linked[c.id] {

@@ -178,9 +178,15 @@ export class Vault {
     return full;
   }
 
-  /** Walk the vault for .md files. Hidden folders (.obsidian, .trash) are skipped. */
+  /**
+   * Walk the vault for .md files. Hidden folders (.obsidian, .trash) are skipped. A file whose size and modified time
+   * are the ones the vault recorded keeps its recorded hash; only the others are read and hashed (every note was read
+   * and hashed on each call).
+   */
   index(): VaultEntry[] {
     const out: VaultEntry[] = [];
+    const known = new Map<string, { hash: string; mtime: string; size: number }>();
+    for (const r of this.store.db.prepare("SELECT path, hash, mtime, size FROM vault_files").all() as { path: string; hash: string; mtime: string; size: number }[]) known.set(r.path, r);
     const walk = (dir: string, rel: string) => {
       let entries: fs.Dirent[] = [];
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -191,7 +197,10 @@ export class Vault {
         if (ent.isDirectory()) walk(full, r);
         else if (ent.isFile() && ent.name.endsWith(".md")) {
           const st = fs.statSync(full);
-          out.push({ path: r, hash: sha256(fs.readFileSync(full)), mtime: st.mtime.toISOString(), size: st.size });
+          const mtime = st.mtime.toISOString();
+          const k = known.get(r);
+          const hash = k && k.size === st.size && k.mtime === mtime ? k.hash : sha256(fs.readFileSync(full));
+          out.push({ path: r, hash, mtime, size: st.size });
         }
       }
     };

@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { capture, type CaptureResult } from "../sync/actions";
@@ -66,7 +67,7 @@ export function Capture({ mini = false }: { mini?: boolean }) {
       ref.current?.focus();
       if (mini && isTauri) setTimeout(() => void hideCurrentWindow(), 900);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }

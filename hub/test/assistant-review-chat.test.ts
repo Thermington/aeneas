@@ -130,7 +130,8 @@ test("C6 update_item moving a timed event's start alone leaves its end before it
 });
 
 test("C7 draft_in_my_voice in a chat sent with allow_cloud:false still goes to the cloud when the local draft fails", async () => {
-  const t = makeHub({ aiFake: false, ollamaUrl: "", anthropicApiKey: "", allowCloudDefault: true });
+  // With a voice model set up: without one the chat writes drafts itself and draft_in_my_voice is not offered.
+  const t = makeHub({ aiFake: false, ollamaUrl: "", anthropicApiKey: "", allowCloudDefault: true, adapterUrl: "http://127.0.0.1:9" });
   try {
     const cloudSeen: string[] = [];
     let round = 0;

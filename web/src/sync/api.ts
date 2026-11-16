@@ -277,6 +277,10 @@ export class HubClient {
   removeDevice(id: string) {
     return this.req<{ removed: string }>("DELETE", `/devices/${encodeURIComponent(id)}`);
   }
+  /** Every way to this hub now (GET /link/routes), as the hub sent it: route.ts `parseRoutes` checks it. */
+  linkRoutes(signal?: AbortSignal) {
+    return this.req<unknown>("GET", "/link/routes", undefined, signal);
+  }
 
   changes(since: number, signal?: AbortSignal, deviceId?: string) {
     const dev = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : "";

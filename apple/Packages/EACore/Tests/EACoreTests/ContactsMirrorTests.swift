@@ -120,4 +120,27 @@ final class ContactsMirrorTests: XCTestCase {
         XCTAssertEqual(p.writes.first?.card.family, "Lee")
     }
 
+    /// The Mac was installed again (or paired again and given a new id): the people its Contacts sync linked under the
+    /// old id are linked to cards on this Mac, so the links move to the new id. Every card used to become a second person.
+    func testANewDeviceIdTakesOverItsOwnLinksInsteadOfMakingSecondPeople() {
+        let people = [person("p1", "Jamie Lee", phones: ["5551234567"], apple: "c1", device: "old-mac"),
+                      person("p2", "Robin Diaz", phones: ["5559876543"], apple: "c2", device: "old-mac")]
+        let contacts = [contact("c1", "Jamie Lee", phones: ["(555) 123-4567"]), contact("c2", "Robin Diaz", phones: ["555 987 6543"])]
+        let state = Dictionary(uniqueKeysWithValues: people.map { ($0.id, ContactCard(person: $0).comparable) })
+        let p = ContactsMirror.plan(people: people, contacts: contacts, state: state, deviceId: "new-mac")
+        XCTAssertTrue(p.newPeople.isEmpty, "no second person")
+        XCTAssertEqual(p.links.map(\.personId).sorted(), ["p1", "p2"])
+        XCTAssertEqual(Set(p.links.map(\.contactId)), ["c1", "c2"])
+        XCTAssertTrue(p.writes.isEmpty)
+        XCTAssertTrue(p.creates.isEmpty)
+        // With no record on this Mac (installed again), both sides' values are kept, as for any first link.
+        let fresh = ContactsMirror.plan(people: people, contacts: [contact("c1", "Jamie Lee", phones: ["555 123 4567", "555 000 1111"]), contacts[1]], state: [:], deviceId: "new-mac")
+        XCTAssertTrue(fresh.newPeople.isEmpty)
+        XCTAssertEqual(fresh.patches["p1"]?.phones.count, 2)
+        // Another device's links to cards that are not on this one stay that device's.
+        let other = ContactsMirror.plan(people: [person("p3", "Alex Kim", apple: "c9", device: "iphone")], contacts: [contact("c1", "Jamie Lee")], state: [:], deviceId: "new-mac")
+        XCTAssertTrue(other.links.isEmpty)
+        XCTAssertEqual(other.newPeople.map(\.id), ["c1"])
+    }
+
 }

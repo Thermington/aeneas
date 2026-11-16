@@ -119,6 +119,14 @@ export async function snoozeReminder(r: Entity, until: string, reason?: string):
   });
 }
 
+/**
+ * Done on a task, the same from every screen (Now, Tasks, the Windows widget): a repeating task moves its reminder and
+ * deadline on to the next time instead of finishing.
+ */
+export function completeTask(t: Entity): Promise<Entity> {
+  return updateEntity(t, completeTaskPatch(t.fields));
+}
+
 export async function ackReminder(r: Entity): Promise<void> {
   if (engine.client) {
     try {

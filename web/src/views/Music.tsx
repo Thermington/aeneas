@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -84,7 +85,7 @@ function MusicList() {
       setText("");
       setTimeout(() => setSaved(null), 3000);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -228,7 +229,8 @@ function ideaFields(d: Partial<Draft>, e: Entity): Record<string, unknown> {
 function IdeaPage({ id }: { id: string }) {
   const e = useEntity(id);
   // Music ideas belong to music projects (the current one stays listed even if it is not one).
-  const projects = useEntities("project", (p) => p.fields.status !== "done" && ((p.fields as ProjectF).area === "music" || p.id === (e?.fields as MusicF | undefined)?.project_id));
+  const current = (e?.fields as MusicF | undefined)?.project_id;
+  const projects = useEntities("project", (p) => p.fields.status !== "done" && ((p.fields as ProjectF).area === "music" || p.id === current), [current]);
   const { draft, edit, saved } = useDraftSave(e, { toDraft: ideaDraft, toFields: ideaFields });
 
   if (!e || !draft) return <div className="empty">Idea not found.</div>;

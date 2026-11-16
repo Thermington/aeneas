@@ -16,7 +16,8 @@ import { errCode } from "./logsafe.js";
 export function reminderTick(store: Store, bus: Bus, now: Date = new Date()): string[] {
   const nowStr = now.toISOString();
   const fired: string[] = [];
-  for (const t of store.list({ kind: "task" })) {
+  // Only open tasks with a reminder time are read: every task ever made used to be parsed every 30 seconds.
+  for (const t of store.listWhere("task", [{ key: "remind_at", set: true }, { key: "status", isNot: "done" }])) {
     const eff = taskAlertAt(t.fields);
     if (!eff || eff > nowStr) continue;
     const firedList = Array.isArray(t.fields.fired) ? (t.fields.fired as string[]) : [];

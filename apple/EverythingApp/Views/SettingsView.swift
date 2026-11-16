@@ -53,6 +53,11 @@ struct SettingsView: View {
                         SettingsRow(title: "Images", symbol: "photo.on.rectangle", summary: ImageSettingsView.summary)
                     }
                 }
+                if model.isOn(.reference) {
+                    NavigationLink { ReferenceSettingsView() } label: {
+                        ReferenceSettingsRow()
+                    }
+                }
             }
             .themedRow()
             SwiftUI.Section {
@@ -138,7 +143,7 @@ struct SettingsView: View {
 
 /// The Settings screens that can be opened directly in Debug builds (`-EASettingsPage theme`).
 enum SettingsPage: String, Hashable, Identifiable {
-    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, modules
+    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, modules, reference
     var id: String { rawValue }
 
     /// A page named by a launch argument, once per launch.
@@ -161,6 +166,7 @@ enum SettingsPage: String, Hashable, Identifiable {
         case .tapEffects: TapEffectsView()
         case .noteSounds: NoteSoundsView()
         case .modules: ModulesSettingsView()
+        case .reference: ReferenceSettingsView()
         }
     }
 }
@@ -271,6 +277,8 @@ struct ConnectionSettingsView: View {
             DevicesSection()
             SwiftUI.Section("Sync") {
                 LabeledContent("Status", value: engine.statusLabel)
+                // How the hub is reached right now: Home network, Direct link or Tailscale.
+                if let route = engine.routeLabel { LabeledContent("Route in use", value: route) }
                 LabeledContent("Waiting to send", value: engine.outboxCount == 0 ? "Nothing" : "\(engine.outboxCount) changes")
                 LabeledContent("Items on this device", value: engine.entities.count.formatted())
                 DisclosureGroup("Details") {
@@ -287,8 +295,11 @@ struct ConnectionSettingsView: View {
                         ForEach(engine.rejectedEdits.reversed()) { r in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(r.title.isEmpty ? r.kind : r.title).font(.callout.weight(.semibold))
-                                Text(r.reason).font(.caption).foregroundStyle(.secondary)
-                                Text(r.fields).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(3)
+                                Text("Not kept, because \(RefusedText.reason(r.reason)).").font(.caption).foregroundStyle(.secondary)
+                                // What was changed, in words, so it can be typed again.
+                                ForEach(RefusedText.values(r.fields), id: \.self) { line in
+                                    Text(line).font(.caption2).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                                }
                             }
                         }
                         Button("Clear") { engine.clearRejected() }
@@ -412,8 +423,11 @@ struct AboutSettingsView: View {
             SwiftUI.Section {
                 LabeledContent("Version", value: "\(SettingsView.version) (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))")
                 LabeledContent("Platform", value: model.platform.rawValue)
+                #if DEBUG
+                // For whoever builds the app: whether it runs with the app group, and the store's file.
                 LabeledContent("App group", value: model.config.usesAppGroup ? "yes" : "no (using standard defaults)")
                 LabeledContent("Store", value: model.config.storeURL.lastPathComponent)
+                #endif
             }
             .themedRow()
         }

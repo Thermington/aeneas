@@ -25,10 +25,11 @@ extension SharedConfig {
 
     var privacyDefaults: UserDefaults { defaults }
 
-    /// The widget and complication snapshot (Now, next up, the running activity): emptied when this device is removed.
+    /// The widget and complication snapshot (Now, next up, the running activity) and the widget's Done taps waiting to
+    /// send: emptied when this device is removed.
     public func clearSnapshot() {
         let d = privacyDefaults
-        for k in ["now.id", "now.title", "now.status", "now.blockEnd", "nextUp.title", "nextUp.at", "nextBlock.title", "nextBlock.start",
+        for k in ["now.id", "now.title", "now.status", "now.timing", "now.blockEnd", "now.donePending", "nextUp.title", "nextUp.at", "nextBlock.title", "nextBlock.start",
                   "activity.name", "activity.start", "captures.unprocessed", "snapshot.updated", "modules.cache", "feel.cache", "feel.pending"] {
             d.removeObject(forKey: k)
         }

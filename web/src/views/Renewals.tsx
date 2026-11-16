@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { taskAlertAt } from "@everythingapp/shared";
 import { useCallback, useEffect, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
@@ -56,6 +57,15 @@ function toFields(f: typeof EMPTY, clearing: boolean): Record<string, unknown> {
   opt("url", f.url.trim());
   opt("notes", f.notes.trim());
   return out;
+}
+
+/**
+ * What Save writes: only the fields changed in the editor since it opened. Writing every field put the old due date
+ * back when Renewed was pressed with the editor open, undoing the renewal.
+ */
+export function editedFields(opened: typeof EMPTY, edited: typeof EMPTY): Record<string, unknown> {
+  const before = toFields(opened, true);
+  return Object.fromEntries(Object.entries(toFields(edited, true)).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(before[k])));
 }
 
 function WatchForm({ value, onChange, idPrefix }: { value: typeof EMPTY; onChange: (v: typeof EMPTY) => void; idPrefix: string }) {
@@ -123,6 +133,8 @@ export function Renewals({ focus }: { focus?: string | null } = {}) {
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<string | null>(focus ?? null);
   const [edit, setEdit] = useState<typeof EMPTY | null>(null);
+  /** The editor as it opened, so Save writes only what was changed in it. */
+  const [opened, setOpened] = useState<typeof EMPTY | null>(null);
   const [err, setErr] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   useEscape(
@@ -140,9 +152,13 @@ export function Renewals({ focus }: { focus?: string | null } = {}) {
 
   useEffect(() => {
     const w = open ? watches.find((x) => x.id === open) : undefined;
-    if (!w) return setEdit(null);
+    if (!w) {
+      setEdit(null);
+      setOpened(null);
+      return;
+    }
     const f = w.fields as WatchF;
-    setEdit({
+    const loaded = {
       title: f.title ?? "",
       category: f.category ?? "other",
       due: dueInput(f.due),
@@ -153,7 +169,9 @@ export function Renewals({ focus }: { focus?: string | null } = {}) {
       url: f.url ?? "",
       notes: f.notes ?? "",
       autopay: !!f.autopay,
-    });
+    };
+    setEdit(loaded);
+    setOpened(loaded);
     // Only when the opened watch changes; typing into the editor must not be overwritten by a sync echo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -166,8 +184,9 @@ export function Renewals({ focus }: { focus?: string | null } = {}) {
   };
 
   const save = async (w: Entity) => {
-    if (!edit || !edit.title.trim() || !edit.due) return;
-    await updateEntity(w, toFields(edit, true));
+    if (!edit || !opened || !edit.title.trim() || !edit.due) return;
+    const fields = editedFields(opened, edit);
+    if (Object.keys(fields).length) await updateEntity(w, fields);
     setOpen(null);
   };
 
@@ -177,7 +196,7 @@ export function Renewals({ focus }: { focus?: string | null } = {}) {
     try {
       await renewWatch(w);
     } catch (e) {
-      setErr((x) => ({ ...x, [w.id]: e instanceof Error ? e.message : String(e) }));
+      setErr((x) => ({ ...x, [w.id]: plainError(e) }));
     } finally {
       setBusy(null);
     }

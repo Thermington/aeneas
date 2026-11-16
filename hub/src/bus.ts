@@ -6,11 +6,12 @@ export interface ChangeEvent { seq: number; id: string; kind: string }
  * (id `digest:<date>`); `activity` is the focus check-in and carries `log_id` (id is the log id too);
  * `sensor` is a state change of a home sensor and carries `name`, `value`, `unit` and the new `state`;
  * `quiz` says the recall quiz for `date` is ready (id `quiz:<date>`); `monitor` is a homelab monitor going
- * `down` or back `up` (and the 6 hour re-notify of an unacknowledged incident) with `name`, `state` and `error`.
+ * `down` or back `up` (and the 6 hour re-notify of an unacknowledged incident) with `name`, `state` and `error`;
+ * `disk` says the disk with the hub's data is almost full (diskspace.ts), its whole message in `title`.
  */
 export interface NotifyEvent {
   id: string;
-  kind: "reminder" | "digest" | "activity" | "sensor" | "quiz" | "monitor";
+  kind: "reminder" | "digest" | "activity" | "sensor" | "quiz" | "monitor" | "disk";
   title: string;
   at: string;
   friction?: string;

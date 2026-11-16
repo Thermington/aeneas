@@ -92,7 +92,11 @@ final class DirectLinkProtocol: URLProtocol, @unchecked Sendable {
         let request = self.request
         loading = Task { [weak self] in
             guard let self else { return }
-            do { try await self.run(request) } catch is CancellationError { } catch {
+            do { try await self.run(request) } catch is CancellationError { } catch let e as AfterSending {
+                // The request went out, at least in part, so it may have reached the hub: never reported as a
+                // failure to connect, which callers may send again (a chat message would repeat).
+                self.client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost, userInfo: [NSLocalizedDescriptionKey: "Direct link: \(e.error)"]))
+            } catch {
                 self.client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost, userInfo: [NSLocalizedDescriptionKey: "Direct link: \(error)"]))
             }
         }
@@ -121,6 +125,15 @@ final class DirectLinkProtocol: URLProtocol, @unchecked Sendable {
             bi = try await DirectLinkPool.shared.connection(node: node, relay: relay).openBi()
         }
         let send = bi.send(), recv = bi.recv()
+        do { try await exchange(request, url: url, body: body, send: send, recv: recv) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw AfterSending(error: error) }
+    }
+
+    /// A failure once the request has started going out.
+    struct AfterSending: Error { let error: Error }
+
+    private func exchange(_ request: URLRequest, url: URL, body: Data, send: SendStream, recv: RecvStream) async throws {
         try await send.writeAll(buf: HTTPWire.requestHead(request, bodyLength: body.count) + body)
         try await send.finish()
         var buf = Data()

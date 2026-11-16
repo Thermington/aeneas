@@ -167,7 +167,16 @@ function wanted(name: string): boolean {
   return /\.(md|markdown|txt|ics|vcf|enex)$/.test(n);
 }
 
-export async function readEntries(file: string, counts: { leftOut: number } = { leftOut: 0 }, limits = { total: MAX_READ_TOTAL, entries: MAX_ENTRIES }): Promise<Entry[]> {
+/**
+ * How far the files read may unpack beyond the zip's own size: text and exports unpack to about 10 times, so far more
+ * is a zip made to stall the hub (1 MB that unpacks to 1 GB, which the size in its header hides). Inflating is done
+ * on the hub's only thread, a file dropped as too big was still unpacked to its end, and a 4 GB upload of these held
+ * the hub for about two hours.
+ */
+const MAX_UNPACK_RATIO = 100;
+const UNPACK_SLACK = 64 * 1024 * 1024;
+
+export async function readEntries(file: string, counts: { leftOut: number } = { leftOut: 0 }, limits = { total: MAX_READ_TOTAL, entries: MAX_ENTRIES }, stop: () => boolean = () => false): Promise<Entry[]> {
   const head = Buffer.alloc(4);
   const fd = fs.openSync(file, "r");
   fs.readSync(fd, head, 0, 4, 0);
@@ -179,7 +188,15 @@ export async function readEntries(file: string, counts: { leftOut: number } = { 
   const out: Entry[] = [];
   // Kept bytes so far, counted as they arrive (a zip can claim small sizes and unpack huge).
   let total = 0;
+  // Every byte unpacked, kept or not, and every byte of the zip read so far.
+  let unpacked = 0;
+  let zipped = 0;
   await new Promise<void>((resolve, reject) => {
+    // Read in 64 KB steps: one step can unpack at most about 66 MB (deflate's limit is about 1032 to 1), so the check
+    // below comes before the hub is held for long.
+    const rs = fs.createReadStream(file, { highWaterMark: 1 << 16 });
+    let failed = false;
+    const fail = (e: unknown) => { if (failed) return; failed = true; rs.destroy(); reject(e); };
     const uz = new Unzip((f) => {
       if (!wanted(f.name) || (f.originalSize ?? 0) > MAX_ENTRY) return;
       if (out.length >= limits.entries || total >= limits.total) { counts.leftOut++; return; }
@@ -187,7 +204,10 @@ export async function readEntries(file: string, counts: { leftOut: number } = { 
       let size = 0;
       let dropped = false;
       f.ondata = (err, chunk, final) => {
-        if (err) { reject(err); return; }
+        if (failed) return;
+        if (err) { fail(err); return; }
+        unpacked += chunk.length;
+        if (unpacked > zipped * MAX_UNPACK_RATIO + UNPACK_SLACK) { fail(new Error("this zip unpacks to far more than its own size, so it was not read")); return; }
         size += chunk.length;
         if (!dropped && (size > MAX_ENTRY || total + chunk.length > limits.total)) {
           // Too big after all: let go of what was kept and count the file as left out.
@@ -199,10 +219,14 @@ export async function readEntries(file: string, counts: { leftOut: number } = { 
       f.start();
     });
     uz.register(UnzipInflate);
-    const rs = fs.createReadStream(file, { highWaterMark: 1 << 20 });
-    rs.on("data", (b) => { try { uz.push(b as Buffer); } catch (e) { rs.destroy(); reject(e); } });
-    rs.on("end", () => { try { uz.push(new Uint8Array(0), true); resolve(); } catch (e) { reject(e); } });
-    rs.on("error", reject);
+    rs.on("data", (b) => {
+      if (failed) return;
+      if (stop()) { fail(new Error("stopped")); return; }
+      zipped += b.length;
+      try { uz.push(b as Buffer); } catch (e) { fail(e); }
+    });
+    rs.on("end", () => { if (failed) return; try { uz.push(new Uint8Array(0), true); resolve(); } catch (e) { fail(e); } });
+    rs.on("error", fail);
   });
   return out;
 }
@@ -556,7 +580,16 @@ async function runJob(hub: Hub, job: ImportJob): Promise<void> {
     const file = fs.readdirSync(dir).map((f) => path.join(dir, f)).find((f) => !f.endsWith("learn.json"));
     if (!file) throw new Error("the uploaded file is gone");
     const read = { leftOut: 0 };
-    const entries = await readEntries(file, read);
+    let entries: Entry[];
+    // Stop is honored while the zip is read, not only after it.
+    try { entries = await readEntries(file, read, undefined, () => stopRequested.has(job.id)); }
+    catch (e) {
+      if (!stopRequested.has(job.id)) throw e;
+      job.state = "stopped"; job.detail = "Stopped while reading; nothing was kept"; job.finished_at = new Date().toISOString();
+      fs.rmSync(dir, { recursive: true, force: true });
+      saveJob(hub, job);
+      return;
+    }
     job.left_out = read.leftOut;
     const learn: Learnable[] = [];
     const before = { ...job.counts };
@@ -586,6 +619,8 @@ async function runJob(hub: Hub, job: ImportJob): Promise<void> {
   if (job.state === "learning") {
     const chunks = JSON.parse(fs.readFileSync(learnFile, "utf8")) as string[];
     job.learned.total = chunks.length;
+    /** Answers missed in a row for the current piece. */
+    let missed = 0;
     while (job.learned.done < chunks.length) {
       if (stopRequested.has(job.id)) { job.state = "stopped"; job.detail = `Stopped after ${job.learned.done} of ${chunks.length} pieces`; break; }
       const busy = await gpuBusyNow(false);
@@ -595,6 +630,15 @@ async function runJob(hub: Hub, job: ImportJob): Promise<void> {
       const prompt = `Keys already known: ${knownKeys(hub) || "none"}\n\n${chunks[job.learned.done]}`;
       const { text: answer, stopped } = await hub.ai.backgroundJson(`import:${job.id}`, LEARN_SYSTEM, prompt);
       if (stopped) { job.detail = "Paused for a chat"; saveJob(hub, job); await sleep(20_000); continue; }
+      // No answer (the model still downloading, its PC asleep): the same piece again later, not counted as read.
+      // Every piece used to be marked done in milliseconds and the pieces deleted, so nothing was learned.
+      if (answer === null) {
+        missed++;
+        if (missed >= 3 && !(await hub.ai.localModelUp())) { job.detail = "Waiting for the model to answer"; saveJob(hub, job); await sleep(5 * 60_000); continue; }
+        if (missed < 3) { await sleep(30_000); continue; }
+        // The model answers its check but not this piece, three times: the piece is skipped, the rest go on.
+      }
+      missed = 0;
       job.counts.facts += keepLearned(hub, answer, job.id);
       job.learned.done++;
     }

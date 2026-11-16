@@ -9,6 +9,12 @@ export const REPO_DIR = path.resolve(HUB_DIR, "..");
 
 export interface Config {
   port: number;
+  /**
+   * EA_HOME_PORT: where a Direct link or Tailscale hub also answers on the home network, HTTPS only (the home route,
+   * homeroute.ts). Default the hub's port plus 1000 (9787 for 8787), clear of the ports deploy/people.sh gives other
+   * people's hubs on the same computer (8788 and up).
+   */
+  homePort: number;
   /** Interface the HTTP server binds. Loopback by default: clients reach the hub through Tailscale Serve. */
   bindHost: string;
   /**
@@ -46,6 +52,11 @@ export interface Config {
   webWithoutTor: boolean;
   vaultDir: string;
   backupDir: string;
+  /**
+   * EA_REFERENCE_DIR: the offline reference's archives, reader and state (reference/), default `<data>/reference`.
+   * Large and public: never in backups, take-home exports or copies made for other people.
+   */
+  referenceDir: string;
   /** EA_BACKUP_COPY_DIR: a second folder each nightly backup is copied to (an external drive, a network share). */
   backupCopyDir: string;
   /** The work space key (workkey.ts). Kept out of the data folder so no backup of it carries the key. */
@@ -244,6 +255,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   const dataDir = path.resolve(HUB_DIR, env.EA_DATA_DIR || "./data");
   const cfg: Config = {
     port: int(env.EA_PORT, 8787),
+    homePort: int(env.EA_HOME_PORT, 0),
     bindHost: env.EA_BIND_HOST || "127.0.0.1",
     tlsCert: env.EA_TLS_CERT?.trim() ? path.resolve(HUB_DIR, env.EA_TLS_CERT.trim()) : "",
     tlsKey: env.EA_TLS_KEY?.trim() ? path.resolve(HUB_DIR, env.EA_TLS_KEY.trim()) : "",
@@ -259,6 +271,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     webWithoutTor: bool(env.EA_WEB_WITHOUT_TOR, false),
     vaultDir: env.EA_VAULT_DIR ? path.resolve(HUB_DIR, env.EA_VAULT_DIR) : path.join(dataDir, "vault"),
     backupDir: env.EA_BACKUP_DIR ? path.resolve(HUB_DIR, env.EA_BACKUP_DIR) : path.join(dataDir, "backups"),
+    referenceDir: env.EA_REFERENCE_DIR?.trim() ? path.resolve(HUB_DIR, env.EA_REFERENCE_DIR.trim()) : path.join(dataDir, "reference"),
     backupCopyDir: env.EA_BACKUP_COPY_DIR ? path.resolve(env.EA_BACKUP_COPY_DIR) : "",
     workKeyFile: env.EA_WORK_KEY_FILE ? path.resolve(HUB_DIR, env.EA_WORK_KEY_FILE) : path.join(dataDir, "work.key"),
     backupKeyFile: "",
@@ -328,6 +341,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   // the environment names the live hub's vault, backups or work key; otherwise an eval would open the live work key.
   if (overrides.dataDir && !overrides.vaultDir) cfg.vaultDir = path.join(cfg.dataDir, "vault");
   if (overrides.dataDir && !overrides.backupDir) cfg.backupDir = path.join(cfg.dataDir, "backups");
+  if (overrides.dataDir && !overrides.referenceDir) cfg.referenceDir = path.join(cfg.dataDir, "reference");
   if (overrides.dataDir && !overrides.backupCopyDir) cfg.backupCopyDir = "";
   if (overrides.dataDir && !overrides.workKeyFile) cfg.workKeyFile = path.join(cfg.dataDir, "work.key");
   // Next to the work key unless named; a hub given its own data folder or work key keeps it there too.
@@ -347,6 +361,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
       : path.join(path.dirname(cfg.workKeyFile), "link.key");
   }
   if (overrides.dataDir && !overrides.hostsFile) cfg.hostsFile = path.join(cfg.dataDir, "hosts.json");
+  if (!(cfg.homePort > 0 && cfg.homePort < 65536)) cfg.homePort = cfg.port + 1000 < 65536 ? cfg.port + 1000 : cfg.port - 1000;
   // Date math in shared helpers (nextOccurrence) uses the process timezone.
   process.env.TZ = cfg.tz;
   return cfg;

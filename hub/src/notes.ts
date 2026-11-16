@@ -13,28 +13,45 @@ const STOP = new Set("the a an and or of to in on for with by at from as is are 
 
 export interface RelatedNote { id: string; title: string; path: string; why: "link" | "backlink" | "similar" }
 
+type TitleEntry = { title: string; note: Entity; re: RegExp };
+type TagEntry = { tag: string; re: RegExp };
+
+const wordRe = (text: string, flags = "") => new RegExp(`(^|[^a-z0-9])${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, flags);
+
 export class KnowledgeMap {
   constructor(private store: Store) {}
 
+  /** Every note read once, with each title's and tag's pattern, while `batch` runs. */
+  private snap: { notes: Entity[]; titles: TitleEntry[]; tags: TagEntry[]; vocab: Map<string, number> } | null = null;
+
+  /**
+   * Run `fn` with one read of every note. The nightly sweep asked for every note, and built every title's pattern,
+   * once per note, so it grew with the square of the notes. Titles and tags must not change inside (the sweep writes
+   * only links, suggestions and projects).
+   */
+  batch<T>(fn: () => T): T {
+    const notes = this.notes();
+    const vocab = vocabularyOf(notes);
+    this.snap = { notes, titles: titlesOf(notes), tags: tagsOf(vocab), vocab };
+    try { return fn(); } finally { this.snap = null; }
+  }
+
   private notes(): Entity[] {
+    if (this.snap) return this.snap.notes;
     return this.store.list({ kind: "note", limit: 100000 }).filter((n) => !n.deleted_at && n.space !== "work");
   }
 
   /** Lowercase title to note, longest titles first so "Proxmox certs" beats "Proxmox". */
-  private titleIndex(exclude?: string): Array<{ title: string; note: Entity }> {
-    return this.notes()
-      .filter((n) => n.id !== exclude && String(n.fields.title ?? "").trim().length >= 4)
-      .map((n) => ({ title: String(n.fields.title).trim(), note: n }))
-      .sort((a, b) => b.title.length - a.title.length);
+  private titleIndex(exclude?: string): TitleEntry[] {
+    return (this.snap?.titles ?? titlesOf(this.notes())).filter((e) => e.note.id !== exclude);
   }
 
   /** Explicit wikilinks, title mentions and the linker's related notes, as titles. Used by the vault hook so links are always current. */
   deriveLinks(noteId: string | undefined, body: string, title = "", related: string[] = []): string[] {
     const out = new Set<string>([...extractWikilinks(body), ...related]);
     const haystack = ` ${(title + "\n" + body).replace(/```[\s\S]*?```/g, " ").replace(/\[\[[^\]]*\]\]/g, " ")} `.toLowerCase();
-    for (const { title: t } of this.titleIndex(noteId)) {
-      const esc = t.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i").test(haystack)) out.add(t);
+    for (const { title: t, re } of this.titleIndex(noteId)) {
+      if (re.test(haystack)) out.add(t);
     }
     return [...out];
   }
@@ -51,9 +68,7 @@ export class KnowledgeMap {
 
   /** Tag vocabulary with usage counts across all notes. */
   vocabulary(): Map<string, number> {
-    const v = new Map<string, number>();
-    for (const n of this.notes()) for (const t of (n.fields.tags as string[] | undefined) ?? []) v.set(t, (v.get(t) ?? 0) + 1);
-    return v;
+    return this.snap?.vocab ?? vocabularyOf(this.notes());
   }
 
   /** Rule-based tag suggestions: vocabulary words that appear in the text, plus the folder name. */
@@ -61,11 +76,9 @@ export class KnowledgeMap {
     const have = new Set(((note.fields.tags as string[] | undefined) ?? []).map((t) => t.toLowerCase()));
     const text = ` ${String(note.fields.title ?? "")} ${String(note.fields.body ?? "")} `.toLowerCase();
     const out: string[] = [];
-    for (const [tag] of [...this.vocabulary()].sort((a, b) => b[1] - a[1])) {
+    for (const { tag, re } of this.snap?.tags ?? tagsOf(this.vocabulary())) {
       if (have.has(tag.toLowerCase())) continue;
-      const word = tag.toLowerCase().replace(/[-_/]+/g, " ");
-      const esc = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(text)) out.push(tag);
+      if (re.test(text)) out.push(tag);
     }
     const folder = String(note.fields.path ?? "").split("/")[0];
     if (folder && !folder.endsWith(".md")) {
@@ -131,4 +144,23 @@ export class KnowledgeMap {
       edges,
     };
   }
+}
+
+function vocabularyOf(notes: Entity[]): Map<string, number> {
+  const v = new Map<string, number>();
+  for (const n of notes) for (const t of (n.fields.tags as string[] | undefined) ?? []) v.set(t, (v.get(t) ?? 0) + 1);
+  return v;
+}
+
+/** Titles of 4 characters or more, longest first, each with the pattern that finds it as a whole phrase. */
+function titlesOf(notes: Entity[]): TitleEntry[] {
+  return notes
+    .filter((n) => String(n.fields.title ?? "").trim().length >= 4)
+    .map((n) => { const title = String(n.fields.title).trim(); return { title, note: n, re: wordRe(title.toLowerCase(), "i") }; })
+    .sort((a, b) => b.title.length - a.title.length);
+}
+
+/** Tags by use, most used first, each with the pattern that finds it as words ("home-lab" as "home lab"). */
+function tagsOf(vocab: Map<string, number>): TagEntry[] {
+  return [...vocab].sort((a, b) => b[1] - a[1]).map(([tag]) => ({ tag, re: wordRe(tag.toLowerCase().replace(/[-_/]+/g, " ")) }));
 }

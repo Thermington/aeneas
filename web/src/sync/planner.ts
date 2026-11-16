@@ -15,6 +15,7 @@ import {
   addDays,
   blockOf,
   buildDigest,
+  byStart,
   commitmentsFor,
   daySpan,
   findConflict,
@@ -54,9 +55,10 @@ export async function localConflict(taskId: string, span: Span): Promise<Conflic
   const busy: Conflict[] = localBlocks(tasks, taskId).map((b) => ({ kind: "block", title: b.title, start: b.start, end: b.end }));
   // All-day events are markers, as on the hub: they never clash and never take free time.
   for (const e of events) if (e.fields.all_day !== true) busy.push({ kind: "event", title: String(e.fields.title ?? ""), ...spanOf(e) });
-  for (let d = parseLocalDate(localDate(new Date(span.start))); d.toISOString() < span.end; d = addDays(d, 1))
+  // Times are compared as moments: an event can keep its offset while blocks and rules are in UTC.
+  for (let d = parseLocalDate(localDate(new Date(span.start))); d.getTime() < Date.parse(span.end); d = addDays(d, 1))
     for (const c of commitmentsFor(rules, d)) if (c.type !== "preference") busy.push({ kind: c.type === "blackout" ? "blackout" : "commitment", title: c.title, start: c.start, end: c.end });
-  return findConflict(span, busy.sort((a, b) => (a.start < b.start ? -1 : 1)));
+  return findConflict(span, busy.sort(byStart));
 }
 
 /** Schedule a block. Throws HubError 409 with `detail` = the conflict unless `force`. */
@@ -120,7 +122,7 @@ export async function stopActivity(value: string | number, source: string): Prom
 // ---------- offline fallbacks, same shapes as the hub routes ----------
 function dayFrom(date: Date, tasks: Entity[], events: Entity[], rules: Entity[], reminders: Entity[], watches: Entity[], minHours = 3): PlannerDay {
   const d = daySpan(date);
-  const blocks = localBlocks(tasks).filter((b) => overlaps(b, d)).sort((a, b) => (a.start < b.start ? -1 : 1));
+  const blocks = localBlocks(tasks).filter((b) => overlaps(b, d)).sort(byStart);
   const evs = events.filter((e) => overlaps(spanOf(e), d));
   const commitments = commitmentsFor(rules, date);
   const rems = reminders.filter((r) => reminderOnDate(r, date)).sort((a, b) => ((taskAlertAt(a.fields) ?? "") < (taskAlertAt(b.fields) ?? "") ? -1 : 1));

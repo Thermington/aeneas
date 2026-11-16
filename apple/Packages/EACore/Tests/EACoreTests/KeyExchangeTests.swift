@@ -238,6 +238,8 @@ final class KeyExchangeTests: XCTestCase {
         engine.onDeviceRemoved = { told = true }
         try? await engine.store.replace(Entity(id: "n1", kind: .note, fields: ["title": "private"]))
         engine.config.nextUpTitle = "Private plan"
+        engine.logRejected("n1", reason: "conflict", patches: [Patch(id: "n1", kind: .note, fields: ["title": "private"])])
+        UserDefaults.standard.set(try? JSONEncoder().encode(HubIdentity(name: "Jamie", color: "#3366cc")), forKey: "ea.hubIdentity")
         await engine.start()
         for _ in 0..<100 where !engine.deviceRemoved { try? await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertTrue(engine.deviceRemoved)
@@ -252,6 +254,11 @@ final class KeyExchangeTests: XCTestCase {
         XCTAssertEqual(left, 0)
         XCTAssertTrue(engine.entities.isEmpty)
         XCTAssertNil(engine.config.nextUpTitle)
+        // So do the refused edits (what was changed, in which item) and the hub's name.
+        XCTAssertTrue(engine.rejectedEdits.isEmpty)
+        XCTAssertNil(UserDefaults.standard.data(forKey: "ea.rejectedEdits"))
+        XCTAssertNil(engine.hubIdentity)
+        XCTAssertNil(UserDefaults.standard.data(forKey: "ea.hubIdentity"))
     }
 
     /// Paired again with the same hub: a request still in flight with the replaced key hears "removed". The key held

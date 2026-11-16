@@ -51,11 +51,14 @@ export function regularMeds(logs: Entity[], now: Date): Array<{ name: string; ta
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** The hour the diary's day starts: before 4 AM it is still the day before, as on the hub. */
+export const DIARY_DAY_START = 4;
+
 /** Today's diary note (`Diary/YYYY-MM-DD.md`, every capture timestamped) and its lines, oldest first.
  * Before 4 AM it is still the day before, as on the hub: late night captures go to that day's note. */
 export function diaryToday(notes: { id: string; fields: Record<string, unknown> }[], now: Date): { id: string; lines: { time: string; text: string }[] } | null {
   const pad = (n: number) => String(n).padStart(2, "0");
-  const day = now.getHours() < 4 ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12) : now;
+  const day = now.getHours() < DIARY_DAY_START ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12) : now;
   const path = `diary/${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}.md`;
   const n = notes.find((x) => String(x.fields.path ?? "").toLowerCase() === path);
   if (!n) return null;

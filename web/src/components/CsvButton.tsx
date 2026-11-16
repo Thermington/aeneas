@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useState } from "react";
 import type { Kind } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -15,7 +16,7 @@ export function CsvButton({ kind, filter, label = "CSV" }: { kind: Kind; filter?
       const tag = filter ? Object.values(filter).join("-") : kind;
       saveBlob(blob, `${tag}-${localDate(new Date())}.csv`);
     } catch (e) {
-      alert(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Export failed: ${plainError(e)}`);
     } finally {
       setBusy(false);
     }

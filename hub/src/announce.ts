@@ -1,10 +1,13 @@
 import dgram from "node:dgram";
 import { createRequire } from "node:module";
 import { errCode } from "./logsafe.js";
+import { isPrivateV4 } from "./tls.js";
 
 /**
- * Home Wi-Fi only: the hub says on the home network where it is now (Bonjour, `_aeneas._tcp`), so a phone or computer
- * paired with it finds it again after the router hands the hub a new address.
+ * The hub says on the home network where it is now (Bonjour, `_aeneas._tcp`), so a phone or computer paired with it
+ * finds it again after the router hands the hub a new address: a Home Wi-Fi only hub for its own port, a Direct link or
+ * Tailscale hub for its home route (homeroute.ts, its own port and certificate). link.ts starts and stops it; it stays
+ * off while `announce` is false in link.json, and then devices use the addresses they last had.
  *
  * What it says: the port, the address it has on the home network, and the SHA-256 of the hub's certificate (`fp`),
  * which every device on the network can already see by connecting. Nothing personal: the service is named "Aeneas hub"
@@ -13,10 +16,8 @@ import { errCode } from "./logsafe.js";
  * stand-in announcing the same name gets nowhere.
  *
  * It goes out on the network adapter with the way out (the one the router serves), never on virtual ones (WSL,
- * Hyper-V, Docker) or Tailscale, and names only that adapter's address. That adapter is looked up again every minute,
- * so a new address from the router is announced within a minute.
- *
- * Off for Direct link and Tailscale, which find the hub on their own.
+ * Hyper-V, Docker) or Tailscale, and names only that adapter's address, and only a private one (the hub answers no
+ * other). That adapter is looked up again every minute, so a new address from the router is announced within a minute.
  */
 export const SERVICE_TYPE = "_aeneas._tcp.local";
 
@@ -107,7 +108,7 @@ async function refresh(): Promise<void> {
   if (a !== wanted || (now === ip && mdns)) return;
   stopResponder();
   ip = now;
-  if (!now) { console.error("[announce] no home network found: the hub is not announced"); return; }
+  if (!now || !isPrivateV4(now)) { console.error("[announce] no home network found: the hub is not announced"); return; }
   try {
     const m = makeMdns({ interface: now, bind: "0.0.0.0", reuseAddr: true });
     m.on("error", (e) => console.error(`[announce] the home network announcement failed (${errCode(e)})`));

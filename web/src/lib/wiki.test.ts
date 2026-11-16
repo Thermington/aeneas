@@ -11,6 +11,7 @@ import {
   spacesChanged,
   startsFolded,
   syncedText,
+  wikiOwnImage,
   wikiPath,
   wikiUrls,
   withoutTitle,
@@ -18,6 +19,8 @@ import {
   type WikiPageRef,
   type WikiSourceInfo,
 } from "./wiki";
+import { renderMarkdown } from "./markdown";
+import { directAddress } from "../sync/direct";
 
 const source = (key: string, kind: WikiSourceInfo["kind"], project: string): WikiSourceInfo => ({
   key, kind, project, name: `${project} ${kind}`, url: null, synced_at: null, last_error: null, pages: 0,
@@ -102,6 +105,19 @@ describe("addresses", () => {
     expect(url("everythingapp://wiki?id=a", "link")).toBe("everythingapp://wiki?id=a");
     expect(url("/elsewhere", "link")).toBeNull();
     expect(wikiUrls("")("/wiki/media/9/x.png", "image")).toBeNull();
+  });
+
+  it("loads a Direct link hub's pictures and attachments from the address the hub client makes, over the link", async () => {
+    const node = "ab".repeat(32);
+    const direct = directAddress(node, "https://relay.example.org/");
+    const file = `iroh://${node}/wiki/media/9/x.png`;
+    expect(hubFileUrl(direct, "/wiki/media/9/x.png")).toBe(file);
+    expect(wikiUrls(direct)("/wiki/media/9/x.png", "image")).toBe(file);
+    expect(wikiOwnImage(direct)(file)).toBe(true);
+    const html = renderMarkdown("![plan](/wiki/media/9/x.png)", { url: wikiUrls(direct), loadImage: wikiOwnImage(direct) });
+    expect(deferHubImages(html, direct)).toContain(`<img data-hub-src="${file}"`);
+    // With no fetch given it goes through hubFetch, which outside the app says where Direct link works.
+    await expect(hubFileBlob(file, "ead1_k")).rejects.toThrow(/Direct link works in the Aeneas app/);
   });
 
   it("names the Atlassian callback from the hub address", () => {

@@ -162,6 +162,7 @@ extension SyncEngine {
             return n(c, "open application", "open applications")
         case .games: return n(count(.game), "game", "games")
         case .films: return n(list(.film).filter { $0.fields["watched"] != .bool(false) }.count, "film", "films")
+        case .reference: return "Wikipedia and more, kept on the hub"
         default: return nil
         }
     }

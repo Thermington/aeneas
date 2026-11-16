@@ -12,13 +12,23 @@ final class ChatStore: ObservableObject {
     private let url: URL
     /// The chat last asked for, so a reply from the hub for a chat already left behind does not replace the screen.
     private var wanted: String?
+    /// The chats Use Claude is on for. Each chat has its own choice, off for a new one, as on the web; it was one
+    /// switch for every later chat on the device.
+    @Published private(set) var cloudChats: Set<String> = []
 
-    private struct Disk: Codable { var items: [AISessionItem]; var sessions: [String: AISession] }
+    private struct Disk: Codable { var items: [AISessionItem]; var sessions: [String: AISession]; var cloud: [String]? }
 
     init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         url = dir.appendingPathComponent("EverythingApp", isDirectory: true).appendingPathComponent("chats.json")
-        if let d = try? Data(contentsOf: url), let disk = try? JSONDecoder().decode(Disk.self, from: d) { items = disk.items; cache = disk.sessions }
+        if let d = try? Data(contentsOf: url), let disk = try? JSONDecoder().decode(Disk.self, from: d) { items = disk.items; cache = disk.sessions; cloudChats = Set(disk.cloud ?? []) }
+    }
+
+    func usesCloud(_ id: String?) -> Bool { id.map(cloudChats.contains) ?? false }
+
+    func setCloud(_ on: Bool, for id: String) {
+        if on { cloudChats.insert(id) } else { cloudChats.remove(id) }
+        save()
     }
 
     private func save() {
@@ -26,7 +36,8 @@ final class ChatStore: ObservableObject {
         // Keep the 30 most recent chats on disk; the hub has the rest.
         let keep = Set(items.prefix(30).map(\.session_id))
         // A reply in progress is the hub's to report; a cached flag would show a spinner forever when offline.
-        let disk = Disk(items: items, sessions: cache.filter { keep.contains($0.key) }.mapValues { var s = $0; s.working = nil; return s })
+        let disk = Disk(items: items, sessions: cache.filter { keep.contains($0.key) }.mapValues { var s = $0; s.working = nil; return s },
+                        cloud: cloudChats.filter(keep.contains).sorted())
         // Complete protection: the copy of the chats is read only by the open Assistant screen.
         if let d = try? JSONEncoder().encode(disk) { try? DataProtection.write(d, to: url, .complete) }
     }
@@ -66,6 +77,7 @@ final class ChatStore: ObservableObject {
         try await client?.wipeAISessions()
         items = []
         cache = [:]
+        cloudChats = []
         current = nil
         try? FileManager.default.removeItem(at: url)
     }
@@ -74,6 +86,7 @@ final class ChatStore: ObservableObject {
         try? await client?.deleteAISession(id)
         items.removeAll { $0.session_id == id }
         cache[id] = nil
+        cloudChats.remove(id)
         if current?.session_id == id { current = nil }
         save()
     }
@@ -90,7 +103,6 @@ struct AssistantView: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var store = ChatStore()
     @StateObject private var dictation = DictationController()
-    @State private var allowCloud = SharedConfig.shared.allowCloud
     @State private var input = ""
     @State private var images: [PendingImage] = []
     @State private var photoItems: [PhotosPickerItem] = []
@@ -118,6 +130,11 @@ struct AssistantView: View {
     @ObservedObject private var speaker = ReplySpeaker.shared
 
     private var sessionId: String? { store.current?.session_id }
+    /// Use Claude for the chat on screen: its own choice, and only while the hub has a cloud model.
+    private var allowCloud: Bool { ai?.cloud == true && store.usesCloud(sessionId) }
+    private var useClaude: Binding<Bool> {
+        Binding(get: { store.usesCloud(sessionId) }, set: { on in if let id = sessionId { store.setCloud(on, for: id) } })
+    }
     /// Kept short: a long title pushes the New chat and Chats buttons into an overflow menu on the iPhone.
     private var barTitle: String {
         let t = store.current?.title ?? "Assistant"
@@ -125,7 +142,7 @@ struct AssistantView: View {
     }
     private var ledger: LedgerFields? {
         guard let id = sessionId else { return nil }
-        return engine.ledgers.first { $0.str("session_id") == id }?.decoded(LedgerFields.self)
+        return engine.ledger(for: id)?.decoded(LedgerFields.self)
     }
 
     var body: some View {
@@ -189,18 +206,20 @@ struct AssistantView: View {
             dictation.refreshAuthorization()
             if let c = engine.client {
                 ai = try? await c.health().ai
-                if ai?.cloud != true { allowCloud = false }
                 await store.refresh(c)
                 if let id = model.openChatId { model.openChatId = nil; await store.open(id, client: c); syncPending() }
                 // The newest conversation, not a capture's filing thread: a question typed there would join that capture.
-                if store.current == nil, let first = store.items.first(where: { !$0.session_id.hasPrefix("capture-") }) { await store.open(first.session_id, client: c); syncPending() }
+                // A question started on another screen gets a new chat of its own instead.
+                if store.current == nil, model.assistantPrefill == nil, let first = store.items.first(where: { !$0.session_id.hasPrefix("capture-") }) { await store.open(first.session_id, client: c); syncPending() }
             }
             if store.current == nil { store.newChat() }
+            takePrefill()
         }
         // A chat asked for from elsewhere (a capture's thread, Siri) waits while a reply streams, as New chat and Chats
         // do: opening it then put the reply's end into the chat on screen, over the one asked for.
         .onChange(of: model.openChatId) { _, _ in openRequestedChat() }
-        .onChange(of: busy) { _, now in if !now { openRequestedChat() } }
+        .onChange(of: model.assistantPrefill) { _, _ in takePrefill() }
+        .onChange(of: busy) { _, now in if !now { openRequestedChat(); takePrefill() } }
         // While the hub is still answering in this chat (from anywhere), re-read it until the reply lands.
         .task(id: store.current?.working?.since) {
             guard let id = sessionId, store.current?.working != nil else { return }
@@ -238,6 +257,15 @@ struct AssistantView: View {
         Task { await store.open(id, client: engine.client); syncPending() }
     }
 
+    /// Words from another screen (Reference, Ask about this page): a new chat with them in the box, for the person to
+    /// finish and send. Waits while a reply streams, as a chat asked for does.
+    private func takePrefill() {
+        guard let text = model.assistantPrefill, !busy else { return }
+        model.assistantPrefill = nil
+        startChat()
+        input = text
+    }
+
     private var header: some View {
         VStack(spacing: 8) {
             StatusBanner()
@@ -245,7 +273,7 @@ struct AssistantView: View {
                 HStack {
                     Spacer()
                     // Only offered when the hub has a cloud model (Claude) set up; otherwise it would do nothing.
-                    Toggle("Use Claude", isOn: $allowCloud).toggleStyle(.switch).onChange(of: allowCloud) { _, v in SharedConfig.shared.allowCloud = v }
+                    Toggle("Use Claude", isOn: useClaude).toggleStyle(.switch)
                         .help("Sends this chat to Claude in the cloud, with private details removed. Work items are never sent.")
                 }
             }
@@ -356,6 +384,7 @@ struct AssistantView: View {
                 } else {
                     Button { send() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 34)) }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Send")
                         .disabled((input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty) || engine.client == nil)
                         .keyboardShortcut(.return, modifiers: .command)
                 }
@@ -788,7 +817,7 @@ struct LedgerPanel: View {
     var sessionId: String
 
     var body: some View {
-        let ledger = engine.ledgers.first { $0.str("session_id") == sessionId }?.decoded(LedgerFields.self)
+        let ledger = engine.ledger(for: sessionId)?.decoded(LedgerFields.self)
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Ledger").font(.headline)

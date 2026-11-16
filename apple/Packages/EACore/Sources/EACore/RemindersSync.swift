@@ -11,7 +11,7 @@ import os
 public final class RemindersSync: ObservableObject {
     public static let shared = RemindersSync()
     private static let log = Logger(subsystem: SharedConfig.logSubsystem, category: "reminders")
-    private static let stateKey = "ea.remindersSync.state"
+    private static let stateKey = AppleLinkRecords.reminders
     private static let enabledKey = "ea.remindersSync.enabled"
 
     @Published public private(set) var access: CalendarImporter.Access = .notDetermined
@@ -158,6 +158,13 @@ public final class RemindersSync: ObservableObject {
         repeat {
             rerun = false
             let engine = await provider()
+            // Only against a copy that holds the hub's tasks: an unpaired or removed device, or one whose copy was
+            // emptied (another hub) and not filled again yet, reads as having no tasks, so every Apple item came in
+            // again as a new one and the records of what was agreed were dropped.
+            guard engine.hasHubCopy else {
+                Self.log.notice("not run (\(reason, privacy: .public)): this device does not hold the hub's tasks yet")
+                break
+            }
             do {
                 let summary = try await syncOnce(engine)
                 lastSummary = summary
@@ -291,50 +298,45 @@ public final class RemindersSync: ObservableObject {
     }
 
     private static func item(_ r: EKReminder, workDomain: String?) -> ReminderItem {
-        let cal = Calendar.current
-        let due: Date? = r.dueDateComponents.flatMap { c in
-            var c = c
-            if c.calendar == nil { c.calendar = cal }
-            if c.hour == nil { c.hour = 0; c.minute = 0 }
-            return c.date
-        }
-        let alarm: Date? = r.alarms?.lazy.compactMap { a in a.absoluteDate ?? due.map { $0.addingTimeInterval(a.relativeOffset) } }.first
-        // Apple puts a timed reminder's time in both the due date and its alarm; read that as a reminder with no
-        // separate deadline.
-        let deadline = due.flatMap { d in alarm.map { abs($0.timeIntervalSince(d)) < 60 } == true ? nil : d }
+        // A due date with no time reads as the day alone, the same in every time zone (ReminderDates).
+        let dates = ReminderDates.read(due: r.dueDateComponents, alarms: (r.alarms ?? []).map(alarm))
         let isWork = isWorkSource(r.calendar.source, domain: workDomain)
         return ReminderItem(externalId: r.calendarItemExternalIdentifier ?? r.calendarItemIdentifier, localId: r.calendarItemIdentifier,
                             listId: r.calendar.calendarIdentifier, listTitle: r.calendar.title, isWork: isWork,
-                            title: r.title ?? "", notes: r.notes, due: deadline.map { ISO.string($0) }, remindAt: alarm.map { ISO.string($0) },
+                            title: r.title ?? "", notes: r.notes, due: dates.due, remindAt: dates.remindAt,
                             repeatRule: r.recurrenceRules?.first.flatMap(repeatString), done: r.isCompleted,
                             doneAt: r.completionDate.map { ISO.string($0) }, modified: r.lastModifiedDate)
     }
 
+    private static func alarm(_ a: EKAlarm) -> ReminderAlarm {
+        ReminderAlarm(absolute: a.absoluteDate, offset: a.relativeOffset, place: a.structuredLocation != nil || a.proximity != EKAlarmProximity.none)
+    }
+
     /// Writes changed fields onto an Apple item. Dates are written from the task's full state (`full`), since
-    /// Apple keeps a timed reminder's time in both the due date and the alarm.
+    /// Apple keeps a timed reminder's time in both the due date and the alarm. When only the dates moved, Apple's
+    /// repeat rule and alarms stay and move with them (ReminderDates.write); the rule is made again from the app's
+    /// repeat only when the repeat itself changed.
     private static func write(_ changed: [String: String], full: [String: String], to r: EKReminder) {
         if let t = changed["title"] { r.title = t.isEmpty ? "Untitled" : t }
         if let n = changed["notes"] { r.notes = n.isEmpty ? nil : n }
         if changed["due"] != nil || changed["remind_at"] != nil || changed["repeat"] != nil {
-            let due = ISO.date(full["due"]) ?? ISO.date(full["remind_at"])
-            r.dueDateComponents = due.map(components)
-            r.alarms?.forEach { r.removeAlarm($0) }
-            if let at = ISO.date(full["remind_at"]) { r.addAlarm(EKAlarm(absoluteDate: at)) }
-            let rule = (full["repeat"]).flatMap { $0.isEmpty ? nil : recurrence($0) }
-            r.recurrenceRules = (rule != nil && due != nil) ? [rule!] : nil
+            let current = r.alarms ?? []
+            let w = ReminderDates.write(full: full, repeatChanged: changed["repeat"] != nil, due: r.dueDateComponents, alarms: current.map(alarm))
+            r.dueDateComponents = w.due
+            r.alarms = w.alarms.compactMap { a -> EKAlarm? in
+                guard let i = a.from, i < current.count else { return a.at.map { EKAlarm(absoluteDate: $0) } }
+                guard let at = a.at else { return current[i] }
+                // A copy keeps the sound and anything else set on it; only its time moves.
+                let moved = (current[i].copy() as? EKAlarm) ?? EKAlarm(absoluteDate: at)
+                moved.absoluteDate = at
+                return moved
+            }
+            if !w.keepsRepeat {
+                let rule = (full["repeat"]).flatMap { $0.isEmpty ? nil : recurrence($0) }
+                r.recurrenceRules = (rule != nil && w.due != nil) ? [rule!] : nil
+            }
         }
         if let d = changed["done"] { r.isCompleted = d == "1" }
-    }
-
-    /// Local midnight means a date with no time.
-    private static func components(_ d: Date) -> DateComponents {
-        let cal = Calendar.current
-        let c = cal.dateComponents([.hour, .minute], from: d)
-        let fields: Set<Calendar.Component> = c.hour == 0 && c.minute == 0 ? [.year, .month, .day] : [.year, .month, .day, .hour, .minute]
-        var out = cal.dateComponents(fields, from: d)
-        out.calendar = cal
-        out.timeZone = fields.contains(.hour) ? cal.timeZone : nil
-        return out
     }
 
     private static let weekdays: [(EKWeekday, String)] = [(.sunday, "sun"), (.monday, "mon"), (.tuesday, "tue"), (.wednesday, "wed"), (.thursday, "thu"), (.friday, "fri"), (.saturday, "sat")]

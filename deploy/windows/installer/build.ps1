@@ -4,12 +4,16 @@
 .DESCRIPTION
   Uses NSIS 3: the copy Tauri keeps (%LOCALAPPDATA%\tauri\NSIS, there after building the Windows app) or one installed
   from nsis.sourceforge.io.
-    powershell -ExecutionPolicy Bypass -File deploy\windows\installer\build.ps1 1.0.2
+    powershell -ExecutionPolicy Bypass -File deploy\windows\installer\build.ps1
+  Its version is the repository's (tools\version.mjs), the one the hub and every app say; a version given must be the same.
 #>
-param([Parameter(Mandatory = $true)][string]$Version)
+param([string]$Version)
 $ErrorActionPreference = 'Stop'
-if ($Version -notmatch '^[0-9.]+$') { throw 'the version is numbers and dots, like 1.0.2' }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repoVersion = (Get-Content (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
+if (-not $Version) { $Version = $repoVersion }
+if ($Version -notmatch '^[0-9.]+$') { throw 'the version is numbers and dots, like 1.0.2' }
+if ($Version -ne $repoVersion) { throw "the installer's version is the repository's ($repoVersion), so the hub it installs says the same; not $Version" }
 $out = Join-Path $repo 'dist'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $nsis = @((Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe'), "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1

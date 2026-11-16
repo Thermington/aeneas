@@ -418,3 +418,22 @@ test("the backup command: older plain copies encrypted, the night's copy made, t
     for (const out of [r.out, k.out]) assert.ok(!out.includes(identity), "the key is never printed");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("backups: one older plain copy the hub cannot read is left as it is; the rest are encrypted and nothing stops", async () => {
+  const t = makeHub();
+  const dir = path.join(t.dir, "backups-mixed");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const bad = path.join(dir, "hub-20261001-030000.sqlite");
+    fs.writeFileSync(bad, "SQLite format 3\u0000 not really");
+    fs.chmodSync(bad, 0o000);
+    const good = path.join(dir, "hub-20261002-030000.sqlite");
+    fs.copyFileSync(t.hub.cfg.dbPath, good);
+    t.hub.backupKey.markSaved();
+    const r = await encryptPlainBackups(dir, t.hub.backupKey, t.hub.store.workKey);
+    assert.deepEqual(r.converted, ["hub-20261002-030000.sqlite"]);
+    assert.ok(r.skipped.includes("hub-20261001-030000.sqlite"));
+    assert.ok(fs.existsSync(`${good}.age`) && !fs.existsSync(good));
+    assert.ok(!fs.existsSync(`${bad}.age`), "no half-written copy is left");
+  } finally { try { fs.chmodSync(path.join(dir, "hub-20261001-030000.sqlite"), 0o600); } catch { /* gone */ } t.cleanup(); }
+});

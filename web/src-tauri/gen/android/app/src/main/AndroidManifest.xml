@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Finding the hub on the home network by Bonjour (home.rs): many phones drop multicast answers unless the app holds a lock. Granted at install, no prompt. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Hum (a melody recorded in Capture or Music): asked the first time Hum is used, never at start. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Requested together with the microphone by the web view (granted without asking). -->

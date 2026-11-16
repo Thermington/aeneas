@@ -14,29 +14,8 @@ struct WatchLogView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Mood").font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 4) {
-                    ForEach(Self.moods, id: \.0) { m in
-                        Button { log(.mood, .number(Double(m.0)), "Mood \(m.1.lowercased())") } label: {
-                            Image(systemName: m.2).frame(maxWidth: .infinity, minHeight: 32)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Mood \(m.1)")
-                    }
-                }
-                Button { log(.caffeine, .number(1), "Caffeine +1") } label: {
-                    Label("Caffeine +1", systemImage: "cup.and.saucer").frame(maxWidth: .infinity)
-                }
-                .tint(.brown)
-                let meds = engine.recentValues(type: .med, limit: 6)
-                if !meds.isEmpty {
-                    Text("Took").font(.caption).foregroundStyle(.secondary)
-                    ForEach(meds, id: \.self) { m in
-                        Button { log(.med, .string(m), "Took \(m)") } label: {
-                            Label(m, systemImage: "pills").frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
+                // Health off: the pet alone (the page shows only while one of the two is on).
+                if model.isOn(.health) { healthLogs }
                 if model.isOn(.pet) {
                     Text(pet).font(.caption).foregroundStyle(.secondary)
                     HStack(spacing: 4) {
@@ -53,6 +32,33 @@ struct WatchLogView: View {
             }
         }
         .navigationTitle("Log")
+    }
+
+    /// Mood, a cup of caffeine and meds taken lately.
+    @ViewBuilder private var healthLogs: some View {
+        Text("Mood").font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+            ForEach(Self.moods, id: \.0) { m in
+                Button { log(.mood, .number(Double(m.0)), "Mood \(m.1.lowercased())") } label: {
+                    Image(systemName: m.2).frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Mood \(m.1)")
+            }
+        }
+        Button { log(.caffeine, .number(1), "Caffeine +1") } label: {
+            Label("Caffeine +1", systemImage: "cup.and.saucer").frame(maxWidth: .infinity)
+        }
+        .tint(.brown)
+        let meds = engine.recentValues(type: .med, limit: 6)
+        if !meds.isEmpty {
+            Text("Took").font(.caption).foregroundStyle(.secondary)
+            ForEach(meds, id: \.self) { m in
+                Button { log(.med, .string(m), "Took \(m)") } label: {
+                    Label(m, systemImage: "pills").frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
     }
 
     /// The pet's name, or "Pet" until the profile names one (the iPhone and web Pet pages do the same).

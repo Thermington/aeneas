@@ -177,3 +177,41 @@ test("import: a job the hub stopped in twice while reading fails instead of stop
     assert.ok(!fs.existsSync(path.join(dir, id)), "the upload is removed");
   } finally { t.cleanup(); }
 });
+
+test("import learning: with no model answering, the pieces wait instead of being marked read and deleted", async () => {
+  gpuProbe.run = async () => null;
+  const t = makeHub();
+  setBackendOverride({ name: "ollama", model: "m", chat: async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:11434"); }, stream: async () => ({ text: "", usage: {} }) } as unknown as Backend);
+  try {
+    const files: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 4; i++) files[`vault/note ${i}.md`] = strToU8(`# Note ${i}\n\n` + "I keep my bees on the roof and my sister visits on Sundays. ".repeat(80));
+    const r = await t.api("/imports/upload?name=vault.zip&learn=1", { method: "POST", body: zipSync(files) as unknown as RequestInit["body"] });
+    assert.equal(r.status, 200);
+    const job0 = (await r.json()) as ImportJob;
+    const read = async () => ((await (await t.api("/imports/jobs")).json()) as { jobs: ImportJob[] }).jobs.find((j) => j.id === job0.id)!;
+    for (let i = 0; i < 40 && (await read()).state !== "learning"; i++) await new Promise((res) => setTimeout(res, 50));
+    await new Promise((res) => setTimeout(res, 1_500));
+    const job = await read();
+    assert.equal(job.state, "learning", "still learning, not done in milliseconds");
+    assert.equal(job.learned.done, 0, "no piece counted as read");
+    assert.ok(fs.existsSync(path.join(t.hub.cfg.dataDir, "imports", job.id, "learn.json")), "the pieces are kept");
+    await t.api(`/imports/jobs/${job.id}/stop`, { method: "POST" });
+  } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("imports: a zip that unpacks to far more than its own size is refused early instead of holding the hub", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ea-zipbomb-"));
+  try {
+    const file = path.join(dir, "vault.zip");
+    // 120 MB of one letter zips to about 120 KB: 1000 to 1, where text is about 10 to 1.
+    fs.writeFileSync(file, zipSync({ "vault/huge.md": new Uint8Array(120 * 1024 * 1024).fill(0x61), "vault/ok.md": strToU8("# Fine\n\nA normal note.") }));
+    const t0 = Date.now();
+    await assert.rejects(readEntries(file), /unpacks to far more than its own size/);
+    assert.ok(Date.now() - t0 < 5_000, `refused in ${Date.now() - t0} ms`);
+    // A normal zip is read as before, and Stop is honored while reading.
+    const normal = path.join(dir, "notes.zip");
+    fs.writeFileSync(normal, zipSync({ "notes/a.md": strToU8("# A\n\nText."), "notes/b.md": strToU8("# B\n\nMore text.") }));
+    assert.equal((await readEntries(normal)).length, 2);
+    await assert.rejects(readEntries(normal, { leftOut: 0 }, undefined, () => true), /stopped/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

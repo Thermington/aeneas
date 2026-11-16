@@ -21,24 +21,27 @@ export function runSweep(hub: Hub): SweepResult {
   const out: SweepResult = { notes: 0, links_updated: 0, tags_suggested: 0, projects_linked: 0, people_cleaned: 0, people_merged: 0, ms: 0 };
   const projects = hub.store.list({ kind: "project", space: "personal", limit: 100000 });
   const same = (a: unknown, b: unknown) => JSON.stringify([...((a as string[] | undefined) ?? [])].sort()) === JSON.stringify([...((b as string[] | undefined) ?? [])].sort());
-  for (const n of hub.store.list({ kind: "note", space: "personal", limit: 100000 })) {
-    out.notes++;
-    const patch: Record<string, unknown> = {};
-    const links = hub.map.deriveLinks(n.id, String(n.fields.body ?? ""), String(n.fields.title ?? ""), (n.fields.related as string[] | undefined) ?? []);
-    if (!same(links, n.fields.links)) { patch.links = links; out.links_updated++; }
-    if (!n.fields.project_id) {
-      const p = projectOfPath(projects, String(n.fields.path ?? ""));
-      if (p) { patch.project_id = p.id; out.projects_linked++; }
+  // One read of every note for all of them (hub.map.batch): it was one per note.
+  hub.map.batch(() => {
+    for (const n of hub.store.list({ kind: "note", space: "personal", limit: 100000 })) {
+      out.notes++;
+      const patch: Record<string, unknown> = {};
+      const links = hub.map.deriveLinks(n.id, String(n.fields.body ?? ""), String(n.fields.title ?? ""), (n.fields.related as string[] | undefined) ?? []);
+      if (!same(links, n.fields.links)) { patch.links = links; out.links_updated++; }
+      if (!n.fields.project_id) {
+        const p = projectOfPath(projects, String(n.fields.path ?? ""));
+        if (p) { patch.project_id = p.id; out.projects_linked++; }
+      }
+      const tags = (n.fields.tags as string[] | undefined) ?? [];
+      if (!tags.length) {
+        const suggested = hub.map.suggestTags(n);
+        if (!same(suggested, n.fields.suggested_tags)) { patch.suggested_tags = suggested; out.tags_suggested++; }
+      }
+      if (Object.keys(patch).length) {
+        try { hub.vault.patchQuiet(n.id, patch); } catch (e) { console.error(`[sweep] ${n.id}: ${errCode(e)}`); }
+      }
     }
-    const tags = (n.fields.tags as string[] | undefined) ?? [];
-    if (!tags.length) {
-      const suggested = hub.map.suggestTags(n);
-      if (!same(suggested, n.fields.suggested_tags)) { patch.suggested_tags = suggested; out.tags_suggested++; }
-    }
-    if (Object.keys(patch).length) {
-      try { hub.vault.patchQuiet(n.id, patch); } catch (e) { console.error(`[sweep] ${n.id}: ${errCode(e)}`); }
-    }
-  }
+  });
   try { musicReferencesToNotes(hub.store); } catch (e) { console.error(`[sweep] music references: ${errCode(e)}`); }
   try { const gone = pruneHumAudio(hub); if (gone) console.log(`[sweep] removed ${gone} recordings of deleted music ideas`); } catch (e) { console.error(`[sweep] hum recordings: ${errCode(e)}`); }
   try {

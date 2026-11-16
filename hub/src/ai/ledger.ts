@@ -10,11 +10,16 @@ export const FAILURE_PHRASES = /\b(didn'?t work|didn’t work|did not work|doesn
 
 interface Tried { at: string; what: string; result: string }
 
-/** Find or create the open ledger for a session. */
+/**
+ * Find or create the open ledger for a session. A new one starts from what the chat's earlier ledgers ruled out and
+ * confirmed: a step that already failed is never suggested again because the troubleshooting started over.
+ */
 export function openLedger(store: Store, sessionId: string, topic: string): Entity {
-  const existing = store.list({ kind: "ledger", where: { session_id: sessionId } }).find((l) => l.fields.open !== false);
+  const all = store.list({ kind: "ledger", where: { session_id: sessionId } });
+  const existing = all.find((l) => l.fields.open !== false);
   if (existing) return existing;
-  return store.create("ledger", { session_id: sessionId, topic: topic.slice(0, 120) || "untitled", tried: [], ruled_out: [], confirmed: [], open: true });
+  const lines = (k: "ruled_out" | "confirmed") => [...new Set(all.flatMap((l) => (Array.isArray(l.fields[k]) ? (l.fields[k] as string[]) : [])))];
+  return store.create("ledger", { session_id: sessionId, topic: topic.slice(0, 120) || "untitled", tried: [], ruled_out: lines("ruled_out"), confirmed: lines("confirmed"), open: true });
 }
 
 /** If the user's latest message reports failure, close the last pending entry and rule it out. */

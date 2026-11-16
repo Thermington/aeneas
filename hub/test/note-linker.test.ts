@@ -153,7 +153,7 @@ test("the filer is told the owner's folders and where ideas go", () => {
   const p = filingPrompt("A comedy skit about a robot", new Date(), undefined, [], [], ["Writing/Sketches", "Programming/App Ideas"]);
   assert.match(p, /an idea for something to make .* becomes a note with save_note/);
   assert.match(p, /tags idea plus its form/);
-  assert.match(p, /kind=music_idea/);
+  assert.match(p, /with the music_idea tool, given the line as said/);
   assert.match(p, /kind=film with watchlist true and watched false/);
   assert.match(p, /\{\{owner\}\}'s note folders: Writing\/Sketches; Programming\/App Ideas\./, "the owner is named when it is sent");
 });

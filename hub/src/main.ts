@@ -1,4 +1,4 @@
-import { startLink } from "./link.js";
+import { mainPortGuard, startLink } from "./link.js";
 import { startGalleryJob } from "./gallery.js";
 import { linkCaptureThreads, startFilingJob } from "./capture-filer.js";
 import { startMailJob } from "./mail-filer.js";
@@ -17,7 +17,7 @@ import { fillOutbox } from "./outbox.js";
 import { WorkKey } from "./workkey.js";
 import { runSeeds } from "./seed.js";
 import { runSweep } from "./sweep.js";
-import { scheduleDaily } from "./schedule.js";
+import { dbJobClock, scheduleDaily } from "./schedule.js";
 import { startDigestJob } from "./planner.js";
 import { startWatchJob, watchDaily } from "./watches.js";
 import { startFocusLoop } from "./focus.js";
@@ -32,8 +32,10 @@ import { resumeHums } from "./hum.js";
 import { execFile } from "node:child_process";
 import type { createServer as createHttpServer } from "node:http";
 import { startImportJob } from "./routes/imports.js";
-import { dualServer, isLoopbackHost, loadTls, type TlsFiles } from "./tls.js";
+import { dualServer, guardedServer, isLoopback, isLoopbackHost, loadTls, type TlsFiles } from "./tls.js";
 import { errCode, logHost } from "./logsafe.js";
+import { startDiskWatch } from "./diskspace.js";
+import { startReference } from "./reference/index.js";
 
 const USAGE = "usage: tsx src/main.ts <serve | seed | backup | restore <backup.age> <new path> | backup-key | encrypt-backups [dir] | sweep | watches | compact | purge-chat-backups [dir] | seal-work-backups [dir]>";
 
@@ -231,8 +233,8 @@ async function main(): Promise<void> {
       .then((c) => { if (c.converted.length) console.log(`[backup] encrypted ${c.converted.length} older plain backups`); })
       .catch((e) => console.error(`[backup] encrypting older plain backups failed: ${errCode(e)}`));
   } else if (listBackups(cfg.backupDir).some((b) => !b.encrypted)) console.warn("[backup] older plain backups on this machine stay as they are until the recovery key is saved (Welcome, The key to your backups): until then they are the copies that open without it");
-  const stopSweep = scheduleDaily("sweep", 3, 10, () => { runSweep(hub); });
-  const stopCompact = scheduleDaily("compact", 3, 45, () => { const r = hub.store.compactChanges(); console.log(`[compact] removed ${r.removed} change rows, ${r.remaining} remain`); });
+  const stopSweep = scheduleDaily("sweep", 3, 10, () => { runSweep(hub); }, { clock: dbJobClock(hub.db) });
+  const stopCompact = scheduleDaily("compact", 3, 45, () => { const r = hub.store.compactChanges(); console.log(`[compact] removed ${r.removed} change rows, ${r.remaining} remain`); }, { clock: dbJobClock(hub.db) });
   const stopWatches = startWatchJob(hub);
   const stopDigest = startDigestJob(hub);
   const stopFocus = startFocusLoop(hub, 60_000, [{ label: "sensors", tick: () => { if (hub.modules.on("sensors")) sensorTick(hub); } }]);
@@ -242,6 +244,8 @@ async function main(): Promise<void> {
   const stopQuiz = startQuizJob(hub);
   const stopMonitors = startMonitorLoop(hub);
   const stopCheckPrune = startCheckPruneJob(hub);
+  const stopDiskWatch = startDiskWatch(hub);
+  const stopReference = startReference(hub);
   const stopImports = startImportJob(hub);
   const stopMail = startMailJob(hub);
   const stopNotes = startNoteLinker(hub);
@@ -251,14 +255,19 @@ async function main(): Promise<void> {
   const stopFiling = startFilingJob(hub);
   // An import a restart interrupted goes on where it was.
   kickImports(hub);
+  // A Home Wi-Fi only hub's port takes connections from its home network and this machine only (link.ts); a hub on
+  // 127.0.0.1 without a certificate keeps the plain server it always had.
+  const guard = mainPortGuard(cfg);
   const server = serve({
     fetch: app.fetch, port: cfg.port, hostname: cfg.bindHost,
-    ...(tls ? { createServer: dualServer(tls) as unknown as typeof createHttpServer } : {}),
+    ...(tls ? { createServer: dualServer(tls, isLoopback, guard) as unknown as typeof createHttpServer }
+      : !isLoopbackHost(cfg.bindHost) ? { createServer: guardedServer(guard) as unknown as typeof createHttpServer } : {}),
   }, (info) => {
     const how = tls ? `https://${cfg.bindHost}:${info.port} (plain HTTP for this machine only; certificate sha256 ${tls.fingerprint})` : `http://${cfg.bindHost}:${info.port}`;
     console.log(`[hub] v${VERSION} listening on ${how} data=${cfg.dataDir} vault=${cfg.vaultDir} ollama=${cfg.ollamaUrl ? logHost(cfg.ollamaUrl) : "off"} cloud=${cfg.anthropicApiKey ? "key set" : "off"} adapter=${cfg.adapterUrl ? logHost(cfg.adapterUrl) : "off"}`);
   });
-  // How devices reach the hub (link.ts): the Direct link starts here when it is the method in use.
+  // How devices reach the hub (link.ts): the Direct link starts here when it is the method in use, and the home route
+  // (homeroute.ts) when it is on.
   const stopLink = await startLink(cfg, app.fetch);
   const shutdown = () => {
     console.log("[hub] shutting down");
@@ -276,6 +285,8 @@ async function main(): Promise<void> {
     stopQuiz();
     stopMonitors();
     stopCheckPrune();
+    stopDiskWatch();
+    stopReference();
     stopImports();
     stopMail();
     stopNotes();

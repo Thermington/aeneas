@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
-import { updateEntity } from "../sync/edits";
 import { stopActivity } from "../sync/planner";
-import { SOURCE } from "../sync/actions";
-import { fmtTime, isoNow } from "../lib/time";
+import { SOURCE, completeTask } from "../sync/actions";
+import { fmtTime } from "../lib/time";
 import { pickCurrent } from "./Now";
 import { closeCurrentWindow, openCaptureWindow, showMainWindow } from "../tauri/bridge";
 
@@ -67,7 +66,7 @@ export function Widget() {
     if (!current) return;
     setBusy(true);
     try {
-      await updateEntity(current, { status: "done", done_at: isoNow() });
+      await completeTask(current);
     } finally {
       setBusy(false);
     }

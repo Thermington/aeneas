@@ -27,6 +27,9 @@ final class ShareModel: ObservableObject {
     @Published var status: String?
     @Published var busy = true
     private var jpeg: Data?
+    /// The capture's own id, made once: sent again, here or later by the app, it is answered with the capture the hub
+    /// already has, so a reply lost on the way no longer makes a second copy.
+    private let captureId = UUID().uuidString.lowercased()
 
     init(items: [NSExtensionItem]) {
         Task { await load(items) }
@@ -60,9 +63,11 @@ final class ShareModel: ObservableObject {
         defer { busy = false }
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = jpeg.map { [Attachment(name: "shared.jpg", mime: "image/jpeg", bytes_b64: $0.base64EncodedString())] }
-        let req = CaptureRequest(text: body.isEmpty ? "Shared image" : body, source: .iphone, attachments: attachments, auto: true)
+        let req = CaptureRequest(text: body.isEmpty ? "Shared image" : body, source: .iphone, attachments: attachments, auto: true, id: captureId)
         let config = SharedConfig.shared
-        if let client = HubClient.make(config: config), (try? await withDeadline(30, { try await client.capture(req) })) != nil {
+        // A short wait is enough: what the hub does not answer in time waits here and the app sends it again with the
+        // same id, which cannot make a second copy.
+        if let client = HubClient.make(config: config), (try? await withDeadline(5, { try await client.capture(req) })) != nil {
             status = "Saved"
             return true
         }

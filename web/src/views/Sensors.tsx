@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { engine } from "../sync/engine";
 import type { SensorRow } from "../sync/api";
@@ -45,7 +46,7 @@ function SensorCard({ s, onSaved }: { s: SensorRow; onSaved: () => Promise<void>
       setOpen(false);
       await onSaved();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -62,7 +63,7 @@ function SensorCard({ s, onSaved }: { s: SensorRow; onSaved: () => Promise<void>
       const r = await c.sensorPropose(s.name);
       go(`/assistant/${r.session_id}`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -82,7 +83,7 @@ function SensorCard({ s, onSaved }: { s: SensorRow; onSaved: () => Promise<void>
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -219,7 +220,7 @@ while True:
               if (!confirm("Make a new sensor key? Boards using the old key stop posting until they get the new one.")) return;
               setKeyErr("");
               // A key that was not replaced must not look replaced (a leaked one would stay in use).
-              void engine.client?.rotateFeed("sensors").then((f) => setKey(f.sensors.key)).catch((e) => setKeyErr(`The key was not replaced: ${e instanceof Error ? e.message : String(e)}`));
+              void engine.client?.rotateFeed("sensors").then((f) => setKey(f.sensors.key)).catch((e) => setKeyErr(`The key was not replaced: ${plainError(e)}`));
             }}
           >
             New key

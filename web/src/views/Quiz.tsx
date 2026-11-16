@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -32,7 +33,7 @@ export function Quiz() {
       })
       .catch((e) => {
         if (!alive) return;
-        setErr(e instanceof Error ? e.message : String(e));
+        setErr(plainError(e));
         setQuiz(null);
       });
     c.status()
@@ -61,7 +62,7 @@ export function Quiz() {
         if (s) setStreak(s.creative?.quiz_streak_days ?? null);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -80,7 +81,7 @@ export function Quiz() {
       setQuiz(q);
       if (q) setState(initialQuiz((q.fields as QuizF).items));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBuilding(false);
     }

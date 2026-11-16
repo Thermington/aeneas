@@ -2,10 +2,11 @@ import type { Entity } from "@everythingapp/shared";
 import { withPriority } from "./ai/backends.js";
 import type { Hub } from "./hub.js";
 import { StoreError } from "./store.js";
-import { scheduleDaily } from "./schedule.js";
+import { dbJobClock, scheduleDaily } from "./schedule.js";
 import { diaryDay } from "./diary.js";
 import { personalize } from "./profile.js";
 import { errCode } from "./logsafe.js";
+import { cell } from "./csv.js";
 
 /**
  * Module 4, home. Microcontrollers post readings; the hub keeps one `sensor` row per name with the latest
@@ -18,6 +19,9 @@ const DAY_MS = 24 * 3600_000;
 const MINUTE_MS = 60_000;
 export const SERIES_MAX_POINTS = 288;
 const NAME_RE = /^[a-z0-9_.-]+$/i;
+const UNIT_RE = /^[\p{L}\p{N}°%/._ µ-]{1,12}$/u;
+/** A unit as it may go into text: unit characters only, 12 at most (one stored before units were checked is cut). */
+const unitText = (u: unknown) => String(u ?? "").replace(/[^\p{L}\p{N}°%/._ µ-]/gu, "").slice(0, 12).trim();
 
 export interface Point { at: string; value: number }
 export type SensorState = "ok" | "low" | "high" | "stale";
@@ -63,6 +67,9 @@ export function recordReading(hub: Hub, name: string, body: { value?: unknown; a
   if (atDate.getTime() < now.getTime() - 366 * DAY_MS) throw new StoreError(422, "at is more than a year in the past");
   const at = atDate.toISOString();
   const unit = typeof body.unit === "string" && body.unit.trim() ? body.unit.trim() : undefined;
+  // A unit is a few characters (°C, %, ppm, lb): it is shown beside values and put into the assistant's alert chat,
+  // and the sensors key that sends it may travel in plain HTTP, so free text there could speak in the owner's turn.
+  if (unit !== undefined && !UNIT_RE.test(unit)) throw new StoreError(422, "unit must be a short unit such as °C, %, lb or ppm: letters, digits, ° % / . _ - or a space, at most 12");
 
   let sensor = sensorByName(hub, name);
   if (!sensor) {
@@ -120,10 +127,10 @@ export function listSensors(hub: Hub, now: Date = new Date()): (Entity & { serie
 export function sensorCsv(hub: Hub, name: string, days: number, now: Date = new Date()): string {
   const s = sensorByName(hub, name);
   if (!s) throw new StoreError(404, "sensor not found");
-  const unit = String(s.fields.unit ?? "");
-  const csv = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  // The same cell rules as every other export: quoting, and a leading = + @ kept as text, not run as a formula.
+  const unit = cell(String(s.fields.unit ?? ""));
   const lines = ["at,value,unit"];
-  for (const p of readingsSince(hub, name, new Date(now.getTime() - days * DAY_MS))) lines.push(`${p.at},${p.value},${csv(unit)}`);
+  for (const p of readingsSince(hub, name, new Date(now.getTime() - days * DAY_MS))) lines.push(`${p.at},${p.value},${unit}`);
   return lines.join("\n") + "\n";
 }
 
@@ -153,7 +160,7 @@ export function purgeReadings(hub: Hub, keepDays: number = hub.cfg.readingKeepDa
 
 /** Once a night at 03:20 local. */
 export function startReadingPurgeJob(hub: Hub): () => void {
-  return scheduleDaily("readings", 3, 20, () => { purgeReadings(hub); });
+  return scheduleDaily("readings", 3, 20, () => { purgeReadings(hub); }, { clock: dbJobClock(hub.db) });
 }
 
 export function homeStatus(hub: Hub, now: Date = new Date()): { sensors: number; sensors_alerting: number; readings_24h: number; pet_events_30d: number; food_options: number } {
@@ -184,7 +191,7 @@ export function proposeSensorFix(hub: Hub, name: string, now: Date = new Date())
   const sid = `alert-${s.id.slice(0, 8)}-${state}-${diaryDay(now).replace(/-/g, "")}`;
   if (hub.ai.sessions.get(sid)) return { session_id: sid, started: false };
   if (!hub.ai.available()) throw new StoreError(503, "no model is reachable");
-  const unit = String(s.fields.unit ?? "");
+  const unit = unitText(s.fields.unit);
   const value = typeof s.fields.last_value === "number" ? `${s.fields.last_value}${unit ? ` ${unit}` : ""}` : "no reading";
   const host = String(s.fields.location ?? "").trim();
   const bounds = [typeof s.fields.min === "number" ? `below ${s.fields.min}` : "", typeof s.fields.max === "number" ? `above ${s.fields.max}` : ""].filter(Boolean).join(" or ");

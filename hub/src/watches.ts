@@ -5,7 +5,7 @@ import type { Hub } from "./hub.js";
 import type { Store } from "./store.js";
 import { StoreError } from "./store.js";
 import { ackReminder, linkedTask, syncLinkedTask } from "./reminders.js";
-import { scheduleDaily } from "./schedule.js";
+import { dbJobClock, scheduleDaily } from "./schedule.js";
 import { localDateOf } from "./planner.js";
 import { dayKey } from "./metrics.js";
 import { errCode } from "./logsafe.js";
@@ -206,5 +206,5 @@ export function installWatchHooks(hub: Hub): void {
 
 /** Once a day at 04:00 local. */
 export function startWatchJob(hub: Hub): () => void {
-  return scheduleDaily("watches", 4, 0, () => { if (hub.modules.on("renewals")) void watchDaily(hub).catch((e) => console.error(`[watches] daily failed: ${errCode(e)}`)); });
+  return scheduleDaily("watches", 4, 0, () => { if (hub.modules.on("renewals")) void watchDaily(hub).catch((e) => console.error(`[watches] daily failed: ${errCode(e)}`)); }, { clock: dbJobClock(hub.db) });
 }

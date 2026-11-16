@@ -41,4 +41,10 @@ describe("regularMeds", () => {
       { name: "Zyrtec", takenAt: null },
     ]);
   });
+
+  it("after midnight, yesterday's dose no longer counts as taken today", () => {
+    const logs = [at(2), at(1), at(0, 9)].map((when) => e("log", { type: "med", value: "Claritin", at: when }));
+    expect(regularMeds(logs, now)).toEqual([{ name: "Claritin", takenAt: at(0, 9) }]);
+    expect(regularMeds(logs, new Date(2026, 9, 29, 0, 1))).toEqual([{ name: "Claritin", takenAt: null }]);
+  });
 });

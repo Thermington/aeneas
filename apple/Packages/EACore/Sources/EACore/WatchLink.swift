@@ -2,6 +2,9 @@ import Foundation
 import os
 #if canImport(WatchConnectivity)
 import WatchConnectivity
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// WatchConnectivity session owner.
 /// iPhone: answers relayed hub requests from the Watch with the phone's own hub URL and token.
@@ -227,8 +230,31 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         DispatchQueue.main.async { self.onHumDelivered?(hum.id) }
     }
 
-    public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) { receivedHumResult(userInfo) }
+    public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        if let s = ComplicationSnapshot(message: userInfo) { receivedComplications(s); return }
+        receivedHumResult(userInfo)
+    }
     public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receivedHumResult(message) }
+
+    /// The iPhone's view of what the complications show: kept where they read it, and they are drawn again. They
+    /// used to change only when this app synced.
+    private func receivedComplications(_ s: ComplicationSnapshot) {
+        s.apply(to: .shared)
+        Self.log.notice("complications from the iPhone")
+        #if canImport(WidgetKit)
+        DispatchQueue.main.async { WidgetCenter.shared.reloadAllTimelines() }
+        #endif
+    }
+
+    /// A background wake for WatchConnectivity (the iPhone's complication snapshot, a hum's result): the session is
+    /// made ready, and this returns once nothing more is waiting to come in (20 s at most).
+    public func receivePending() async {
+        activate()
+        await waitForActivation()
+        guard let s = session else { return }
+        let deadline = Date().addingTimeInterval(20)
+        while s.hasContentPending, Date() < deadline, !Task.isCancelled { try? await Task.sleep(nanoseconds: 200_000_000) }
+    }
 
     private func receivedHumResult(_ m: [String: Any]) {
         guard let r = WatchHumResult(message: m) else { return }
@@ -323,6 +349,24 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         }
     }
 
+    /// A complication snapshot made before the session was active, sent once it is.
+    private var waitingComplications: ComplicationSnapshot?
+
+    /// What the Watch complications show, sent whenever it changes on this iPhone. While a complication of the app is
+    /// on the watch face, the transfer wakes the Watch app to draw it (Apple allows a number of these a day, then they
+    /// come with the next transfers); otherwise it is there when the Watch app next runs. Only the newest one waits.
+    public func sendComplications(_ snapshot: ComplicationSnapshot) {
+        guard let s = session else { return }
+        guard s.activationState == .activated else {
+            diagLock.withLock { waitingComplications = snapshot }
+            activate()
+            return
+        }
+        guard s.isPaired, s.isWatchAppInstalled else { return }
+        for t in s.outstandingUserInfoTransfers where (t.userInfo["kind"] as? String) == ComplicationSnapshot.kind { t.cancel() }
+        if s.isComplicationEnabled { s.transferCurrentComplicationUserInfo(snapshot.message) } else { s.transferUserInfo(snapshot.message) }
+    }
+
     public func sessionDidBecomeInactive(_ session: WCSession) { Self.log.notice("session inactive") }
     public func sessionDidDeactivate(_ session: WCSession) { Self.log.notice("session deactivated, reactivating"); session.activate() }
     public func sessionWatchStateDidChange(_ session: WCSession) {
@@ -342,6 +386,11 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         if let e = error { recordError("activation: \(e.localizedDescription)") }
         #if os(watchOS)
         if activationState == .activated { activatedAt = Date() }
+        #elseif os(iOS)
+        if activationState == .activated, let waiting = diagLock.withLock({ () -> ComplicationSnapshot? in
+            defer { waitingComplications = nil }
+            return waitingComplications
+        }) { sendComplications(waiting) }
         #endif
         DispatchQueue.main.async {
             #if os(watchOS)

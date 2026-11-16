@@ -144,3 +144,52 @@ test("sync: purging the newest change rows does not move the hub's seq back, so 
     assert.equal(res.changes.length, 0);
   } finally { t.cleanup(); }
 });
+
+test("sync: a stamp from a fast clock counts as its arrival, so a later edit still wins", async () => {
+  const t = makeHub();
+  try {
+    const id = randomUUID();
+    const push = async (patches: unknown[]) => (await (await t.api("/sync/push", { method: "POST", json: { device_id: "dev1", patches } })).json()) as { applied: unknown[]; rejected: { id: string; reason: string }[] };
+    await push([{ id, kind: "task", ts: "2026-10-21T10:00:00.000Z", fields: { title: "A", status: "next", order: 1 }, create: true }]);
+    // A phone whose clock is an hour fast edits the title; another device edits it a second later.
+    const fast = new Date(Date.now() + 3_600_000).toISOString();
+    assert.equal((await push([{ id, kind: "task", ts: fast, fields: { title: "from the fast clock" } }])).rejected.length, 0);
+    const stored = t.hub.store.get(id)!.field_ts.title;
+    assert.ok(Date.parse(stored) <= Date.now(), `the fast stamp became the arrival time (${stored})`);
+    await push([{ id, kind: "task", ts: new Date(Date.now() + 1_000).toISOString(), fields: { title: "later" } }]);
+    assert.equal(t.hub.store.get(id)!.fields.title, "later");
+
+    // Two edits from the fast clock in one push keep their order although both become "now".
+    const later = (ms: number) => new Date(Date.now() + 3_600_000 + ms).toISOString();
+    await push([
+      { id, kind: "task", ts: later(0), fields: { title: "one" } },
+      { id, kind: "task", ts: later(1_000), fields: { title: "two" } },
+    ]);
+    assert.equal(t.hub.store.get(id)!.fields.title, "two");
+  } finally { t.cleanup(); }
+});
+
+test("sync: stamps are kept in UTC with milliseconds; one that is not a time is rejected; a stored far-future stamp no longer freezes a field", async () => {
+  const t = makeHub();
+  try {
+    const id = randomUUID();
+    const push = async (patches: unknown[]) => (await (await t.api("/sync/push", { method: "POST", json: { device_id: "dev1", patches } })).json()) as { applied: unknown[]; rejected: { id: string; reason: string }[] };
+    await push([{ id, kind: "task", ts: "2026-10-21T12:00:00+02:00", fields: { title: "A", status: "next", order: 1 }, create: true }]);
+    assert.equal(t.hub.store.get(id)!.field_ts.title, "2026-10-21T10:00:00.000Z");
+    // Without milliseconds, "10:00:01Z" would sort after "10:00:01.500Z" as text: normalized, the later edit wins.
+    await push([{ id, kind: "task", ts: "2026-10-21T10:00:01Z", fields: { title: "B" } }]);
+    await push([{ id, kind: "task", ts: "2026-10-21T10:00:01.500Z", fields: { title: "C" } }]);
+    assert.equal(t.hub.store.get(id)!.fields.title, "C");
+
+    const bad = await push([{ id, kind: "task", ts: "not a time at all", fields: { title: "D" } }]);
+    assert.equal(bad.rejected.length, 1);
+    assert.match(bad.rejected[0].reason, /not a date and time/);
+    assert.equal(t.hub.store.get(id)!.fields.title, "C");
+
+    // A stamp stored before the check (a clock years ahead) used to win over every later edit.
+    const e = t.hub.store.get(id)!;
+    t.hub.store.db.prepare("UPDATE entities SET field_ts = ? WHERE id = ?").run(JSON.stringify({ ...e.field_ts, title: "2099-01-01T00:00:00.000Z" }), id);
+    await push([{ id, kind: "task", ts: new Date().toISOString(), fields: { title: "E" } }]);
+    assert.equal(t.hub.store.get(id)!.fields.title, "E");
+  } finally { t.cleanup(); }
+});

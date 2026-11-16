@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Endpoint, EndpointAddr, RelayMode } from "@number0/iroh";
 import { deviceKey, makeHub, TOKEN } from "./helpers.js";
-import { chooseLink, currentMethod, DirectLink, LINK_ALPN, linkAvailability, relayOwner } from "../src/link.js";
+import { relayInTestHands } from "./iroh-fake.js";
+import { chooseLink, currentMethod, DirectLink, LINK_ALPN, linkAvailability, readLinkFile, relayOwner } from "../src/link.js";
 import { pairingLinks } from "../src/setup.js";
 
 const ALPN = Array.from(Buffer.from(LINK_ALPN));
@@ -150,4 +151,73 @@ test("Direct link: a start that fails for a passing reason is tried again until 
     await link.stop();
     t.cleanup();
   }
+});
+
+/** A client endpoint with no relay, connected straight to `link`'s endpoint on this machine. */
+async function connectDirect(link: DirectLink, cli: Endpoint) {
+  const ep = link.endpoint()!;
+  const addrs = ep.boundSockets().filter((a) => a.startsWith("0.0.0.0:") || a.startsWith("127.")).map((a) => a.replace(/^0\.0\.0\.0/, "127.0.0.1"));
+  return cli.connect(new EndpointAddr(ep.id(), null, addrs), ALPN);
+}
+
+test("Direct link: with no relay answering (no internet), it starts anyway, serves devices, and takes the relay once it answers", async () => {
+  const t = makeHub();
+  const relay = relayInTestHands("https://relay.example.org/");
+  const link = new DirectLink(t.hub.cfg, t.app.fetch, relay.load, { onlineMs: 50, retryMs: [20] });
+  const cli = await (() => { const b = Endpoint.builder(); b.applyMinimal(); b.relayMode(RelayMode.disabled()); return b.bind(); })();
+  try {
+    const st = await link.start();
+    assert.equal(st.state, "online", st.error);
+    assert.equal(st.relay_ok, false, "no relay answered");
+    assert.equal(st.relay, undefined, "none known yet");
+    assert.equal(st.retry_at, undefined, "not a failure");
+    assert.equal(readLinkFile(t.hub.cfg.dataDir).relay, undefined, "a relay is written only once one answered");
+    // Devices that reach the hub straight (a home network with the internet down) are served now.
+    const key = await deviceKey(t);
+    const dev = await over(await connectDirect(link, cli), "/setup", { authorization: `Bearer ${key}` });
+    assert.equal(dev.status, 200, dev.body);
+    relay.answer();
+    for (let i = 0; i < 100 && !link.status().relay_ok; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(link.status().relay_ok, true);
+    assert.equal(link.status().relay, "https://relay.example.org/");
+    assert.equal(link.status().relay_by, "relay.example.org");
+    assert.equal(readLinkFile(t.hub.cfg.dataDir).relay, "https://relay.example.org/", "the first relay that answered is kept");
+  } finally {
+    await cli.close();
+    await link.stop();
+    t.cleanup();
+  }
+});
+
+test("Direct link: a kept relay that does not answer is still the one shown and kept; a stop ends the waiting", async () => {
+  const t = makeHub();
+  fs.writeFileSync(path.join(t.dir, "link.json"), JSON.stringify({ method: "direct", relay: "https://kept.example.net/" }));
+  const relay = relayInTestHands("https://other.example.org/");
+  const link = new DirectLink(t.hub.cfg, t.app.fetch, relay.load, { onlineMs: 30, retryMs: [10] });
+  try {
+    const st = await link.start();
+    assert.deepEqual([st.state, st.relay, st.relay_ok], ["online", "https://kept.example.net/", false]);
+    await link.stop();
+    // The relay answering after the stop changes nothing: the background asking ended with the link.
+    relay.answer();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.deepEqual([link.status().state, link.status().relay_ok], ["off", false]);
+    assert.equal(readLinkFile(t.hub.cfg.dataDir).relay, "https://kept.example.net/");
+  } finally {
+    await link.stop();
+    t.cleanup();
+  }
+});
+
+test("Direct link is offered only where its library has a build: not on an Intel Mac", async () => {
+  const { directLinkRuns } = await import("../src/link.js");
+  assert.equal(directLinkRuns("darwin", "arm64"), true);
+  assert.equal(directLinkRuns("darwin", "x64"), false, "an Intel Mac has no build: the hub could never start it");
+  assert.equal(directLinkRuns("linux", "x64"), true);
+  assert.equal(directLinkRuns("linux", "arm64"), true);
+  assert.equal(directLinkRuns("linux", "arm"), true);
+  assert.equal(directLinkRuns("win32", "x64"), true);
+  assert.equal(directLinkRuns("win32", "arm64"), true);
+  assert.equal(directLinkRuns("linux", "ia32"), false);
+  assert.equal(directLinkRuns("freebsd", "x64"), false);
 });

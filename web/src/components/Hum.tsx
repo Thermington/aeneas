@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -37,7 +38,7 @@ export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCa
       onDone(idea);
     } catch (e) {
       setUnsent(take);
-      setErr(`${e instanceof Error ? e.message : String(e)}. The recording is kept: send it again when the hub is back.`);
+      setErr(`${plainError(e).replace(/\.$/, "")}. The recording is kept: send it again when the hub is back.`);
     } finally {
       setBusy(false);
     }
@@ -58,7 +59,7 @@ export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCa
       };
       loop();
     } catch (e) {
-      setErr(e instanceof Error && e.name === "NotAllowedError" ? "The microphone is blocked for this app. Allow it in the browser's site settings, then try again." : e instanceof Error ? e.message : String(e));
+      setErr(e instanceof Error && e.name === "NotAllowedError" ? "The microphone is blocked for this app. Allow it in the browser's site settings, then try again." : plainError(e));
     }
   };
 
@@ -142,13 +143,13 @@ export function HumResult({ idea }: { idea: Entity }) {
     setTimeout(() => setStopPlay((cur) => (cur === stop ? null : cur)), end);
   };
   const download = async (grid: boolean) => {
-    try { const r = await client!.musicMidi(idea.id, grid); saveBlob(r.blob, r.name); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    try { const r = await client!.musicMidi(idea.id, grid); saveBlob(r.blob, r.name); } catch (e) { setMsg(plainError(e)); }
   };
   const original = async () => {
-    try { setAudioUrl(URL.createObjectURL(await client!.musicAudio(idea.id))); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    try { setAudioUrl(URL.createObjectURL(await client!.musicAudio(idea.id))); } catch (e) { setMsg(plainError(e)); }
   };
   const rehear = async (body: { mode?: "melody" | "rhythm"; bpm?: number }) => {
-    try { await engine.absorb([await client!.rehearHum(idea.id, body)]); setMsg(""); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+    try { await engine.absorb([await client!.rehearHum(idea.id, body)]); setMsg(""); } catch (e) { setMsg(plainError(e)); }
   };
   const other: "melody" | "rhythm" = m.mode === "melody" ? "rhythm" : "melody";
 

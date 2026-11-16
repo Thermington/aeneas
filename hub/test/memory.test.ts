@@ -376,3 +376,19 @@ test("prompt: a troubleshoot session gets the runbook head and last three journa
     assert.ok(trimmed.every((h) => h.journal.length === 1 && h.runbook.length > 0 && h.runbook.length < 1500));
   } finally { t.cleanup(); }
 });
+
+test("prompt: facts about other people are listed under their names, apart from the owner's", () => {
+  const t = makeHub();
+  try {
+    const s = t.hub.store;
+    const jamie = s.create("person", { name: "Jamie Lee" });
+    s.create("fact", { category: "preference", key: "food", value: "Loves spicy ramen" });
+    s.create("fact", { category: "preference", key: "food", value: "Likes Thai food", person_id: jamie.id });
+    s.create("fact", { category: "history", key: "employer", value: "Works at Acme", person: "Devon" });
+    const p = buildSystemPrompt(loadMemory(s, { cloud: false, allowWork: false }), "general");
+    const own = p.split("Facts about the user")[1].split("\n\n")[0];
+    assert.match(own, /Loves spicy ramen/);
+    assert.doesNotMatch(own, /Thai|Acme/, "nobody else's facts read as the owner's");
+    assert.match(p, /Facts about other people[^\n]*\n- Devon: \[history\] employer: Works at Acme\n- Jamie Lee: \[preference\] food: Likes Thai food/);
+  } finally { t.cleanup(); }
+});

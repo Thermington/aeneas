@@ -415,3 +415,38 @@ test("gmail: a notice that does not say stays out of Reminders, never undoes a \
     assert.deepEqual(t.hub.store.list({ kind: "task" }).map((x) => String(x.fields.title)).sort(), ["Renew: Domain example.net", "Renew: Passport"]);
   } finally { setBackendOverride(null); t.cleanup(); }
 });
+
+test("gmail: during a game no mail is downloaded; a mail the model never answers while it is up counts as a try", async () => {
+  const t = makeHub();
+  const now = new Date();
+  const mail = new Map<string, Mail>();
+  mail.set("r1", { id: "r1", at: new Date(now.getTime() - 86400_000), from: "Shop <hi@shop.example>", subject: "Your plan renews on Dec 1", html: "<p>StreamCo renews on Dec 1 for $9.99.</p>", read: { type: "none" } });
+  try {
+    fakeGoogle(t, mail);
+    let downloads = 0;
+    const fetch0 = t.hub.fetch;
+    t.hub.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (/\/messages\/r1/.test(String(input))) downloads++;
+      return fetch0(input, init);
+    }) as typeof fetch;
+    // The model is up but never answers this mail.
+    setBackendOverride({ name: "ollama", model: "slow", chat: async () => { throw new Error("timeout after 120000 ms"); }, stream: async () => ({ text: "", usage: {} }) } as never);
+    await link(t);
+    await listMail(t.hub, "robin@example.com", now);
+    const ai = t.hub.ai as unknown as { gameRunning: () => Promise<string | null>; localModelUp: () => Promise<boolean> };
+    const game = ai.gameRunning;
+    ai.gameRunning = async () => "SomeGame.exe is using the graphics card";
+    const before = downloads;
+    assert.equal((await fileMessage(t.hub, "robin@example.com", "r1", now)).state, "queued");
+    assert.equal(downloads, before, "not downloaded while a game runs");
+    ai.gameRunning = game;
+    const row = () => t.hub.db.prepare("SELECT state, attempts FROM mail WHERE id = 'r1'").get() as { state: string; attempts: number };
+    for (let i = 0; i < 3; i++) await fileMessage(t.hub, "robin@example.com", "r1", now);
+    assert.deepEqual(row(), { state: "failed", attempts: 3 }, "three tries, then the mails behind it are read");
+    // With no model answering its check, the mail waits without a try.
+    t.hub.db.prepare("UPDATE mail SET state = 'queued', attempts = 0 WHERE id = 'r1'").run();
+    ai.localModelUp = async () => false;
+    await assert.rejects(fileMessage(t.hub, "robin@example.com", "r1", now), /no model answered/);
+    assert.deepEqual(row(), { state: "queued", attempts: 0 });
+  } finally { setBackendOverride(null); t.cleanup(); }
+});

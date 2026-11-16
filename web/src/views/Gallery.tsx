@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -88,7 +89,7 @@ export function Gallery() {
       for (const f of [...files].filter((x) => x.type.startsWith("image/"))) made.push(await c.uploadImage(f, "uploaded", f.name.replace(/\.[^.]+$/, "")));
       await engine.absorb(made);
       setBin("saved");
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(plainError(e)); }
     setBusy(false);
   };
 

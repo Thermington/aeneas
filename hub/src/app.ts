@@ -9,7 +9,7 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
-import { nowIso } from "@everythingapp/shared";
+import { nowIso, Platform } from "@everythingapp/shared";
 import { moduleDef, moduleOfPath } from "./modules.js";
 import { refuseToolCall } from "./ai/api-guard.js";
 import { StoreError } from "./store.js";
@@ -34,6 +34,7 @@ import { wikiRoutes } from "./routes/wiki.js";
 import { layoutRoutes } from "./routes/layouts.js";
 import { backupRoutes } from "./routes/backup.js";
 import { hubsRoutes } from "./routes/hubs.js";
+import { referenceRoutes } from "./routes/reference.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
 import { hubAddress, pairingLinks } from "./setup.js";
@@ -196,6 +197,9 @@ export function createApp(hub: Hub): App {
     app.use("/app/*", async (c, next) => { await next(); c.header("Content-Security-Policy", APP_CSP); });
     app.get("/app", (c) => c.redirect("/app/"));
     app.use("/app/*", serveStatic({ root: path.relative(process.cwd(), webDist) || ".", rewriteRequestPath: (p) => p.replace(/^\/app\/?/, "/") }));
+    // A screen's script that is gone (the app was updated while a window stayed open) is a 404, not the app page: the
+    // page reloads itself on a failed load, while the app page as a script only failed with a type error.
+    app.get("/app/assets/*", (c) => c.text("not found", 404));
     app.get("/app/*", (c) => c.html(fs.readFileSync(path.join(webDist, "index.html"), "utf8")));
   }
 
@@ -384,6 +388,9 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   // The new device sends the code with its name and platform and gets its own key, once.
   app.post("/devices/claim", async (c) => {
     const body = await readJsonObject<{ code?: unknown; name?: unknown; platform?: unknown; device_id?: unknown; push_token?: unknown }>(c);
+    // The platform is checked before the code is spent: one the hub does not take (a newer app, an older hub) used the
+    // code up and the device could not try again with it.
+    if (!Platform.safeParse(body.platform).success) throw new StoreError(422, `platform must be one of ${Platform.options.join(", ")}`);
     const claimed = typeof body.code === "string" ? hub.deviceKeys.claim(body.code) : null;
     if (!claimed) {
       await slowDown(caller(c));
@@ -443,6 +450,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.route("/", adminRoutes());
   app.route("/", backupRoutes());
   app.route("/", hubsRoutes());
+  app.route("/", referenceRoutes());
   // Assistant tools call this same app in-process, with the hub's own token, so they get the routes' validation and hooks.
   hub.ai.setApi(async (method, path, body) => {
     const refused = refuseToolCall(method, path);

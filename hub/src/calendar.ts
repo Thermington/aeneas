@@ -36,12 +36,16 @@ const dayAfter = (d: string): string => {
 const ical = (d: string) => d.replace(/-/g, "");
 
 /** Lines folded at 75 octets as RFC 5545 asks. */
-function fold(line: string): string {
+export function fold(line: string): string {
   const out: string[] = [];
   let rest = line;
   while (Buffer.byteLength(rest) > 75) {
     let n = 75;
     while (Buffer.byteLength(rest.slice(0, n)) > 75) n--;
+    // Never between the two halves of an emoji (a UTF-16 pair): each half alone is not a character, and "🎂" came out
+    // as two replacement marks.
+    const code = rest.charCodeAt(n - 1);
+    if (code >= 0xd800 && code <= 0xdbff) n--;
     out.push(rest.slice(0, n));
     rest = ` ${rest.slice(n)}`;
   }

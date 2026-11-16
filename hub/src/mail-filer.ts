@@ -383,6 +383,9 @@ const mailboxWait = new Map<string, number>();
 /** Read one queued message and file it. Returns the new state of its row. */
 export async function fileMessage(hub: Hub, account: string, id: string, now: Date = new Date()): Promise<{ state: string; filed: Filed[] }> {
   const set = hub.db.prepare("UPDATE mail SET state = ?, at = COALESCE(?, at), attempts = attempts + ?, result = ? WHERE account = ? AND id = ?");
+  // A game on the model's card: the mail waits before it is downloaded (it was fetched in full, then given way, again
+  // and again while the game ran).
+  if (await hub.ai.gameRunning()) return { state: "queued", filed: [] };
   let msg: any;
   try {
     msg = await gmailGet(hub, account, `/messages/${encodeURIComponent(id)}?format=full`);
@@ -398,7 +401,15 @@ export async function fileMessage(hub: Hub, account: string, id: string, now: Da
   if (stopped) return { state: "queued", filed: [] };
   // No model answered at all (Ollama down, a game holding the GPU): not this mail's fault, so not a try. The mail
   // stays queued and reading pauses; counted, a whole backlog burned its tries in seconds and was never read again.
-  if (raw === null) throw new ModelAway();
+  // No answer while the model server answers its check is this mail's own (a reading that times out every time): a
+  // try, so one such mail no longer stops every mail behind it for good.
+  if (raw === null) {
+    if (!(await hub.ai.localModelUp())) throw new ModelAway();
+    const row = hub.db.prepare("SELECT attempts FROM mail WHERE account = ? AND id = ?").get(account, id) as { attempts: number } | undefined;
+    const state = (row?.attempts ?? 0) + 1 >= MAX_ATTEMPTS ? "failed" : "queued";
+    set.run(state, m.at.toISOString(), 1, JSON.stringify({ why: "no answer" }), account, id);
+    return { state, filed: [] };
+  }
   const read = parseRead(raw);
   if (!read) {
     const row = hub.db.prepare("SELECT attempts FROM mail WHERE account = ? AND id = ?").get(account, id) as { attempts: number } | undefined;
@@ -523,6 +534,9 @@ export function startMailJob(hub: Hub): () => void {
         }
         mailboxWait.delete(next.account);
         if (r.filed.length) console.log(`[mail] ${mailboxLabel(hub, next.account)}: ${r.filed.map((f) => `${f.action} ${f.kind} ${f.id}`).join(", ")}`);
+        // Still waiting (a chat, a game, another person's chat on a shared model): a minute before the next try, which
+        // would take the same mail again at once.
+        if (r.state === "queued") await sleep(60_000);
       } catch (e) {
         console.error(`[mail] ${errCode(e)}`);
         await sleep(5 * 60_000);

@@ -77,6 +77,7 @@ export const SCREEN_MODULE: Record<string, string> = {
   "/calc": "calc",
   "/lists/jobs": "jobs",
   "/layouts": "layouts",
+  "/reference": "reference",
 };
 
 /** The module a hash path belongs to: the longest screen path it is, or is under. */

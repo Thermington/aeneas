@@ -13,65 +13,58 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 export const ESCAPE_EVENT = "ea:escape";
 
 /**
- * Desktop shortcuts: t today, w week, c capture, n now, h hosts, o ops, f food, p procedures, l lists, / search, Escape closes whatever is open.
- * Letters are ignored while typing in a field and on narrow screens; Escape always fires.
+ * The desktop's one-letter shortcuts, in the order the sidebar and Settings, About list them. `path` opens that screen;
+ * c focuses Capture's text (opening Capture first) and / the search field. `module`: listed only while it is on (the
+ * key still opens the screen, which then offers to turn the module on).
  */
+export const GLOBAL_KEYS: ReadonlyArray<{ key: string; label: string; path?: string; module?: string }> = [
+  { key: "t", label: "today", path: "/today" },
+  { key: "a", label: "assistant", path: "/assistant" },
+  { key: "c", label: "capture" },
+  { key: "n", label: "now", path: "/now" },
+  { key: "w", label: "week", path: "/week" },
+  { key: "h", label: "hosts", path: "/hosts", module: "homelab" },
+  { key: "o", label: "ops", path: "/ops", module: "homelab" },
+  { key: "f", label: "food", path: "/food", module: "food" },
+  { key: "p", label: "procedures", path: "/procedures", module: "projects" },
+  { key: "l", label: "lists", path: "/lists" },
+  { key: "/", label: "search" },
+];
+
+/** The letters to list, without those of modules that are off. */
+export function listedKeys(on: (module: string | undefined) => boolean): typeof GLOBAL_KEYS {
+  return GLOBAL_KEYS.filter((k) => on(k.module));
+}
+
+export type KeyAction = { go: string } | { focus: "capture" | "search" } | { escape: true };
+
+/**
+ * What a key press anywhere does: Escape always closes whatever is open; a letter from GLOBAL_KEYS acts only on a wide
+ * screen, without Ctrl, Cmd or Alt, and never while typing in a field.
+ */
+export function keyAction(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "isComposing" | "target">, wide: boolean): KeyAction | null {
+  if (e.key === "Escape") return { escape: true };
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || isTypingTarget(e.target) || !wide) return null;
+  const k = GLOBAL_KEYS.find((x) => x.key === e.key);
+  if (!k) return null;
+  if (k.path) return { go: k.path };
+  return { focus: k.key === "c" ? "capture" : "search" };
+}
+
+/** The desktop shortcuts (GLOBAL_KEYS), and Escape, which closes whatever is open on any screen. */
 export function useGlobalKeys(): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      const a = keyAction(e, window.matchMedia("(min-width: 768px)").matches);
+      if (!a) return;
+      if ("escape" in a) {
         window.dispatchEvent(new CustomEvent(ESCAPE_EVENT));
         return;
       }
-      if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-      if (isTypingTarget(e.target)) return;
-      if (!window.matchMedia("(min-width: 768px)").matches) return;
-      switch (e.key) {
-        case "c":
-          e.preventDefault();
-          focusCapture();
-          break;
-        case "n":
-          e.preventDefault();
-          go("/now");
-          break;
-        case "t":
-          e.preventDefault();
-          go("/today");
-          break;
-        case "a":
-          e.preventDefault();
-          go("/assistant");
-          break;
-        case "w":
-          e.preventDefault();
-          go("/week");
-          break;
-        case "h":
-          e.preventDefault();
-          go("/hosts");
-          break;
-        case "o":
-          e.preventDefault();
-          go("/ops");
-          break;
-        case "f":
-          e.preventDefault();
-          go("/food");
-          break;
-        case "p":
-          e.preventDefault();
-          go("/procedures");
-          break;
-        case "l":
-          e.preventDefault();
-          go("/lists");
-          break;
-        case "/":
-          e.preventDefault();
-          document.querySelector<HTMLInputElement>("input[data-search]")?.focus();
-          break;
-      }
+      e.preventDefault();
+      if ("go" in a) go(a.go);
+      else if (a.focus === "capture") focusCapture();
+      else document.querySelector<HTMLInputElement>("input[data-search]")?.focus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

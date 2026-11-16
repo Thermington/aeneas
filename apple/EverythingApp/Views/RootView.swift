@@ -29,7 +29,12 @@ struct RootView: View {
             }
             Button("Keep the current hub", role: .cancel) { model.pendingSetup = nil }
         } message: { p in
-            Text("This link connects to \(p.hub). This device uses \(p.current) now. Switch only if you made this link yourself.")
+            // The same address names another certificate than the one this device checks for (AppModel.handle).
+            Text(p.link.hubId != nil && p.currentId != nil && p.link.hubId != p.currentId
+                 ? "This link is for another hub than the one this device uses now (\(p.current)). Switch only if you made this link yourself."
+                 : AppModel.sameHub(p.hub, p.current)
+                 ? "This link is for \(p.hub), the hub this device uses now, but it names another certificate than the one this device trusts. Switch only if you made this link yourself."
+                 : "This link connects to \(p.hub). This device uses \(p.current) now. Switch only if you made this link yourself.")
         }
         .sheet(item: Binding(get: { model.pendingSnoozeReminderId.map { PendingSnooze(id: $0) } }, set: { model.pendingSnoozeReminderId = $0?.id })) { p in
             SnoozeReasonSheet(reminderId: p.id)
@@ -125,6 +130,7 @@ private func sectionContent(_ s: Section) -> some View {
     case .notes: NotesView()
     case .memory: MemoryView()
     case .people: PeopleView()
+    case .reference: ReferenceView()
     case .ops: OpsView()
     case .hosts: HostsView()
     case .journal: JournalView()

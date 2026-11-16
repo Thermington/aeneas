@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { taskAlertAt } from "@everythingapp/shared";
@@ -179,6 +180,10 @@ function WeekGrid({ week, onDrop, onPlus, onUnschedule }: { week: PlannerWeek; o
                       e.stopPropagation();
                       onUnschedule(bl.task_id);
                     }}
+                    // Enter here unschedules only: it went on to the block, which opened the task too.
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.stopPropagation();
+                    }}
                   >
                     x
                   </button>
@@ -228,7 +233,7 @@ export function Week() {
         await poll.reload();
       } catch (e) {
         const c = conflictMessage(e);
-        setMsg({ text: c ?? (e instanceof Error ? e.message : String(e)), retry: c ? { taskId, start: startIso, hours } : null });
+        setMsg({ text: c ?? (plainError(e)), retry: c ? { taskId, start: startIso, hours } : null });
       } finally {
         setBusy(false);
       }
@@ -245,7 +250,7 @@ export function Week() {
         await unscheduleTask(task);
         await poll.reload();
       } catch (e) {
-        setMsg({ text: e instanceof Error ? e.message : String(e), retry: null });
+        setMsg({ text: plainError(e), retry: null });
       }
     },
     [poll],

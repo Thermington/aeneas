@@ -270,7 +270,7 @@
       "status" : 200
     },
     "GET health" : {
-      "body" : "{\"ok\":true,\"version\":\"0.1.0\",\"time\":\"2026-11-14T21:13:20.185Z\",\"db_seq\":91,\"ai\":{\"cloud\":false,\"tools\":false,\"model\":null,\"images\":false,\"web\":false,\"hosts\":false,\"voice_model\":false,\"synced_sessions\":true},\"hub\":{\"name\":\"Alex\",\"color\":null}}",
+      "body" : "{\"ok\":true,\"version\":\"1.0.3\",\"time\":\"2026-11-14T21:13:20.185Z\",\"db_seq\":91,\"ai\":{\"cloud\":false,\"tools\":false,\"model\":null,\"images\":false,\"web\":false,\"hosts\":false,\"voice_model\":false,\"synced_sessions\":true},\"hub\":{\"name\":\"Alex\",\"color\":null}}",
       "status" : 200
     },
     "GET hosts" : {

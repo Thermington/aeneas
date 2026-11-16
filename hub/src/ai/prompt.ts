@@ -7,7 +7,11 @@ import { taskLists } from "./lists.js";
 
 export interface MemoryOpts { cloud: boolean; allowWork: boolean }
 
-export interface Memory { facts: Entity[]; rules: Entity[]; ledger: Entity | null; project: Entity | null; hosts: HostMemory[]; lists: string[]; checklists: string[] }
+/** Names of the people facts are about, by person id (a fact may carry only the id). */
+export interface Memory { facts: Entity[]; rules: Entity[]; ledger: Entity | null; project: Entity | null; hosts: HostMemory[]; lists: string[]; checklists: string[]; names?: Record<string, string> }
+
+/** A fact about the owner, not about someone in People (those carry `person_id` or `person`). */
+export const aboutOwner = (f: Entity): boolean => !String(f.fields.person_id ?? "").trim() && !String(f.fields.person ?? "").trim();
 
 /** Facts and rules that would be injected for the given egress policy. */
 export function loadMemory(store: Store, opts: MemoryOpts, sessionId?: string, messages: AiMessage[] = []): Memory {
@@ -36,7 +40,12 @@ export function loadMemory(store: Store, opts: MemoryOpts, sessionId?: string, m
   const hosts = hostMemory(store, hostsIn(text, knownHosts(store)));
   // Personal lists only, like the facts: work names stay out unless the chat may see work.
   const checklists = store.list({ kind: "checklist" }).filter((c) => (opts.allowWork || c.space !== "work") && c.fields.template !== true && c.fields.archived !== true).map((c) => String(c.fields.title ?? "")).filter(Boolean).sort(byName);
-  return { facts, rules, ledger, project, hosts, lists: [...taskLists(store, "personal").sort(byName), ...(opts.allowWork ? taskLists(store, "work").sort(byName) : [])], checklists };
+  const names: Record<string, string> = {};
+  for (const f of facts) {
+    const id = String(f.fields.person_id ?? "").trim();
+    if (id && !(id in names)) { const p = store.get(id); if (p && p.kind === "person") names[id] = String(p.fields.name ?? "").trim(); }
+  }
+  return { facts, rules, ledger, project, hosts, lists: [...taskLists(store, "personal").sort(byName), ...(opts.allowWork ? taskLists(store, "work").sort(byName) : [])], checklists, names };
 }
 
 /**
@@ -52,8 +61,16 @@ export function buildSystemPrompt(mem: Memory, taskType: string): string {
   if (promptRules.length) {
     parts.push("Standing rules (always follow):\n" + promptRules.map((r) => `- ${r.fields.text}`).join("\n"));
   }
-  if (mem.facts.length) {
-    parts.push("Facts about the user (do not re-ask these):\n" + mem.facts.map((f) => `- [${f.fields.category}] ${f.fields.key}: ${f.fields.value}`).join("\n"));
+  // A fact about someone else is listed under their name: all facts used to read as the owner's, so "likes Thai food"
+  // said about a friend became the owner's taste.
+  const own = mem.facts.filter(aboutOwner);
+  if (own.length) {
+    parts.push("Facts about the user (do not re-ask these):\n" + own.map((f) => `- [${f.fields.category}] ${f.fields.key}: ${f.fields.value}`).join("\n"));
+  }
+  const whose = (f: Entity) => String(f.fields.person ?? "").trim() || mem.names?.[String(f.fields.person_id ?? "")] || "someone in People";
+  const others = mem.facts.filter((f) => !aboutOwner(f)).map((f) => ({ f, name: whose(f) })).sort((a, b) => a.name.localeCompare(b.name));
+  if (others.length) {
+    parts.push("Facts about other people (each about the person named, never about the user):\n" + others.map(({ f, name }) => `- ${name}: [${f.fields.category}] ${f.fields.key}: ${f.fields.value}`).join("\n"));
   }
   // The names of the owner's lists, so "my shopping list" is found: they change rarely, so this part stays cached.
   if (mem.lists.length || mem.checklists.length) {

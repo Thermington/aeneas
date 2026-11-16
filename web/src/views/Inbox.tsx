@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
@@ -20,7 +21,7 @@ export function Inbox() {
     try {
       await convertCapture(c, kind);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -35,7 +36,7 @@ export function Inbox() {
       await engine.client.fileCapture(c.id);
       await engine.pull();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }

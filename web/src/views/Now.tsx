@@ -3,9 +3,11 @@ import type { Entity } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
 import { useTodayReminders } from "../sync/useTodayReminders";
 import { updateEntity } from "../sync/edits";
-import { fmtDateTime, fmtTime, HOUR } from "../lib/time";
+import { fmtTime, HOUR } from "../lib/time";
+import { fmtDue } from "../lib/planner";
 import { go } from "../lib/router";
-import { completeTaskPatch, taskAlertAt } from "@everythingapp/shared";
+import { taskAlertAt } from "@everythingapp/shared";
+import { completeTask } from "../sync/actions";
 
 type TaskF = { title: string; notes?: string; status: string; order: number; due?: string; block?: { start: string; end: string }; parked_reason?: string };
 
@@ -22,7 +24,7 @@ export function NowCard({ showNext = true }: { showNext?: boolean } = {}) {
   const tasks = useEntities("task", (e) => e.fields.status === "doing" || e.fields.status === "next");
   const { current, next } = useMemo(() => pickCurrent(tasks), [tasks]);
 
-  const done = () => current && updateEntity(current, completeTaskPatch(current.fields));
+  const done = () => current && completeTask(current);
   const park = () => {
     if (!current) return;
     const reason = window.prompt("Why park it");
@@ -51,7 +53,7 @@ export function NowCard({ showNext = true }: { showNext?: boolean } = {}) {
           <div className="muted small">{f.status === "doing" ? (blockActive ? `block until ${fmtTime(f.block!.end)}` : "doing") : "next"}</div>
           <div className="title">{f.title}</div>
           {f.notes && <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{f.notes}</p>}
-          {f.due && <div className="small muted">due {fmtDateTime(f.due)}</div>}
+          {f.due && <div className="small muted">due {fmtDue(f.due)}</div>}
           <div className="actions">
             <button className="primary" onClick={done}>
               Done
@@ -79,7 +81,7 @@ export function NowCard({ showNext = true }: { showNext?: boolean } = {}) {
               <div key={t.id} className="item">
                 <div className="body">
                   <div className="t">{String(t.fields.title)}</div>
-                  {!!t.fields.due && <div className="meta">due {fmtDateTime(t.fields.due as string)}</div>}
+                  {!!t.fields.due && <div className="meta">due {fmtDue(t.fields.due as string)}</div>}
                 </div>
               </div>
             ))}
@@ -96,6 +98,7 @@ export function Now() {
 
   return (
     <div>
+      <h1>Now</h1>
       {today.length > 0 && (
         <div className="strip" title={todaySource === "hub" ? "due within 12 h, from the hub" : "due today, computed locally"}>
           <span className="muted">{todaySource === "hub" ? "Due" : "Today"}</span>

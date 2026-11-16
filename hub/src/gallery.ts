@@ -80,9 +80,13 @@ export function recordGenerated(hub: GalleryHost, job: ImageJob): Entity | null 
 export async function collectGenerated(hub: Hub): Promise<number> {
   if (!imagesEnabled(hub)) return 0;
   let added = 0;
-  const known = new Set(hub.store.list({ kind: "image", includeDeleted: true, limit: 100000 }).map((e) => String(e.fields.job_id ?? "")));
-  for (const j of await imageJobs(hub, 30)) {
-    if (j.status !== "succeeded" || !j.result_asset || known.has(j.id)) continue;
+  const done = (await imageJobs(hub, 30)).filter((j) => j.status === "succeeded" && !!j.result_asset);
+  if (!done.length) return 0;
+  // Only the jobs just listed are looked up, deleted pictures too (the owner's delete stands): every picture in the
+  // gallery used to be read every 20 seconds.
+  const known = new Set(hub.store.listWhere("image", [{ key: "job_id", oneOf: done.map((j) => j.id) }], { includeDeleted: true }).map((e) => String(e.fields.job_id ?? "")));
+  for (const j of done) {
+    if (known.has(j.id)) continue;
     // One job whose picture is gone (or cannot be read) is skipped; it stopped every job listed after it.
     try {
       const full = await imageJob(hub, j.id);

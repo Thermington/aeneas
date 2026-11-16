@@ -6,9 +6,7 @@ import type { LayoutPiece, LayoutPlatform, LayoutRect } from "../sync/api";
  * pixels it is given (a scaled-down copy) and leaves the scaling back to the caller.
  */
 
-export const PLATFORM_LABEL: Record<LayoutPlatform, string> = {
-  iphone: "iPhone", ipad: "iPad", mac: "Mac", watch: "Watch", windows: "Windows", web: "Web", other: "Other",
-};
+export { PLATFORM_LABEL } from "./links";
 
 /** A likely platform for a picture of this size (a guess the owner can change). */
 export function guessPlatform(w: number, h: number): LayoutPlatform {

@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { engine } from "../sync/engine";
 import { usePoll } from "../lib/usePoll";
@@ -27,7 +28,7 @@ import {
 } from "../lib/dashboard";
 
 const CACHE_KEY = "ea.dashboard.board";
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const msg = (e: unknown) => plainError(e);
 
 function readCache(): Board | null {
   try {

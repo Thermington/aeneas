@@ -81,12 +81,11 @@ struct EverythingAppApp: App {
         .defaultSize(width: 560, height: 720)
         .commandsRemoved()
 
-        MenuBarExtra {
+        // The menu bar shows the symbol; the title is what VoiceOver says for it.
+        MenuBarExtra("Aeneas", systemImage: "circle.inset.filled") {
             MenuBarView()
                 .environmentObject(model)
                 .environmentObject(model.engine)
-        } label: {
-            Image(systemName: "circle.inset.filled")
         }
         .menuBarExtraStyle(.window)
         #else

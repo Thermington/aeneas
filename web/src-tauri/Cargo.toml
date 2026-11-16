@@ -1,6 +1,6 @@
 [package]
 name = "everythingapp"
-version = "0.1.0"
+version = "1.0.3"
 license = "AGPL-3.0-only"
 description = "Aeneas desktop wrapper"
 authors = ["gnomecannon"]
@@ -25,6 +25,11 @@ iroh = "1.4.1"
 tokio = { version = "1", features = ["io-util", "time", "rt", "sync"] }
 base64 = "0.22"
 tauri-plugin-deep-link = "2"
+# The home network route (src/home.rs): HTTPS pinned to the hub's own certificate, and Bonjour to find a moved hub.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+ring = "0.17"
+mdns-sd = { version = "0.21", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
@@ -40,4 +45,6 @@ panic = "abort"
 strip = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

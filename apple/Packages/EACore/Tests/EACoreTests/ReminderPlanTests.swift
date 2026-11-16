@@ -107,4 +107,23 @@ final class TaskReminderTests: XCTestCase {
         XCTAssertTrue(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: ["other|1"],
                                                              delivered: [(id: "other|1", date: now), (id: ReminderPlanner.requestId(reminderId: task.id, fireAt: due.addingTimeInterval(-3600)), date: now.addingTimeInterval(-3600))]))
     }
+
+    /// A sync that changed nothing about the reminders (each minute on the Watch) schedules nothing again.
+    func testTheSamePlanIsScheduledOnce() {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        func task(at: Date) -> Entity {
+            Entity(id: "a", kind: .task, fields: ["title": "Water the plants", "status": "scheduled", "order": 1, "remind_at": .string(ISO.string(at))])
+        }
+        var gate = ReplanGate()
+        let plan = ReminderPlanner.plan(reminders: [task(at: now.addingTimeInterval(3600))], now: now)
+        XCTAssertEqual(plan.count, 1)
+        XCTAssertTrue(gate.admits(plan))
+        XCTAssertFalse(gate.admits(ReminderPlanner.plan(reminders: [task(at: now.addingTimeInterval(3600))], now: now.addingTimeInterval(60))),
+                       "a minute later, nothing about the reminders changed")
+        let moved = ReminderPlanner.plan(reminders: [task(at: now.addingTimeInterval(7200))], now: now)
+        XCTAssertTrue(gate.admits(moved), "a moved reminder is planned again")
+        XCTAssertTrue(gate.admits([]), "and so is none left")
+        gate.forget()
+        XCTAssertTrue(gate.admits([]), "an alert that could not be scheduled (notifications not allowed yet) goes again")
+    }
 }

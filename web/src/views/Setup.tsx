@@ -1,10 +1,14 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { HubClient, HubError, isDeviceKey, normalizeHubUrl } from "../sync/api";
 import { directAddress, isDirect, parseDirect, relayOwner, validRelay } from "../sync/direct";
+import { afterLink, normalizeHubId } from "../sync/hubid";
 import { META, db, getMeta, setMeta } from "../sync/db";
 import { engine } from "../sync/engine";
 import { useMeta } from "../sync/hooks";
 import { isAndroid, isTauri, isWindowsApp } from "../tauri/bridge";
+import { leaveSetup } from "../lib/router";
+import { pairingName } from "../lib/platform";
 
 function defaultHub(): string {
   if (isTauri) return "";
@@ -15,7 +19,8 @@ function defaultHub(): string {
 
 /**
  * A pairing link (`#/setup?hub=&code=&name=`, made in Welcome or Settings on a paired device) fills this in. An older
- * link with `token=` still works: the token is traded for this device's own key at once and never kept.
+ * link with `token=` still works: the token is traded for this device's own key at once and never kept. A newer hub
+ * adds its own id (`hid=`), which tells it from another hub whatever address the link names.
  */
 function linkParams(): URLSearchParams {
   const h = window.location.hash;
@@ -43,7 +48,10 @@ export function pastedLink(text: string): URLSearchParams | null {
 }
 
 const platform = () => (isWindowsApp ? "windows" : "web");
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** This device's own name, used when a pairing link names no device or another kind of device. */
+const ownName = isAndroid ? "Android" : isWindowsApp ? "Windows" : "Browser";
+const ua = () => (typeof navigator === "undefined" ? "" : navigator.userAgent);
+const errorText = (e: unknown) => plainError(e);
 
 /** Pairing links already acted on in this page load. */
 const linksUsed = new Set<string>();
@@ -55,38 +63,53 @@ export function Setup() {
   const [hub, setHub] = useState(link.get("hub") ?? defaultHub());
   // A device that was paired before keeps its hub's address, so only a new code is needed.
   useEffect(() => { if (!link.get("hub") && storedHub) setHub(storedHub); }, [storedHub]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The hub's id from the link: the same hub reached at another address is not another hub.
+  const [hid, setHid] = useState<string | null>(normalizeHubId(link.get("hid")));
   const [code, setCode] = useState(link.get("code") ?? "");
   const [mainKey, setMainKey] = useState(link.get("token") ?? "");
-  const [name, setName] = useState(link.get("name") ?? (isAndroid ? "Android" : isWindowsApp ? "Windows" : "Browser"));
+  const [name, setName] = useState(() => pairingName(link.get("name"), ownName, ua()));
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // A link to another hub than the one this device uses waits for a yes: a link in a note, a page or an email
   // must not move a device to someone else's hub without the owner noticing.
   const [switchFrom, setSwitchFrom] = useState<string | null>(null);
 
-  /** Keep this device's own key; a different hub is a different dataset, so the cached copy goes. */
+  /** Where this device is paired now: the hub's address and its id, when known. */
+  const current = async () => {
+    const url = await getMeta<string>(META.hubUrl);
+    return url ? { url, id: await getMeta<string>(META.hubId) } : null;
+  };
+
+  /**
+   * Keep this device's own key; a different hub is a different dataset, so the cached copy goes. Hubs are told apart
+   * by their ids when the link and this device both have one, else by address.
+   */
   const keep = async (key: string, deviceId: string | null) => {
     const url = normalizeHubUrl(hub);
-    const before = await getMeta<string>(META.hubUrl);
+    const before = await current();
+    const { same, id } = afterLink(before, { url, id: hid });
     // Paired again on the same hub while the old key still worked: the old device entry and its key are removed, so
     // no second entry with a working key is left behind.
     const oldKey = await getMeta<string>(META.token);
     const oldId = await getMeta<string>(META.deviceId);
-    if (before && normalizeHubUrl(before) === url && isDeviceKey(oldKey) && oldId && oldId !== deviceId) {
+    if (same && isDeviceKey(oldKey) && oldId && oldId !== deviceId) {
       await new HubClient({ hubUrl: url, token: oldKey! }).removeDevice(oldId).catch(() => { /* already gone */ });
     }
-    if (before && normalizeHubUrl(before) !== url) {
+    if (before && !same) {
       await setMeta(META.seq, 0);
       await db.entities.clear();
+      await db.meta.delete(META.routes);
     }
     await setMeta(META.hubUrl, url);
+    if (id) await setMeta(META.hubId, id); else await db.meta.delete(META.hubId);
     await setMeta(META.token, key);
     await setMeta(META.deviceName, name.trim() || "Device");
     if (deviceId) await setMeta(META.deviceId, deviceId); else await db.meta.delete(META.deviceId);
     await db.meta.delete(META.unpaired);
     await engine.restart();
-    // Replaced, not added to: the link held a code or a token, and a history entry would keep it in the browser.
-    window.location.replace("#/welcome");
+    // Back where the person was. Replaced, not added to: the link held a code or a token, and a history entry would
+    // keep it in the browser. A hub nobody has set up yet still opens Welcome (App's first run).
+    leaveSetup();
   };
 
   const pairWithCode = async () => {
@@ -95,9 +118,8 @@ export function Setup() {
     setMsg(null);
     try {
       // A device paired before on this hub asks to keep its id (the hub gives a new one if that id still has a key).
-      const before = await getMeta<string>(META.hubUrl);
-      const sameHub = !!before && normalizeHubUrl(before) === normalizeHubUrl(hub);
-      const r = await new HubClient({ hubUrl: hub, token: "" }).claim(code.trim(), name.trim() || "Browser", platform(), sameHub ? await getMeta<string>(META.deviceId) : undefined);
+      const { same } = afterLink(await current(), { url: hub, id: hid });
+      const r = await new HubClient({ hubUrl: hub, token: "" }).claim(code.trim(), name.trim() || "Browser", platform(), same ? await getMeta<string>(META.deviceId) : undefined);
       await keep(r.key, r.device_id);
     } catch (e) {
       setMsg({ ok: false, text: e instanceof HubError && e.status === 404 ? "This hub is older and has no pairing codes yet. Use its main key below." : errorText(e) });
@@ -138,9 +160,9 @@ export function Setup() {
     if (linksUsed.has(once)) return;
     linksUsed.add(once);
     void (async () => {
-      const current = await getMeta<string>(META.hubUrl);
+      const now = await current();
       const key = await getMeta<string>(META.token);
-      if (current && key && normalizeHubUrl(current) !== normalizeHubUrl(hub)) { setSwitchFrom(current); return; }
+      if (now && key && !afterLink(now, { url: hub, id: hid }).same) { setSwitchFrom(now.url); return; }
       await fromLink();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,7 +178,7 @@ export function Setup() {
           <div className="small">This link connects this device to <code>{normalizeHubUrl(hub)}</code>. It is connected to <code>{normalizeHubUrl(switchFrom)}</code> now. Switch only if you made this link yourself.</div>
           <div className="row wrap">
             <button type="button" className="primary" onClick={() => { setSwitchFrom(null); void fromLink(); }}>Switch hubs</button>
-            <button type="button" onClick={() => { setSwitchFrom(null); window.location.hash = "/today"; }}>Keep the current hub</button>
+            <button type="button" onClick={() => { setSwitchFrom(null); leaveSetup(); }}>Keep the current hub</button>
           </div>
         </section>
       )}
@@ -167,8 +189,10 @@ export function Setup() {
           <input id="hub" value={hub} onChange={(e) => {
             // A pasted pairing link fills in everything (a Direct link hub has no address to type).
             const p = pastedLink(e.target.value);
-            if (p) { setHub(p.get("hub")!); if (p.get("code")) setCode(p.get("code")!); if (p.get("name")) setName(p.get("name")!); return; }
+            if (p) { setHub(p.get("hub")!); setHid(normalizeHubId(p.get("hid"))); if (p.get("code")) setCode(p.get("code")!); setName((n) => pairingName(p.get("name"), n, ua())); return; }
+            // A typed address is compared by address: the id came with a link.
             setHub(e.target.value);
+            setHid(null);
           }} placeholder="https://core.tailnet.ts.net:8787, or paste a pairing link" autoCapitalize="off" spellCheck={false} />
           {isDirect(hub) && <div className="muted small">Direct link (iroh) to the hub with key {parseDirect(hub)?.node.slice(0, 10) ?? "?"}. Relay: {parseDirect(hub) ? relayOwner(parseDirect(hub)!.relay) : "?"}.</div>}
         </div>

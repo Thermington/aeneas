@@ -1,0 +1,95 @@
+{
+ "archlinux_en_all": {
+  "title": "ArchWiki",
+  "pages": {
+   "Bluetooth_headset_(Русский)": {
+    "title": "Bluetooth headset (Русский)",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Bluetooth headset (Русский)</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Bluetooth headset (Русский)</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Bluetooth headset: перевод статьи Bluetooth headset. Bluetooth headset настройка.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Bluetooth_headset": {
+    "title": "Bluetooth headset",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Bluetooth headset</title><link rel=\"canonical\" href=\"https://wiki.archlinux.org/title/Bluetooth_headset\"><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Bluetooth headset</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><div class=\"related\"><p>Related articles</p><ul><li><a href=\"Bluetooth\" title=\"Bluetooth\">Bluetooth</a></li></ul></div><p>There are three Bluetooth audio systems for a headset: A2DP for music, HFP and HSP for calls, and LE Audio.<sup class=\"reference\"><a href=\"#cite_note-1\">[1]</a></sup></p><div class=\"mw-heading mw-heading2\"><h2 id=\"Headset_via_PipeWire\">Headset via PipeWire<span class=\"mw-editsection\">[edit]</span></h2></div><p>PipeWire sets up Bluetooth headsets on its own.</p><div class=\"mw-heading mw-heading3\"><h3 id=\"Troubleshooting\">Troubleshooting</h3></div><h4 id=\"High_audio_volume\">High audio volume</h4><p>When the volume is too loud, turn off hardware volume in WirePlumber.</p><div class=\"mw-heading mw-heading2\"><h2 id=\"Headset_via_PulseAudio\">Headset via PulseAudio</h2></div><p>Install pulseaudio-bluetooth. See <a href=\"PipeWire#Bluetooth_devices\">PipeWire</a> and <a href=\"#Headset_via_PipeWire\">above</a>.</p><ol class=\"references\"><li id=\"cite_note-1\">A note.</li></ol></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Bluetooth": {
+    "title": "Bluetooth",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Bluetooth</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Bluetooth</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Bluetooth is a short range wireless standard for exchanging data between devices, such as a headset.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Bluetooth_(Español)": {
+    "title": "Bluetooth (Español)",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Bluetooth (Español)</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Bluetooth (Español)</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Bluetooth es un estándar inalámbrico para un headset.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Blueman": {
+    "title": "Blueman",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Blueman</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Blueman</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Blueman is a full featured Bluetooth manager. It can connect a headset.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Systemd/User": {
+    "title": "systemd/User",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>systemd/User</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">systemd/User</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>systemd can manage services under the user's control with a per-user instance, enabling them to start and stop their own user units.</p><p><a href=\"../Systemd\" title=\"Systemd\">systemd</a>, <a href=\"#Automatic_start-up\">start-up</a>, <a rel=\"nofollow\" class=\"external text\" href=\"https://man.archlinux.org/man/systemd.special.7#UNITS\">a man page</a>, <a href=\"http://plain.example.org/x?y=1&amp;z=2\">plain</a>, <a href=\"javascript:alert(1)\">bad</a>, <a href=\"../_res_/logo.png\"><img src=\"../_res_/logo.png\" alt=\"Logo\" width=\"120\" height=\"40\" onerror=\"alert(1)\"></a></p><h2 id=\"Automatic_start-up\">Automatic start-up</h2><p>Enable lingering.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Hostile": {
+    "title": "Hostile",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Hostile</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Hostile</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p onclick=\"alert(1)\" style=\"position:fixed;top:0\">Text <a href=\"javascript:alert(1)\">js</a> <a href=\" JaVaScRiPt:alert(1)\">js2</a> <a href=\"java&#x09;script:alert(1)\">js3</a> <a href=\"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==\">data</a> <a href=\"Bluetooth\" onmouseover=\"alert(1)\">fine</a></p><img src=\"x.png\" onerror=\"alert(1)\"><img src=\"data:image/png;base64,AAAA\"><img src=\"https://tracker.example/pixel.gif\"><svg><script>alert(1)</script><a xlink:href=\"javascript:alert(1)\">svg</a></svg><math><mi>x</mi></math><iframe src=\"https://evil.example/\"></iframe><object data=\"x.swf\"></object><embed src=\"x.swf\"><form action=\"https://evil.example/\"><input name=\"q\"><button>Go</button></form><style>p{display:none}</style><noscript><p title=\"</noscript><img src=x onerror=alert(2)>\"></noscript><table><tr><td colspan=\"2\" onclick=\"x\">cell</td></tr></table></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "_res_/logo.png": {
+    "type": "image/png",
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+   },
+   "_res_/style.css": {
+    "type": "text/css",
+    "text": "body { color: red }"
+   },
+   "_res_/fake.png": {
+    "type": "image/png",
+    "text": "<html><script>alert(1)</script></html>"
+   },
+   "_res_/drawing.svg": {
+    "type": "image/svg+xml",
+    "text": "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script><circle r=\"4\"/></svg>"
+   }
+  },
+  "redirects": {
+   "Bluetooth_Headset": "Bluetooth_headset"
+  },
+  "searchOrder": [
+   "Bluetooth_headset_(Русский)",
+   "Bluetooth_headset",
+   "Blueman",
+   "Bluetooth",
+   "Bluetooth_(Español)",
+   "Systemd/User",
+   "Hostile"
+  ],
+  "random": [
+   "Bluetooth_(Español)",
+   "Bluetooth_headset"
+  ]
+ },
+ "wikipedia_es_all": {
+  "title": "Wikipedia",
+  "pages": {
+   "Bluetooth": {
+    "title": "Bluetooth",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Bluetooth</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Bluetooth</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Bluetooth es una especificación industrial para redes inalámbricas de área personal y un headset.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   },
+   "Auriculares_Bluetooth": {
+    "title": "Auriculares Bluetooth",
+    "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Auriculares Bluetooth</title><script>window.RLQ = [];</script><link rel=\"stylesheet\" href=\"./_mw_/site.css\"></head><body><main id=\"content\"><h1 id=\"firstHeading\">Auriculares Bluetooth</h1><div id=\"mw-content-text\"><div class=\"mw-parser-output\"><p>Unos auriculares Bluetooth o headset se conectan sin cables.</p></div><div id=\"catlinks\" class=\"catlinks\">Categories: <a href=\"Category%3ASound\">Sound</a></div></div></main></body></html>"
+   }
+  },
+  "random": [
+   "Bluetooth"
+  ]
+ },
+ "devdocs_en_bash": {
+  "title": "Bash Docs",
+  "pages": {
+   "index": {
+    "title": "Bash",
+    "html": "<html><head><title>Bash</title></head><body><main><p>Bash is the shell. It can script a bluetooth headset with bluetoothctl.</p></main></body></html>"
+   }
+  },
+  "random": [
+   "index"
+  ]
+ }
+}

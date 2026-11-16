@@ -500,3 +500,47 @@ test("feel: a write that fails part way leaves the saved palettes as they were",
     assert.equal(fs.existsSync(`${file}.tmp`), false, "no temp file left behind");
   } finally { t.cleanup(); }
 });
+
+test("people: on a name alone the nightly tidy folds in only the app's own records, never a card in Apple Contacts", () => {
+  const t = makeHub();
+  try {
+    const s = t.hub.store;
+    const dev = s.create("device", { name: "Phone", platform: "iphone", features: ["contacts-merge"] });
+    // Two different people with one name in Contacts: one card has a phone, the other only a birthday.
+    const cousin = s.create("person", { name: "Jamie Lee", given_name: "Jamie", family_name: "Lee", phones: [{ value: "555-111-2222" }], apple: { device: dev.id, id: "A1" } });
+    const coach = s.create("person", { name: "Jamie Lee", given_name: "Jamie", family_name: "Lee", birthday: "--03-02", apple: { device: dev.id, id: "A2" } });
+    // A record the assistant made from a chat with that name and nothing else could be about either: it stays too.
+    const stub = s.create("person", { name: "Jamie Lee", relationship: "cousin" });
+    assert.deepEqual(tidyPeople(s), { cleaned: 0, merged: 0 });
+    assert.equal(s.get(coach.id)!.deleted_at, null, "the card in Contacts without a phone stays");
+    assert.equal(s.get(cousin.id)!.deleted_at, null);
+    assert.equal(s.get(stub.id)!.deleted_at, null, "not guessed into one of the two");
+    // With one card of that name, the app's own record is folded into it.
+    const robin = s.create("person", { name: "Robin Park", given_name: "Robin", family_name: "Park", phones: [{ value: "555-222-3333" }], apple: { device: dev.id, id: "A5" } });
+    const robinStub = s.create("person", { name: "Robin Park", relationship: "neighbor" });
+    assert.deepEqual(tidyPeople(s), { cleaned: 0, merged: 1 });
+    assert.equal(s.get(robinStub.id)!.fields.merged_into, robin.id);
+    assert.equal(s.get(robin.id)!.fields.relationship, "neighbor");
+    // Two company cards in Contacts with no shared number stay two as well.
+    s.create("person", { name: "Corner Auto Shop", organization: "Corner Auto Shop", phones: [{ value: "555-016-1262" }], apple: { device: dev.id, id: "A3" } });
+    s.create("person", { name: "Corner Auto Shop", organization: "Corner Auto Shop", apple: { device: dev.id, id: "A4" } });
+    assert.deepEqual(tidyPeople(s), { cleaned: 0, merged: 0 });
+  } finally { t.cleanup(); }
+});
+
+test("people: a fuller app record folds into the only card in Contacts with that name, keeping the card", () => {
+  const t = makeHub();
+  try {
+    const s = t.hub.store;
+    const dev = s.create("device", { name: "Phone", platform: "iphone", features: ["contacts-merge"] });
+    const card = s.create("person", { name: "Jamie Lee", given_name: "Jamie", family_name: "Lee", phones: [{ value: "555-111-2222" }], apple: { device: dev.id, id: "C9" } });
+    const app = s.create("person", { name: "Jamie Lee", given_name: "Jamie", family_name: "Lee", birthday: "--04-12", relationship: "coworker", job_title: "Designer", organization: "Acme" });
+    assert.deepEqual(tidyPeople(s), { cleaned: 0, merged: 1 });
+    assert.equal(s.get(card.id)!.deleted_at, null, "the card stays");
+    assert.equal(s.get(app.id)!.fields.merged_into, card.id);
+    const kept = s.get(card.id)!.fields;
+    assert.equal(kept.birthday, "--04-12");
+    assert.equal(kept.job_title, "Designer");
+    assert.equal(kept.relationship, "coworker");
+  } finally { t.cleanup(); }
+});

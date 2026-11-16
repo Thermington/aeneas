@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -60,7 +61,7 @@ function ListIndex() {
       const copy = await instantiateChecklist(t);
       go(`/lists/${copy.id}`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -158,7 +159,7 @@ function ListPage({ id }: { id: string }) {
     try {
       await toggleChecklist(e, index);
     } catch (x) {
-      setErr(x instanceof Error ? x.message : String(x));
+      setErr(plainError(x));
     } finally {
       setBusy(null);
     }

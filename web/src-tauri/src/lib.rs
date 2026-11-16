@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU32, Ordering};
+mod home;
 mod link;
 use std::sync::Mutex;
 
@@ -267,7 +268,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Mutex::new(NotifyTarget::default()))
         .manage(std::sync::Arc::new(link::Links::default()))
-        .invoke_handler(tauri::generate_handler![set_widget, get_widget, show_main_window, open_capture_window, open_window, set_notify_target, set_capture_shortcut, get_capture_shortcut, link::link_fetch, link::link_cancel, link::link_state]);
+        .manage(std::sync::Arc::new(home::Home::default()))
+        .invoke_handler(tauri::generate_handler![
+            set_widget, get_widget, show_main_window, open_capture_window, open_window, set_notify_target, set_capture_shortcut, get_capture_shortcut,
+            link::link_fetch, link::link_cancel, link::link_state,
+            home::home_fetch, home::home_cancel, home::home_probe, home::home_browse
+        ]);
 
     #[cfg(desktop)]
     {

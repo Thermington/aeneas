@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Entity } from "@everythingapp/shared";
 import { monthlyOf, payoff, split, subscriptions, unitPrices, readSplit, readSubs } from "./calc";
-import { checklistProgress, friendsOf, groupBoard, guardNames, instantiateFields, STATES, stateCode, statesGrid, toggleItem } from "./admin";
+import { checklistProgress, friendsOf, groupBoard, guardNames, instantiateFields, locateItem, STATES, stateCode, statesGrid, toggleItem } from "./admin";
 
 const ent = (kind: Entity["kind"], fields: Record<string, unknown>, id = Math.random().toString(36).slice(2), updated_at = "2026-10-01T00:00:00.000Z"): Entity => ({
   id,
@@ -164,6 +164,16 @@ describe("checklists", () => {
     expect(t[0].done_at).toBe("2026-10-23T00:00:00Z");
     expect(toggleItem(t, 1, "x")[1]).toEqual({ text: "b" });
     expect(checklistProgress({ items: t })).toEqual({ done: 2, total: 2 });
+  });
+
+  it("finds the item a row showed after the list moved under it", () => {
+    const items = [{ text: "Milk" }, { text: "Eggs" }, { text: "Bread" }, { text: "Eggs" }];
+    expect(locateItem(items, 1, "Eggs")).toBe(1);
+    // Something was added above: the same text, nearest to where the row was.
+    expect(locateItem(items, 0, "Eggs")).toBe(1);
+    expect(locateItem(items, 3, "Bread")).toBe(2);
+    expect(locateItem(items, 5, "Eggs")).toBe(3);
+    expect(locateItem(items, 0, "Butter")).toBeNull();
   });
 
   it("instantiate clears every done_at and links the template", () => {

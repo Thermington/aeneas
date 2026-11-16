@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities, useEntity } from "../sync/hooks";
@@ -171,7 +172,7 @@ function RenderForm({ e }: { e: Entity }) {
       setRan(r);
       await engine.refetch(e.id).catch(() => undefined);
     } catch (x) {
-      setErr(x instanceof HubError && x.status === 422 && missingParams(x.detail) ? `Missing ${missingParams(x.detail)!.join(", ")}` : x instanceof Error ? x.message : String(x));
+      setErr(x instanceof HubError && x.status === 422 && missingParams(x.detail) ? `Missing ${missingParams(x.detail)!.join(", ")}` : plainError(x));
     } finally {
       setBusy(false);
     }
@@ -199,7 +200,7 @@ function RenderForm({ e }: { e: Entity }) {
       }
       setOut(renderSnippet(f, params));
     } catch (x) {
-      setErr(x instanceof Error ? x.message : String(x));
+      setErr(plainError(x));
     } finally {
       setBusy(false);
     }
@@ -301,7 +302,7 @@ function SnippetForm({ entity, host, onDone }: { entity?: Entity; host?: string;
         go(`/snippets/${e.id}`);
       }
     } catch (x) {
-      setErr(x instanceof Error ? x.message : String(x));
+      setErr(plainError(x));
     }
   };
 

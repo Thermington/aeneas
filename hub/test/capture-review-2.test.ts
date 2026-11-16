@@ -15,7 +15,7 @@ const PHOTO = { name: "photo-1.jpg", mime: "image/jpeg", bytes_b64: Buffer.from(
 test("P5 a capture with a photo: the filer never sees it and what it files does not carry it", async () => {
   const t = makeHub();
   const b = scripted([
-    () => ({ calls: [{ name: "create_item", arguments: { kind: "note", fields: { title: "Tire receipt", body: "Receipt for the new tires from Costco", path: "Home/Tire receipt.md" } } }] }),
+    () => ({ calls: [{ name: "save_note", arguments: { title: "Tire receipt", body: "Receipt for the new tires from Costco", folder: "Home" } }] }),
     () => ({ text: "Saved a note." }),
   ]);
   setBackendOverride(b);

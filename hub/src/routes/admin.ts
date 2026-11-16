@@ -1,4 +1,4 @@
-import { chooseLink, linkView } from "../link.js";
+import { changeLink, linkRoutes, linkView } from "../link.js";
 import { Hono } from "hono";
 import type { Hub } from "../hub.js";
 import { readJsonObject } from "../http.js";
@@ -41,14 +41,17 @@ export function adminRoutes() {
   r.get("/hub-update", async (c) => c.json(await updateInfo(c.get("hub"))));
   r.post("/hub-update/check", async (c) => c.json(await updateInfo(c.get("hub"), true)));
   r.post("/hub-update", async (c) => c.json(await startUpdate(c.get("hub")), 202));
-  // How devices reach the hub (link.ts): the method in use, which ones this install offers, and the Direct link's state.
-  r.get("/setup/link", (c) => c.json(linkView(c.get("hub").cfg)));
+  // How devices reach the hub (link.ts): the method in use, which ones this install offers, the Direct link's state, and
+  // the home route (homeroute.ts) with its Bonjour announcement.
+  r.get("/setup/link", async (c) => c.json(await linkView(c.get("hub").cfg)));
   r.put("/setup/link", async (c) => {
     const hub = c.get("hub");
-    const res = await chooseLink(hub.cfg, (await readJsonObject<{ method?: unknown }>(c)).method);
+    const res = await changeLink(hub.cfg, await readJsonObject<{ method?: unknown; home_route?: unknown; announce?: unknown }>(c));
     if (!res.ok) throw new StoreError(res.status, res.error);
-    return c.json(linkView(hub.cfg));
+    return c.json(await linkView(hub.cfg));
   });
+  // Every way a paired device reaches this hub now (the address away from home, the home network's), asked on every connect.
+  r.get("/link/routes", async (c) => c.json(await linkRoutes(c.get("hub").cfg), 200, { "cache-control": "no-store" }));
   r.get("/setup/pair", (c) => {
     const hub = c.get("hub");
     const address = hubAddress(hub, c.req.url, c.req.header("x-forwarded-host"), c.req.header("x-forwarded-proto"));

@@ -35,7 +35,9 @@ GATE_URL="http://127.0.0.1:$GATE_PORT"
 FIRST_PORT=8788
 # Colors people pick their hub out by, in the order they are given out.
 PALETTE=("#2f8f83" "#c27c2c" "#7a5cc7" "#c4506a" "#3a7bc8" "#6b9a3a" "#b8860b" "#8a6d5a")
-TAR_EXCLUDES=(--exclude=./.git --exclude=./node_modules --exclude=./hub/data --exclude=./.env --exclude=./analysis --exclude=./web/src-tauri/target --exclude=./web/src-tauri/gen --exclude=./apple --exclude=./design)
+# hub/.env is the owner's own settings file for a checkout run by hand (README, Develop): the hub reads it for any key
+# its hub.env lacks, so a copy gave another person the owner's cloud keys and app secrets.
+TAR_EXCLUDES=(--exclude=./.git --exclude=./node_modules --exclude=./hub/data --exclude=./.env --exclude=./hub/.env --exclude=./analysis --exclude=./web/src-tauri/target --exclude=./web/src-tauri/gen --exclude=./apple --exclude=./design)
 
 # A request from the app (serve-requests) reports progress and its result in this file; empty from a terminal.
 RESULT="${EA_PEOPLE_RESULT:-}"
@@ -156,9 +158,18 @@ wait_health() {
 }
 # The owner's hub code, read as the owner and written as the person: root only passes the bytes along.
 copy_code() {
-  local acct="$1" dest; dest="$(home_of "$acct")/everythingapp"
+  local acct="$1" dest ref; dest="$(home_of "$acct")/everythingapp"
+  # The offline reference (EA_REFERENCE_DIR, default <data>/reference) holds the owner's own archives: a folder named
+  # inside the repo is left out of the copy like hub/data. A relative one is read from hub/, as the hub reads it.
+  local excludes=("${TAR_EXCLUDES[@]}")
+  ref="$(owner_env EA_REFERENCE_DIR)"; ref="${ref%\"}"; ref="${ref#\"}"
+  if [ -n "$ref" ]; then
+    case "$ref" in /*) ;; *) ref="$OWNER_REPO/hub/$ref" ;; esac
+    ref="$(realpath -m "$ref" 2>/dev/null || printf '%s' "$ref")"
+    case "$ref" in "$OWNER_REPO"/*) excludes+=("--exclude=./${ref#"$OWNER_REPO"/}") ;; esac
+  fi
   as_user "$acct" bash -c 'mkdir -p "$1" && find "$1" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +' sh "$dest"
-  sudo -u "$OWNER" tar -C "$OWNER_REPO" -cf - "${TAR_EXCLUDES[@]}" . | sudo -u "$acct" tar -C "$dest" -xf - --no-same-owner
+  sudo -u "$OWNER" tar -C "$OWNER_REPO" -cf - "${excludes[@]}" . | sudo -u "$acct" tar -C "$dest" -xf - --no-same-owner
 }
 # Stop everything an account runs (its systemd user session too) and delete it with its home folder.
 erase_account() {

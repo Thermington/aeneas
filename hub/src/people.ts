@@ -154,7 +154,8 @@ const personKey = (p: Entity) => (norm(`${p.fields.given_name ?? ""} ${p.fields.
 
 /**
  * Groups of people that are surely one person, best record first: the same name and a shared phone or email, or the
- * same name where one has neither, or the same company name (organization cards).
+ * same name where one has neither, or the same company name (organization cards). The last two never fold away a card
+ * that is in Apple Contacts.
  */
 export function duplicatePeople(list: Entity[]): Entity[][] {
   const values = (p: Entity) => new Set([...(Array.isArray(p.fields.phones) ? p.fields.phones : []).map(listKey.phones), ...(Array.isArray(p.fields.emails) ? p.fields.emails : []).map(listKey.emails)].filter(Boolean));
@@ -163,9 +164,15 @@ export function duplicatePeople(list: Entity[]): Entity[][] {
   // relationships were merged into one.
   const company = (p: Entity) => !String(p.fields.given_name ?? "").trim() && !String(p.fields.family_name ?? "").trim()
     && !!norm(p.fields.organization) && norm(p.fields.organization) === norm(p.fields.name);
-  const same = (a: Entity, b: Entity) => {
-    const va = values(a), vb = values(b);
-    return !va.size || !vb.size || [...va].some((v) => vb.has(v)) || (company(a) && company(b));
+  // A card in Apple Contacts that is merged away is removed there, with no undo. On a name alone (or a company name
+  // alone) only the app's own records are folded in: two different "Jamie Lee" cards in Contacts, one without a phone
+  // or email, stay two.
+  const inApple = (p: Entity) => !!String((p.fields.apple as { id?: string } | undefined)?.id ?? "").trim();
+  const same = (keep: Entity, drop: Entity, nameAlone: boolean) => {
+    const va = values(keep), vb = values(drop);
+    if ([...va].some((v) => vb.has(v))) return true;
+    if (inApple(drop) || !nameAlone) return false;
+    return !va.size || !vb.size || (company(keep) && company(drop));
   };
   const richness = (p: Entity) => (p.fields.apple as { me?: boolean } | undefined)?.me ? 1e6
     : LISTS.reduce((n, k) => n + (Array.isArray(p.fields[k]) ? (p.fields[k] as unknown[]).length : 0), 0) + SCALARS.filter((k) => String(p.fields[k] ?? "").trim()).length;
@@ -176,10 +183,16 @@ export function duplicatePeople(list: Entity[]): Entity[][] {
   }
   const groups: Entity[][] = [];
   for (const named of byName.values()) {
-    const left = [...named].sort((a, b) => richness(b) - richness(a) || a.created_at.localeCompare(b.created_at));
+    // Two cards in Contacts with this name are two people: a record with the name alone could be about either, so here
+    // only a shared phone or email merges.
+    const nameAlone = named.filter(inApple).length < 2;
+    // A card in Contacts is kept first (then the fullest): the app's own record with the same name folds into it, its
+    // fields filling the card's empty ones. Ranked by fullness alone, a fuller app record came first, the card was the
+    // one to fold in, and that is refused on a name alone, so the two never merged and the phone made a second card.
+    const left = [...named].sort((a, b) => Number(inApple(b)) - Number(inApple(a)) || richness(b) - richness(a) || a.created_at.localeCompare(b.created_at));
     while (left.length > 1) {
       const head = left.shift()!;
-      const group = [head, ...left.filter((p) => same(head, p))];
+      const group = [head, ...left.filter((p) => same(head, p, nameAlone))];
       if (group.length > 1) groups.push(group);
       for (const p of group.slice(1)) left.splice(left.indexOf(p), 1);
     }

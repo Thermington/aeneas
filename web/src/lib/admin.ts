@@ -23,6 +23,20 @@ export function toggleItem(items: ChecklistItem[], index: number, at: string): C
   });
 }
 
+/**
+ * Where the item a row showed (its index and text then) is in the list as it is now: the same index while its text
+ * still matches, else the nearest item with that text, else null. Items have no id, only a place in the list, so an
+ * index alone points at another item once something above it was added or deleted. The same rule as the Apple app.
+ */
+export function locateItem(items: ChecklistItem[], index: number, text: string): number | null {
+  if (items[index]?.text === text) return index;
+  let best: number | null = null;
+  items.forEach((it, i) => {
+    if (it.text === text && (best === null || Math.abs(i - index) < Math.abs(best - index))) best = i;
+  });
+  return best;
+}
+
 /** A template copy, as POST /checklists/:id/instantiate makes it: every done_at cleared, from_template set. */
 export function instantiateFields(template: Entity, title?: string): Record<string, unknown> {
   const f = template.fields as ChecklistF;

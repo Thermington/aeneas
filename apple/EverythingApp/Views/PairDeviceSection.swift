@@ -11,6 +11,8 @@ struct PairDeviceSection: View {
     @State private var links: PairingLinks?
     @State private var error: String?
     @State private var busy = false
+    /// The Mac's Copy was used for the code on screen.
+    @State private var copied = false
 
     var body: some View {
         SwiftUI.Section {
@@ -31,6 +33,19 @@ struct PairDeviceSection: View {
                         .frame(maxWidth: .infinity)
                         .accessibilityLabel("QR code that pairs the new device")
                 }
+                #if os(macOS)
+                // A Mac cannot scan its own screen: the link the QR code holds, to copy or send to the new device.
+                HStack(spacing: 8) {
+                    Text(links.app).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                    Spacer(minLength: 0)
+                    Button(copied ? "Copied" : "Copy") {
+                        MakingClipboard.copy(links.app)
+                        copied = true
+                    }
+                    .controlSize(.small)
+                    .accessibilityLabel(copied ? "Copied" : "Copy the link")
+                }
+                #endif
                 if let expires = links.expires {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         Text(Self.timeLeft(until: expires, now: ctx.date))
@@ -68,6 +83,7 @@ struct PairDeviceSection: View {
             do {
                 guard let c = engine.client else { throw HubError.notConfigured }
                 links = try await withDeadline(20) { try await c.pairing(name: n.isEmpty ? "New device" : n) }
+                copied = false
                 error = nil
             } catch {
                 self.error = (error as? HubError)?.errorDescription ?? error.localizedDescription

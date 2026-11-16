@@ -60,11 +60,19 @@ export function useHubIdentity(): HubIdentity | null {
   return h;
 }
 
-/** The hub's name and color as a small chip; nothing on a single person's hub. */
-export function useHubTitle(): void {
-  const h = useHubIdentity();
-  const label = hubLabel(h);
+/**
+ * The window title: the screen, then the app as index.html names it, with the hub's name on a hub that is one of
+ * several ("Tasks - Aeneas · Alex").
+ */
+export function windowTitle(screen: string, h: HubIdentity | null): string {
+  const app = hubLabel(h) && h?.name ? `Aeneas · ${h.name}` : "Aeneas";
+  return screen ? `${screen} - ${app}` : app;
+}
+
+/** Names the screen and the hub in the window title (the browser tab, the taskbar, the history). */
+export function useHubTitle(screen = ""): void {
+  const title = windowTitle(screen, useHubIdentity());
   useEffect(() => {
-    document.title = label && h?.name ? `Aeneas · ${h.name}` : "Aeneas";
-  }, [label, h?.name]);
+    document.title = title;
+  }, [title]);
 }

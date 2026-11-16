@@ -131,3 +131,23 @@ test("vault: a note the hub rewrites itself (a plan) keeps the owner's tags and 
     assert.match(String(after.fields.body), /Next: art\./);
   } finally { t.cleanup(); }
 });
+
+test("vault: the index reads only files changed since the vault recorded them", async () => {
+  const t = makeHub();
+  try {
+    const res = await t.api("/vault/file?path=Ideas/Lamp.md", { method: "PUT", body: "# Lamp\n\nA brass base.\n", headers: { "content-type": "text/markdown" } });
+    const put = await res.json() as { hash: string };
+    // A recorded hash is trusted while the size and modified time match: a stand-in hash shows the file was not read.
+    t.hub.store.db.prepare("UPDATE vault_files SET hash = 'recorded' WHERE path = 'Ideas/Lamp.md'").run();
+    assert.equal(t.hub.vault.index()[0].hash, "recorded");
+    // Changed on disk (another size, a later time): read and hashed again.
+    const full = path.join(t.hub.cfg.vaultDir, "Ideas/Lamp.md");
+    fs.writeFileSync(full, fs.readFileSync(full, "utf8") + "Second line.\n");
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(full, later, later);
+    const again = t.hub.vault.index()[0];
+    assert.notEqual(again.hash, "recorded");
+    assert.notEqual(again.hash, put.hash);
+    assert.equal(t.hub.vault.reconcile().imported, 1, "the startup pass still sees the change");
+  } finally { t.cleanup(); }
+});

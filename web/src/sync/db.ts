@@ -39,6 +39,11 @@ export interface ChatSession {
   messages: ChatMsg[];
   created_at: string;
   updated_at: string;
+  /**
+   * The hub has had this chat: its list named it, or the whole chat came from it. False for a chat started here until
+   * then; missing on chats kept from before this was recorded.
+   */
+  on_hub?: boolean;
 }
 
 export class EADatabase extends Dexie {
@@ -74,6 +79,10 @@ export const META = {
   rejected: "sync_rejected",
   /** Why this device is not paired any more (it was removed on the hub), shown on the setup screen until it pairs again. */
   unpaired: "unpaired_reason",
+  /** The hub's own id (`hid` in pairing links, `hub_id` from GET /link/routes): how this device tells its hub from another. */
+  hubId: "hub_id",
+  /** The Windows and Android apps: the hub's last answer to GET /link/routes (the ways to it), raced on the next start. */
+  routes: "hub_routes",
 } as const;
 
 export interface RejectedEdit { id: string; kind: string; title: string; reason: string; at: string; fields: Record<string, unknown> }

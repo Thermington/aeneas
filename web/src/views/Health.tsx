@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useMemo, useState } from "react";
 import { engine } from "../sync/engine";
 import { Sparkline } from "../components/Sparkline";
@@ -34,7 +35,7 @@ export function Health() {
       setTimeout(() => setFlash(""), 1500);
       await h.reload();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -50,7 +51,7 @@ export function Health() {
       setSetting(false);
       await h.reload();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }

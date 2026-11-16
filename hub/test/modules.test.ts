@@ -225,3 +225,13 @@ test("a renewal mail read while Renewals is off waits, and goes back in the queu
     assert.equal(state("m2"), "parked", "only the module switched on");
   } finally { t.cleanup(); }
 });
+
+test("tool guide: no line for web search or machines when this hub does not offer those tools", async () => {
+  const { toolGuide } = await import("../src/ai/tools.js");
+  const all = toolGuide(() => true);
+  assert.match(all, /search the web \(web_search/);
+  assert.match(all, /run_command/);
+  const none = toolGuide(() => true, { has: (n) => n !== "web_search" && n !== "run_command" });
+  assert.doesNotMatch(none, /web_search/);
+  assert.doesNotMatch(none, /run_command/);
+});

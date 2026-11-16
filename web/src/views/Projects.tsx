@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -136,7 +137,7 @@ function ProjectForm({ project, onDone }: { project?: Entity; onDone?: () => voi
         go(`/projects/${e.id}`);
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -221,7 +222,7 @@ function useSummary(id: string): { summary: ProjectSummary | null; err: string; 
         setSummary(s);
         setErr("");
       })
-      .catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)));
+      .catch((e) => alive && setErr(plainError(e)));
     return () => {
       alive = false;
     };
@@ -577,7 +578,7 @@ function PlanForm({ id, onDone }: { id: string; onDone: (note: Entity | null) =>
       const note = await c.projectPlan(id, sections);
       onDone(note);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }

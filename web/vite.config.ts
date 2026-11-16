@@ -7,6 +7,9 @@ import { join } from "node:path";
 // Tauri sets TAURI_ENV_PLATFORM during `tauri dev` / `tauri build`.
 const isTauri = !!process.env.TAURI_ENV_PLATFORM;
 
+/** The apps' version (Windows, Android, and the web app built with them), shown in Settings, About. */
+const appVersion = (JSON.parse(readFileSync(new URL("./src-tauri/tauri.conf.json", import.meta.url), "utf8")) as { version: string }).version;
+
 /**
  * Writes dist/sw.js from sw/sw.js with the precache list filled in: index.html, every emitted
  * asset, the manifest and the icons. The version is a hash of the template and that list, so a
@@ -40,6 +43,7 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 5173, strictPort: true, host: isTauri ? "0.0.0.0" : "localhost" },
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  define: { "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion) },
   build: {
     target: "es2022",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,

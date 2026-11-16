@@ -9,7 +9,7 @@ import os
 public final class ContactsSync: ObservableObject {
     public static let shared = ContactsSync()
     public static let enabledKey = "ea.contacts.sync"
-    private static let stateKey = "ea.contacts.state"
+    private static let stateKey = AppleLinkRecords.contacts
     private static let log = Logger(subsystem: SharedConfig.logSubsystem, category: "contacts")
 
     @Published public private(set) var lastRun: Date?
@@ -61,6 +61,9 @@ public final class ContactsSync: ObservableObject {
             }
         }
         let engine = await provider()
+        // Only against a copy that holds the hub's people: an unpaired or removed device, or one whose copy was emptied
+        // and not filled again yet, reads as nobody in People, and every card went to the hub as a second person.
+        guard engine.hasHubCopy else { return }
         let device = engine.config.deviceId
         guard !device.isEmpty else { return }
         lastError = nil
@@ -77,7 +80,10 @@ public final class ContactsSync: ObservableObject {
                 f["apple"] = .object(["id": .string(c.id), "device": .string(device)].merging(c.id == me ? ["me": .bool(true)] : [:]) { a, _ in a })
                 if let e = await engine.create(kind: .person, fields: f) { newState[e.id] = c.card.comparable; added += 1 }
             }
-            for l in plan.links { _ = await engine.update(l.personId, fields: ["apple": .object(["id": .string(l.contactId), "device": .string(device)])]) }
+            for l in plan.links {
+                let link: [String: JSONValue] = ["id": .string(l.contactId), "device": .string(device)]
+                _ = await engine.update(l.personId, fields: ["apple": .object(link.merging(l.contactId == me ? ["me": .bool(true)] : [:]) { a, _ in a })])
+            }
             for (id, card) in plan.patches { _ = await engine.update(id, fields: card.personFields); updated += 1 }
             let save = CNSaveRequest()
             var pending = 0

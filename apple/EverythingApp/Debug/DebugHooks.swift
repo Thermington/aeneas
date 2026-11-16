@@ -8,6 +8,9 @@ import EACore
 ///   -EASection <section>         open a section, e.g. settings or today
 ///   -EASettingsFocus <id>        scroll Settings to a section id, e.g. workCalendar
 ///   -EASetupURL <url>            open a pairing link (everythingapp://setup?...) as a QR scan would
+///   -EAReferenceTest YES         open the Reference screen
+///   -EAReferenceQuery <words>    open the Reference screen searching for the words
+///   -EAReferenceOpen <book>/<path>  open the Reference screen with that page in the reader
 @MainActor
 enum DebugHooks {
     static func applyLaunchArguments(_ model: AppModel) async {
@@ -16,6 +19,16 @@ enum DebugHooks {
         if let s = d.string(forKey: "EASection"), let section = Section(rawValue: s) { model.section = section }
         // The link a QR scan or the camera opens, without the system's "Open in Aeneas?" tap (automated tests).
         if let s = d.string(forKey: "EASetupURL"), let url = URL(string: s) { model.handle(url: url) }
+        referenceRequests(model)
+    }
+
+    /// Reference screenshots from a shell (`xcrun simctl launch booted <bundle id> -EAReferenceOpen <book>/<path>`).
+    static func referenceRequests(_ model: AppModel) {
+        let d = UserDefaults.standard
+        let library = ReferenceLibrary.shared
+        if let q = d.string(forKey: "EAReferenceQuery"), !q.isEmpty { library.queryRequest = q }
+        if let s = d.string(forKey: "EAReferenceOpen"), let l = ReferenceLink.split(s) { library.openRequest = ReferencePageLink(book: l.book, path: l.path) }
+        if d.bool(forKey: "EAReferenceTest") || library.queryRequest != nil || library.openRequest != nil { model.section = .reference }
     }
 
     /// Needs full calendar access, e.g. `xcrun simctl privacy booted grant calendar com.gnomecannon.everythingapp`.

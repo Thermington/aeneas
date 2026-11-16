@@ -67,14 +67,31 @@ export function isLoopbackHost(host: string): boolean {
   return host === "localhost" || isLoopback(host);
 }
 
+/**
+ * A private IPv4 address of a home network: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 or link-local 169.254.0.0/16,
+ * also written as IPv4-mapped IPv6 (::ffff:192.168.1.20). Never loopback, Tailscale (100.64.0.0/10) or a public one.
+ */
+export function isPrivateV4(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const m = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/i.exec(addr);
+  if (!m) return false;
+  const [a, b, c, d] = m.slice(1).map(Number);
+  if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
+/** Lets every connection in (the default of the servers below). */
+const anyone = () => true;
+
 const HOST_RE = /^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$/;
 
 /**
  * A `createServer` for @hono/node-server: a listener that hands each connection, by its first byte, to an HTTPS
  * server (a TLS handshake starts with 0x16) or to a plain HTTP one. Plain HTTP is served to `plainAllowed`
  * connections only (this machine, unless a test says otherwise); any other gets a redirect to https.
+ * A connection `accept` refuses is closed at once, before anything is read (a Home Wi-Fi only hub, homeroute.ts).
  */
-export function dualServer(files: { key: Buffer; cert: Buffer }, plainAllowed: (addr: string | undefined) => boolean = isLoopback) {
+export function dualServer(files: { key: Buffer; cert: Buffer }, plainAllowed: (addr: string | undefined) => boolean = isLoopback, accept: (socket: net.Socket) => boolean = anyone) {
   return (_options: unknown, listener: http.RequestListener): net.Server => {
     const secure = https.createServer({ key: files.key, cert: files.cert, minVersion: "TLSv1.2" }, listener);
     const plain = http.createServer(listener);
@@ -92,6 +109,7 @@ export function dualServer(files: { key: Buffer; cert: Buffer }, plainAllowed: (
     // A failed handshake (a client that does not trust the certificate yet) ends that connection only.
     secure.on("tlsClientError", (_e, socket) => socket.destroy());
     const front = net.createServer((socket) => {
+      if (!accept(socket)) { socket.destroy(); return; }
       const idle = () => socket.destroy();
       const broken = () => socket.destroy();
       socket.setTimeout(20_000, idle);
@@ -110,6 +128,23 @@ export function dualServer(files: { key: Buffer; cert: Buffer }, plainAllowed: (
     // The inner servers never listen themselves: their header and request time limits start with the front's.
     front.on("listening", () => { for (const s of [secure, plain, redirect]) s.emit("listening"); });
     front.on("close", () => { for (const s of [secure, plain, redirect]) s.close(); });
+    return front;
+  };
+}
+
+/**
+ * A `createServer` for a hub that serves plain HTTP on the network (an install that had no openssl to make its
+ * certificate): each connection `accept` refuses is closed before anything is read.
+ */
+export function guardedServer(accept: (socket: net.Socket) => boolean) {
+  return (_options: unknown, listener: http.RequestListener): net.Server => {
+    const plain = http.createServer(listener);
+    const front = net.createServer((socket) => {
+      if (!accept(socket)) { socket.destroy(); return; }
+      plain.emit("connection", socket);
+    });
+    front.on("listening", () => plain.emit("listening"));
+    front.on("close", () => plain.close());
     return front;
   };
 }

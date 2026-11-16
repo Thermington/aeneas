@@ -116,7 +116,11 @@ public struct HTTPTransport: HubTransport {
     public func request(method: String, path: String, query: [String: String] = [:], body: Data? = nil, timeout: TimeInterval? = nil) -> URLRequest {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         let items = query.keys.sorted().map { URLQueryItem(name: $0, value: query[$0]) }
-        if !items.isEmpty { comps.queryItems = items }
+        if !items.isEmpty {
+            comps.queryItems = items
+            // URLComponents leaves "+" as it is, and the hub reads that as a space (a search for C++ became "C  ").
+            comps.percentEncodedQuery = comps.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        }
         var r = URLRequest(url: comps.url!)
         r.httpMethod = method
         if !token.isEmpty { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -145,11 +149,16 @@ public struct HTTPTransport: HubTransport {
     }
 
     public func send(method: String, path: String, query: [String: String], body: Data?) async throws -> (status: Int, data: Data) {
-        let r = request(method: method, path: path, query: query, body: body, timeout: Self.timeout(path: path))
-        let data: Data
-        let resp: URLResponse
-        do { (data, resp) = try await session.data(for: r) }
+        do { return try await exchange(method: method, path: path, query: query, body: body) }
+        catch let h as HubError { throw h }
         catch { throw HubError.transport(error.localizedDescription) }
+    }
+
+    /// `send` with the session's own error kept (a `URLError`): the route chooser tells from it whether the request
+    /// can have reached the hub before it sends it again another way.
+    func exchange(method: String, path: String, query: [String: String], body: Data?) async throws -> (status: Int, data: Data) {
+        let r = request(method: method, path: path, query: query, body: body, timeout: Self.timeout(path: path))
+        let (data, resp) = try await session.data(for: r)
         guard let http = resp as? HTTPURLResponse else { throw HubError.transport("No HTTP response") }
         return (http.statusCode, data)
     }
@@ -158,11 +167,18 @@ public struct HTTPTransport: HubTransport {
 /// Client for every route in section 3 of the contract. Streaming routes need an `HTTPTransport`.
 public final class HubClient: Sendable {
     public let transport: HubTransport
+    /// The address this device was paired with, over HTTP (a sign-in return address, the sensors how-to).
     public let http: HTTPTransport?
 
     public init(transport: HubTransport) {
         self.transport = transport
-        self.http = transport as? HTTPTransport
+        self.http = (transport as? HTTPTransport) ?? (transport as? RoutedTransport)?.addressHTTP
+    }
+
+    /// What streams go over: the route in use now when this client picks routes (RouteChooser.swift).
+    var streamHTTP: HTTPTransport? {
+        if let r = transport as? RoutedTransport { return r.currentHTTP }
+        return http
     }
 
     public convenience init(baseURL: URL, token: String, session: URLSession? = nil) {
@@ -189,7 +205,7 @@ public final class HubClient: Sendable {
     }
 
     /// `/live` and `/ai/chat/stream` are only available over HTTP, not through the Watch relay.
-    public var supportsStreaming: Bool { http != nil }
+    public var supportsStreaming: Bool { streamHTTP != nil }
 
     // MARK: request plumbing
 
@@ -243,7 +259,7 @@ public final class HubClient: Sendable {
     // MARK: Live
     /// Opens `GET /live` and yields events until the connection drops or the task is cancelled.
     public func live(deviceId: String? = nil) -> AsyncThrowingStream<LiveEvent, Error> {
-        guard let http = http else { return unsupportedStream() }
+        guard let http = streamHTTP else { return unsupportedStream() }
         let query = deviceId.flatMap { $0.isEmpty ? nil : ["device_id": $0] } ?? [:]
         return sse(http.request(method: "GET", path: "live", query: query, timeout: 3600), session: http.session) { Self.liveEvent($0) }
     }
@@ -422,7 +438,7 @@ public final class HubClient: Sendable {
 
     /// Streaming chat: `token` events then one `done` event carrying the full ChatResponse.
     public func chatStream(_ req: ChatRequest) throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
-        guard let http = http else { return unsupportedStream() }
+        guard let http = streamHTTP else { return unsupportedStream() }
         let r = http.request(method: "POST", path: "ai/chat/stream", body: try JSONCoding.data(req), timeout: 600)
         return sse(r, session: http.session) { msg in
             switch msg.event {

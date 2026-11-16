@@ -298,6 +298,36 @@ const CASES: Case[] = [
       if (!tools.includes("delete_item")) return `called ${tools.join(", ")}, no delete`;
       return left.length ? `${left.length} landlord tasks left` : null;
     } },
+  // Gaps the Nov 13 review named: a fact about someone else, an everyday "stuck", a recap, two requests at once, a
+  // repeating reminder.
+  { id: "fact-about-other", say: "Jamie can't stand cilantro",
+    check: ({ made, hub }) => {
+      const f = made.find((e) => e.kind === "fact" && /cilantro/i.test(String(e.fields.value ?? e.fields.key ?? "")));
+      if (!f) return `no fact (made ${made.map((e) => `${e.kind} ${title(e)}`).join(", ") || "nothing"})`;
+      const theirs = String(f.fields.person_id ?? "") === hub.store.list({ kind: "person" }).find((p) => p.fields.name === "Jamie")?.id || /jamie/i.test(String(f.fields.person ?? ""));
+      return theirs ? null : "saved as a fact about Alex, not about Jamie";
+    } },
+  { id: "casual-stuck", say: "I'm stuck on what to cook tonight, any ideas?",
+    check: ({ turns, made }) => turns[0].out.mode === "troubleshoot" ? "opened troubleshooting" : made.some((e) => e.kind === "ledger") ? "made a ledger" : null },
+  { id: "recap", say: ["log another coffee", "what did you log for me today?"],
+    check: ({ turns }) => first(has(turns[1].out.reply, /coffee|caffeine/i), (turns[1].out.actions ?? []).some((a) => a.writes && a.ok) ? "the recap wrote something" : null) },
+  { id: "two-requests", say: "add paper towels to my shopping list and remind me to call the vet tomorrow at 9am",
+    check: ({ made }) => {
+      const towels = made.find((e) => e.kind === "task" && /paper towel/i.test(title(e)));
+      const vet = made.find((e) => e.kind === "task" && /vet/i.test(title(e)));
+      if (!towels || !vet) return `made ${made.map((e) => `${e.kind} ${title(e)}`).join(", ") || "nothing"}`;
+      const list = (towels.fields.apple as { list_title?: string } | undefined)?.list_title;
+      if (list !== "Alex Shopping") return `paper towels in ${list ?? "no list"}`;
+      return diaryDay(new Date(String(vet.fields.remind_at))) === ymd(1) && hm(vet.fields.remind_at) === "09:00" ? null : `vet reminder at ${String(vet.fields.remind_at)}`;
+    } },
+  { id: "repeating-reminder", say: "remind me to water the plants every Sunday at 10am",
+    check: ({ made }) => {
+      const t = made.find((e) => e.kind === "task" && /water|plants/i.test(title(e)));
+      if (!t) return `made ${made.map((e) => `${e.kind} ${title(e)}`).join(", ") || "nothing"}`;
+      if (!/^every 1 weeks? on sun/i.test(String(t.fields.repeat ?? ""))) return `repeat ${String(t.fields.repeat ?? "none")}`;
+      const d = new Date(String(t.fields.remind_at));
+      return d.getDay() === 0 && hm(t.fields.remind_at) === "10:00" ? null : `remind_at ${String(t.fields.remind_at)}`;
+    } },
 ];
 
 function freshHub(): World & { dir: string } {

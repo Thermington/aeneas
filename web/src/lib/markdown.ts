@@ -297,7 +297,9 @@ class Renderer {
 }
 
 export function renderMarkdown(src: string, opts: MarkdownOptions = {}): string {
-  return new Renderer(opts).blocks(src.replace(/\r\n?/g, "\n").split("\n"));
+  // U+0000 becomes U+FFFD, as CommonMark asks. The renderer marks the pieces it holds back with it (`\0<n>\0`): the same
+  // marks typed into a link's address put another piece's markup inside its href, attributes and all.
+  return new Renderer(opts).blocks(src.replace(/\u0000/g, "�").replace(/\r\n?/g, "\n").split("\n"));
 }
 
 /** Wikilink targets in a markdown body, without brackets or aliases. */

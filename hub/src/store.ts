@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 import { z } from "zod";
 import { FieldsByKind, nowIso, type Entity, type Kind, type Patch } from "@everythingapp/shared";
 import { FTS_TABLE, type DB } from "./db.js";
@@ -19,6 +20,62 @@ export type AfterWriteHook = (entity: Entity, prev: Entity | null, changed: stri
 
 interface Row { id: string; kind: string; space: string; created_at: string; updated_at: string; deleted_at: string | null; fields: string; field_ts: string }
 
+/**
+ * A test on one field for Store.listWhere: equal to a text or to true or false (`is`), anything but that, missing
+ * included (`isNot`), one of some texts (`oneOf`), a text at or after another as text compares (`from`, for ISO
+ * times), or present and not null (`set`). SQLite and JavaScript give the same answer for each.
+ */
+export type FieldTest =
+  | { key: string; is: string | boolean }
+  | { key: string; isNot: string | boolean }
+  | { key: string; oneOf: string[] }
+  | { key: string; from: string }
+  | { key: string; set: true };
+
+/**
+ * The SQLite test for one field of a row's JSON, and its arguments. The path is written into the SQL (the field name
+ * is checked first: letters, digits and _), so the expression matches the partial indexes on capture fields (db.ts)
+ * and SQLite reads only the rows that pass, not the JSON of every capture with its photos.
+ */
+function fieldSql(t: FieldTest): [string, unknown[]] {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(t.key)) throw new Error(`not a field name: ${t.key}`);
+  const path = `'$.${t.key}'`;
+  // true and false are told apart from 1 and 0 by json_type, as === does.
+  if ("is" in t) return typeof t.is === "boolean" ? [`json_type(fields, ${path}) = ?`, [String(t.is)]] : [`json_extract(fields, ${path}) = ?`, [t.is]];
+  if ("isNot" in t) return typeof t.isNot === "boolean" ? [`json_type(fields, ${path}) IS NOT ?`, [String(t.isNot)]] : [`json_extract(fields, ${path}) IS NOT ?`, [t.isNot]];
+  if ("oneOf" in t) return [`json_extract(fields, ${path}) IN (${t.oneOf.map(() => "?").join(", ")})`, [...t.oneOf]];
+  if ("from" in t) return [`(json_type(fields, ${path}) = 'text' AND json_extract(fields, ${path}) >= ?)`, [t.from]];
+  return [`json_extract(fields, ${path}) IS NOT NULL`, []];
+}
+
+/** A kind written into SQL: a plain name, so a partial index on that kind can be used. */
+function kindSql(kind: string): string {
+  if (!/^[a-z_]+$/.test(kind)) throw new Error(`not a kind: ${kind}`);
+  return `'${kind}'`;
+}
+
+function passes(v: unknown, t: FieldTest): boolean {
+  if ("is" in t) return v === t.is;
+  if ("isNot" in t) return v !== t.isNot;
+  if ("oneOf" in t) return typeof v === "string" && t.oneOf.includes(v);
+  if ("from" in t) return typeof v === "string" && v >= t.from;
+  return v !== undefined && v !== null;
+}
+
+/** How far ahead of the hub's clock an edit's stamp may be before it counts as the moment the edit arrived. */
+export const STAMP_SLACK_MS = 5 * 60_000;
+
+/**
+ * An edit's stamp as the hub keeps it: UTC with milliseconds (`toISOString`), so stamps compare as text. One that is
+ * not a date and time is refused; one more than STAMP_SLACK_MS ahead of the hub's clock (a device whose clock runs
+ * fast) becomes the hub's time, so it cannot beat edits made after it.
+ */
+export function normalizeStamp(ts: string, now: number = Date.now()): { ts: string; ahead: boolean } {
+  const t = Date.parse(ts);
+  if (!Number.isFinite(t)) throw new StoreError(422, "ts is not a date and time");
+  const ahead = t > now + STAMP_SLACK_MS;
+  return { ts: new Date(ahead ? now : t).toISOString(), ahead };
+}
 
 /** Text the FTS index holds for each kind: a title column and a body column. */
 export function ftsText(kind: string, f: Record<string, any>): { title: string; text: string } {
@@ -111,7 +168,17 @@ export class Store {
     return r ? this.toEntity(r) : null;
   }
 
-  /** Simple listing with optional field equality filters (applied in JS). */
+  private stmts = new Map<string, Database.Statement<unknown[]>>();
+  private stmt(sql: string): Database.Statement<unknown[]> {
+    let s = this.stmts.get(sql);
+    if (!s) { s = this.db.prepare<unknown[]>(sql); this.stmts.set(sql, s); }
+    return s;
+  }
+
+  /**
+   * Simple listing, newest change first, with optional field equality filters (applied in JS). Rows are read one at
+   * a time and reading stops at `limit`, so a short list of a big kind does not parse the whole kind.
+   */
   list(opts: { kind?: string; space?: string; includeDeleted?: boolean; limit?: number; where?: Record<string, unknown> } = {}): Entity[] {
     const conds: string[] = [];
     const args: unknown[] = [];
@@ -119,12 +186,60 @@ export class Store {
     if (opts.space) { conds.push("space = ?"); args.push(opts.space); }
     if (!opts.includeDeleted) conds.push("deleted_at IS NULL");
     const sql = `SELECT * FROM entities ${conds.length ? "WHERE " + conds.join(" AND ") : ""} ORDER BY updated_at DESC`;
-    let rows = (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toEntity(r)).filter((e): e is Entity => e !== null);
-    if (opts.where) {
-      for (const [k, v] of Object.entries(opts.where)) rows = rows.filter((e) => String(e.fields[k]) === String(v));
+    const where = opts.where ? Object.entries(opts.where) : [];
+    return this.collect(this.stmt(sql).iterate(...args) as Iterable<Row>, (e) => where.every(([k, v]) => String(e.fields[k]) === String(v)), opts.limit);
+  }
+
+  /**
+   * The live entities of a kind whose fields pass every test, newest change first. SQLite tests the stored JSON, so a
+   * timer that needs a few rows of a big kind (open reminders among every task ever made) parses only those. Work rows
+   * are sealed, so SQLite passes them all and they are tested here after opening, as every row is again.
+   */
+  listWhere(kind: string, tests: FieldTest[], opts: { limit?: number; includeDeleted?: boolean } = {}): Entity[] {
+    const { sql, args } = this.whereSql(kind, tests, opts.includeDeleted === true);
+    return this.collect(this.stmt(`SELECT * FROM entities WHERE ${sql} ORDER BY updated_at DESC`).iterate(...args) as Iterable<Row>, (e) => tests.every((t) => passes(e.fields[t.key], t)), opts.limit);
+  }
+
+  /** The WHERE for listWhere and countWhere. Work rows are sealed: for kinds that can be work they pass SQLite. */
+  private whereSql(kind: string, tests: FieldTest[], includeDeleted: boolean): { sql: string; args: unknown[] } {
+    const conds: string[] = [];
+    const args: unknown[] = [];
+    for (const t of tests) {
+      const [sql, a] = fieldSql(t);
+      conds.push(sql); args.push(...a);
     }
-    if (opts.limit) rows = rows.slice(0, opts.limit);
-    return rows;
+    const test = !conds.length ? "" : WORK_KINDS.has(kind) ? ` AND CASE WHEN space = 'work' THEN 1 ELSE (${conds.join(" AND ")}) END` : ` AND ${conds.join(" AND ")}`;
+    return { sql: `kind = ${kindSql(kind)}${includeDeleted ? "" : " AND deleted_at IS NULL"}${test}`, args };
+  }
+
+  /** How SQLite answers listWhere (EXPLAIN QUERY PLAN), for tests that the capture indexes are used. */
+  planOf(kind: string, tests: FieldTest[]): string[] {
+    const { sql, args } = this.whereSql(kind, tests, false);
+    return (this.db.prepare(`EXPLAIN QUERY PLAN SELECT * FROM entities WHERE ${sql} ORDER BY updated_at DESC`).all(...args) as { detail: string }[]).map((r) => r.detail);
+  }
+
+  /** How many live entities of a kind pass every test, counted by SQLite without parsing them (work rows are opened). */
+  countWhere(kind: string, tests: FieldTest[]): number {
+    if (WORK_KINDS.has(kind)) return this.listWhere(kind, tests).length;
+    const { sql, args } = this.whereSql(kind, tests, false);
+    return (this.stmt(`SELECT COUNT(*) AS n FROM entities WHERE ${sql}`).get(...args) as { n: number }).n;
+  }
+
+  /** When each live entity of a kind was made, without parsing them (a capture can hold a photo). */
+  createdTimes(kind: string): string[] {
+    if (WORK_KINDS.has(kind)) return this.list({ kind }).map((e) => e.created_at);
+    return (this.stmt("SELECT created_at FROM entities WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC").all(kind) as { created_at: string }[]).map((r) => r.created_at);
+  }
+
+  private collect(rows: Iterable<Row>, keep: (e: Entity) => boolean, limit?: number): Entity[] {
+    const out: Entity[] = [];
+    for (const r of rows) {
+      const e = this.toEntity(r);
+      if (!e || !keep(e)) continue;
+      out.push(e);
+      if (limit && out.length >= limit) break;
+    }
+    return out;
   }
 
   /** Create an entity with hub-assigned id and timestamp. Validates with the full kind schema. */
@@ -184,11 +299,26 @@ export class Store {
   }
 
   /** Per-field last-writer-wins merge. Throws StoreError on rejection. */
-  apply(patch: Patch): ApplyResult {
-    const schema = FieldsByKind[patch.kind as keyof typeof FieldsByKind];
-    if (!schema) throw new StoreError(422, `unknown kind ${patch.kind}`);
+  apply(input: Patch): ApplyResult {
+    const schema = FieldsByKind[input.kind as keyof typeof FieldsByKind];
+    if (!schema) throw new StoreError(422, `unknown kind ${input.kind}`);
+    const nowMs = Date.now();
+    const stamp = normalizeStamp(input.ts, nowMs);
+    // A stored stamp this far ahead came from a fast clock (or is not a date) before stamps were checked: it never
+    // blocks a newer write, or the field would stay frozen until the clock caught up.
+    const future = new Date(nowMs + STAMP_SLACK_MS).toISOString();
     const run = this.db.transaction((): { res: ApplyResult; prev: Entity | null; noop: boolean } => {
-      const prev = this.get(patch.id);
+      const prev = this.get(input.id);
+      let ts = stamp.ts;
+      // Edits from a fast clock that arrive together all become "now": each later one still lands after the one
+      // before it, as it would have with its own stamp.
+      if (stamp.ahead && prev) {
+        for (const k of Object.keys(input.fields)) {
+          const p = prev.field_ts[k];
+          if (p && p <= future && p >= ts) ts = new Date(Date.parse(p) + 1).toISOString();
+        }
+      }
+      const patch: Patch = { ...input, ts };
       if (prev && prev.kind !== patch.kind) throw new StoreError(409, `kind mismatch: entity is ${prev.kind}`);
       const space = patch.space ?? prev?.space ?? "personal";
       if (space === "work" && !WORK_KINDS.has(patch.kind)) throw new StoreError(422, "work space holds only task and event entities");
@@ -217,7 +347,7 @@ export class Store {
       const fields: Record<string, unknown> = prev ? { ...prev.fields } : {};
       const fieldTs: Record<string, string> = prev ? { ...prev.field_ts } : {};
       const changed: string[] = [];
-      const newer = (k: string) => !fieldTs[k] || patch.ts > fieldTs[k];
+      const newer = (k: string) => !fieldTs[k] || fieldTs[k] > future || patch.ts > fieldTs[k];
 
       for (const k of Object.keys(validated)) {
         if (!newer(k)) continue;

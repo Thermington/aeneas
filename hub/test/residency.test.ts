@@ -60,3 +60,36 @@ test("the clock says which days this weekend is, today included on a weekend day
   assert.equal(weekendLine(new Date(2026, 9, 31, 9)), `This weekend is Saturday 2026-10-31 and Sunday 2026-11-01; ${tail}`, "a Saturday");
   assert.equal(weekendLine(new Date(2026, 10, 1, 23)), `This weekend is Saturday 2026-10-31 and Sunday 2026-11-01; ${tail}`, "a Sunday: the one it is part of");
 });
+
+test("routing: a turn never waits on a model server that stopped answering; the last answer stands while a new one is fetched", async () => {
+  const http = await import("node:http");
+  const { buildBackends } = await import("../src/ai/backends.js");
+  const { loadConfig } = await import("../src/config.js");
+  let asleep = false;
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/ps") {
+      if (asleep) return; // a machine that sleeps: the request is never answered
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ models: [{ name: "m", size: 100, size_vram: 100 }] }));
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  const realNow = Date.now;
+  try {
+    process.env.EA_NO_DOTENV = "1";
+    const cfg = loadConfig({ dataDir: "/tmp", ollamaUrl: `http://127.0.0.1:${port}`, ollamaModel: "m", aiFake: false, anthropicApiKey: "", adapterUrl: "" } as never);
+    const b = buildBackends(cfg).ollama!;
+    assert.equal(await b.residency!(), "gpu", "the first ask waits for the answer");
+    asleep = true;
+    let shift = 20_000;
+    Date.now = () => realNow() + shift; // the answer is now older than 15 s
+    const t0 = realNow();
+    assert.equal(await b.residency!(), "gpu", "the last answer, at once");
+    assert.ok(realNow() - t0 < 500, `answered in ${realNow() - t0} ms`);
+    await new Promise((r) => setTimeout(r, 2_300)); // the background look gives up after 2 s
+    assert.equal(await b.residency!(), "down", "and the next turn knows it is down");
+    shift = 0;
+  } finally { Date.now = realNow; server.closeAllConnections(); server.close(); }
+});

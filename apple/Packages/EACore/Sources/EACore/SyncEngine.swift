@@ -48,6 +48,9 @@ public final class SyncEngine: ObservableObject {
     public var onDigest: ((_ title: String) -> Void)?
     /// Called for `modules` events from `/live`: a switch changed on some device; the whole list as it is now.
     public var onModules: ((_ modules: [ModuleInfo]) -> Void)?
+    /// Called when what the Watch complications would show changed (the iPhone sends it on to the Watch).
+    public var onComplicationSnapshot: ((ComplicationSnapshot) -> Void)?
+    private var lastComplications: ComplicationSnapshot?
     /// Called when this device creates something or finishes something (a task done, a reminder acknowledged,
     /// a procedure step done). Never for changes pulled from the hub. The app answers with shapes and a chord.
     public var onMoment: ((_ moment: FeelMoment, _ kind: Kind) -> Void)?
@@ -61,6 +64,21 @@ public final class SyncEngine: ObservableObject {
     public var makeClient: (() -> HubClient?)?
     /// Poll interval used when the client cannot stream `/live` (the Watch).
     public var pollInterval: TimeInterval = 60
+
+    /// How the iPhone, iPad and Mac reach the hub (RouteChooser.swift): the address they were paired with and, when the
+    /// hub has one, its home network.
+    public let routes = RouteChooser()
+    /// The route requests take now. Nil on the Watch, in sample mode and before a hub is set up.
+    @Published public private(set) var route: HubRoute?
+    /// Settings: "Home network", "Direct link" or "Tailscale" while the hub answers.
+    public var routeLabel: String? { status == .online ? route?.label : nil }
+    /// False after a new connection until the hub's id was asked (`/link/routes`): nothing is sent before.
+    private var routesChecked = false
+    /// The hub at this address said another id than the one this device was paired with.
+    private var otherHubAtAddress = false
+    /// Tests: whether the hub's id is asked before syncing. By default only the app's own client (no `makeClient`) does.
+    var checksHubRoutes: Bool?
+    static let otherHubMessage = "This address now leads to another hub, so nothing was sent to it. Pair this device again with a code from your hub."
 
     private var liveTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
@@ -76,9 +94,24 @@ public final class SyncEngine: ObservableObject {
             self.store = (try? SyncStore(url: config.storeURL)) ?? (try! SyncStore.inMemory())
         }
         deviceRemoved = platform != .watch && config.deviceRemoved
+        routes.onChange = { [weak self] r in Task { @MainActor in self?.routeChanged(r) } }
+        routes.onFound = { [weak self] address, moves in Task { @MainActor in self?.homeFound(address, movesAddress: moves) } }
     }
 
     public var isConfigured: Bool { client != nil }
+
+    /// The local copy was filled from the hub at least once since it was last emptied (store meta `pulled`).
+    public private(set) var pulledOnce = false
+    /// Paired with the person's own hub: not sample mode, not removed, with a way to reach it. What copies into this
+    /// device's own stores (Health, Reminders, Calendar, Contacts) runs only then, so no sample data reaches them and
+    /// nothing is taken from them because this device's copy was emptied.
+    public var pairedWithHub: Bool { client != nil && !deviceRemoved && !config.sampleMode }
+    /// Paired, and the local copy holds the hub's items: filled from the hub at least once since it was last emptied
+    /// (a removal, another hub). An emptied copy reads as having no people and no tasks, and a copy run against it
+    /// took every card and every Apple item for a new one.
+    public var hasHubCopy: Bool { pairedWithHub && pulledOnce }
+    /// The hub answered the last sync (or the live stream since).
+    public var hubInReach: Bool { status == .online }
     public var statusLabel: String {
         switch status {
         case .unconfigured: return "Not set up"
@@ -93,14 +126,18 @@ public final class SyncEngine: ObservableObject {
     public func start() async {
         guard !started else {
             // A start before the first unlock (a background wake) could not read the key; the next one can.
-            if client == nil, config.isConfigured { client = buildClient(); if client != nil { startLive() } }
+            if client == nil, config.isConfigured { connectClient(); if client != nil { startLive() } }
+            // Waking: the network may be another one now. Home and the other route are tried again, and the hub's
+            // id is asked again before anything is sent.
+            routesChecked = false
+            routes.refresh()
             await sync()
             Task { await self.exchangeLegacyTokenIfNeeded() }
             return
         }
         started = true
         await reloadFromStore()
-        client = buildClient()
+        connectClient()
         status = client == nil ? .unconfigured : .offline
         if client != nil {
             startLive()
@@ -145,12 +182,92 @@ public final class SyncEngine: ObservableObject {
     private func buildClient() -> HubClient? {
         if let make = makeClient { return make() }
         if deviceRemoved { return nil }
+        // The iPhone, iPad and Mac: the address they were paired with, and the hub's home network when it has one.
+        if usesRoutes, let c = HubClient.routed(config: config, routes: routes) { return c }
         return HubClient.make(config: config)
+    }
+
+    /// The app's own client picks its route (not the Watch, which relays through the iPhone, nor sample mode).
+    private var usesRoutes: Bool { makeClient == nil && platform != .watch && !config.sampleMode }
+    private var checksRoutes: Bool { checksHubRoutes ?? usesRoutes }
+
+    /// A new connection to the hub: the hub's id is asked again before anything is sent over it.
+    private func connectClient() {
+        client = buildClient()
+        routesChecked = false
+        route = usesRoutes && client != nil ? routes.current : nil
+        if usesRoutes, client != nil { routes.watchNetwork() }
+    }
+
+    /// The route in use changed (a race, a network change, Bonjour). The live stream moves to it, the hub's id is asked
+    /// again over it, and a sync runs. The copy stays: it is the same hub.
+    private func routeChanged(_ r: HubRoute?) {
+        guard usesRoutes, client != nil, route != r else { return }
+        route = r
+        guard started else { return }
+        routesChecked = false
+        startLive()
+        Task { await self.sync() }
+    }
+
+    /// Bonjour found the hub at a new home address, and the hub there showed the pinned certificate. When the address it
+    /// was paired with is itself a home address (Home Wi-Fi only), that address follows, so widgets, the share sheet
+    /// and the Watch use it too. The copy stays: it is the same hub.
+    private func homeFound(_ address: String, movesAddress: Bool) {
+        guard movesAddress, usesRoutes, !deviceRemoved, client != nil, !Self.sameHub(config.hubURL, address) else { return }
+        config.hubURL = address
+        connectClient()
+        lastError = nil
+        startLive()
+        Task { await self.sync() }
+    }
+
+    /// The hub's routes as kept now: a change of home addresses starts a race.
+    private func reconfigureRoutes() {
+        guard usesRoutes else { return }
+        if routes.configure(address: config.hubURL, pin: config.hubPin, routes: config.linkRoutes) { routes.refresh() }
+        route = routes.current
+    }
+
+    /// On a new connection, before anything is sent: is this still the hub this device was paired with? `/link/routes`
+    /// says its id (kept the first time) and its home route (kept every time). False when the id is another one. An
+    /// older hub (404) has neither; when no answer comes, the sync goes ahead as before and the next one asks again.
+    private func checkHubRoutes(_ c: HubClient) async throws -> Bool {
+        let answer: LinkRoutes
+        do {
+            answer = try await withDeadline(10) { try await c.linkRoutes() }
+        } catch let h as HubError {
+            if h.isDeviceRemoved { throw h }
+            if case .http(let status, _) = h, status == 404, client === c {
+                routesChecked = true
+                otherHubAtAddress = false
+                if config.linkRoutes != nil { config.linkRoutes = nil; reconfigureRoutes() }
+            }
+            return true
+        } catch {
+            return true
+        }
+        guard client === c else { return true }
+        let said = HubID.normalize(answer.hub_id)
+        if let have = config.hubId, let said, have != said {
+            otherHubAtAddress = true
+            return false
+        }
+        otherHubAtAddress = false
+        if config.hubId == nil, let said { config.hubId = said }
+        if config.linkRoutes != answer {
+            config.linkRoutes = answer
+            reconfigureRoutes()
+        }
+        routesChecked = true
+        return true
     }
 
     public func stop() {
         liveTask?.cancel()
         liveTask = nil
+        liveWatch?.cancel()
+        liveWatch = nil
         retryTask?.cancel()
         retryTask = nil
     }
@@ -162,6 +279,10 @@ public final class SyncEngine: ObservableObject {
         entities = map
         cursor = (try? await store.cursor) ?? 0
         outboxCount = (try? await store.outboxCount()) ?? 0
+        // A copy filled by a build from before the `pulled` mark counts once it has pulled anything.
+        if (try? await store.meta("pulled")) == "1" { pulledOnce = true }
+        else if cursor > 0 { pulledOnce = true; try? await store.setMeta("pulled", "1") }
+        else { pulledOnce = false }
         // An older build skipped items it could not read (a kind it did not know yet) and moved past them. After an
         // update, read everything once more from the start; each item is merged, so nothing is doubled.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
@@ -181,6 +302,7 @@ public final class SyncEngine: ObservableObject {
         stop()
         try? await store.resetKeepingOutbox()
         try? await store.setCursor(0)
+        pulledOnce = false
         let list = (try? await store.all(kind: nil, includeDeleted: true)) ?? []
         var map: [String: Entity] = [:]
         for e in list { map[e.id] = e }
@@ -198,59 +320,79 @@ public final class SyncEngine: ObservableObject {
         return try await withDeadline(15) { try await c.health() }
     }
 
-    public static func sameHub(_ a: String, _ b: String) -> Bool {
+    /// The same address (case, spaces and a trailing slash aside).
+    nonisolated public static func sameHub(_ a: String, _ b: String) -> Bool {
         func n(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() }
         return n(a) == n(b)
     }
 
+    /// One hub or two. By the hub's own id when both sides know it, so the same hub reached at another address (home
+    /// network, Direct link, Tailscale) is the same hub, and another id is another hub even at the same address. By
+    /// address when either id is not known (an older hub, a link without `hid`).
+    nonisolated public static func sameHub(_ a: String, id aId: String?, _ b: String, id bId: String?) -> Bool {
+        if let x = HubID.normalize(aId), let y = HubID.normalize(bId) { return x == y }
+        return sameHub(a, b)
+    }
+
     /// Pair with a one-time code: the hub answers with this device's own key, kept in the Keychain. On the same hub
-    /// the device keeps its id (a device removed and paired again comes back as itself).
-    public func pair(hubURL: String, code: String, deviceName: String?, pin: String? = nil) async throws {
+    /// (by its id, else by address) the device keeps its id (a device removed and paired again comes back as itself).
+    public func pair(hubURL: String, code: String, deviceName: String?, pin: String? = nil, hubId: String? = nil) async throws {
         await endSample()
         let hub = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let pin = HubPin.forHub(hub, pin: pin)
         guard let anon = pairingClient?(hub, "") ?? HubClient.make(urlString: hub, token: "", pin: pin) else { throw HubError.notConfigured }
         let name = Self.cleanName(deviceName) ?? config.deviceName
-        let keepId = Self.sameHub(config.hubURL, hub) && !config.deviceId.isEmpty ? config.deviceId : nil
+        let keepId = Self.sameHub(config.hubURL, id: config.hubId, hub, id: hubId) && !config.deviceId.isEmpty ? config.deviceId : nil
         let platform = self.platform
-        let oldKey = keepId == nil ? "" : config.deviceKey
+        // This device's own key goes only where it went before: the address it was paired with, under the certificate
+        // pinned now, never the link's address. A link naming another certificate (asked about first, AppModel.handle)
+        // does not take the old key to whoever answers with that one; the old entry is then left for Settings, Devices.
+        let oldAddress = config.hubURL
+        let keyPin = config.hubPin
+        let oldKey = keepId == nil || pin != keyPin ? "" : config.deviceKey
         let r = try await withDeadline(20) { try await anon.claim(code: code, name: name, platform: platform, deviceId: keepId) }
         // Paired again while the old key still worked: the hub gave a new id, so the old entry (and its key) is removed
         // rather than left behind with a key that works. The Watch's key went with it; a new one is claimed when the
         // Watch next asks.
-        if let old = keepId, r.device_id != old, !oldKey.isEmpty, let oc = pairingClient?(hub, oldKey) ?? HubClient.make(urlString: hub, token: oldKey, pin: pin) {
+        if let old = keepId, r.device_id != old, !oldKey.isEmpty,
+           let oc = pairingClient?(oldAddress, oldKey) ?? HubClient.make(urlString: oldAddress, token: oldKey, pin: keyPin) {
             _ = try? await withDeadline(10) { try await oc.removeDevice(old) }
             config.clearWatchKey()
             config.watchRemoved = false
         }
         guard config.storeDeviceKey(r.key) else { throw KeychainRefused() }
-        await adopt(hub: hub, legacyToken: nil, deviceId: r.device_id, name: r.name.flatMap(Self.cleanName) ?? name, pin: pin)
+        await adopt(hub: hub, legacyToken: nil, deviceId: r.device_id, name: r.name.flatMap(Self.cleanName) ?? name, pin: pin, hubId: hubId)
         config.permissionOfferPending = true
     }
 
     /// An older setup link that carries the hub's shared key: it is traded for this device's own key at once and not
     /// kept. Only a hub too old to trade it, or one out of reach, leaves the shared key in use until it can.
-    public func connect(hubURL: String, token: String, deviceName: String?, pin: String? = nil) async throws {
+    public func connect(hubURL: String, token: String, deviceName: String?, pin: String? = nil, hubId: String? = nil) async throws {
         await endSample()
         let hub = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let pin = HubPin.forHub(hub, pin: pin)
         guard let c = pairingClient?(hub, token) ?? HubClient.make(urlString: hub, token: token, pin: pin) else { throw HubError.notConfigured }
         let name = Self.cleanName(deviceName) ?? config.deviceName
-        let keepId = Self.sameHub(config.hubURL, hub) && !config.deviceId.isEmpty ? config.deviceId : nil
+        let same = Self.sameHub(config.hubURL, id: config.hubId, hub, id: hubId)
+        let keepId = same && !config.deviceId.isEmpty ? config.deviceId : nil
         let platform = self.platform
         do {
             let r = try await withDeadline(20) { try await c.exchange(name: name, platform: platform, deviceId: keepId) }
             guard config.storeDeviceKey(r.key) else { throw KeychainRefused() }
-            await adopt(hub: hub, legacyToken: nil, deviceId: r.device_id, name: r.name.flatMap(Self.cleanName) ?? name, pin: pin)
+            await adopt(hub: hub, legacyToken: nil, deviceId: r.device_id, name: r.name.flatMap(Self.cleanName) ?? name, pin: pin, hubId: hubId)
         } catch {
             switch CredentialMigration.outcome(error) {
             case .refused: throw error
             case .traded: return
             case .keepToken(let wait):
+                // A device with its own key for this hub keeps it: a link whose trade did not go through (out of
+                // reach, or a certificate that did not match its pin) is no reason to drop it for the link's
+                // shared key. Nothing changes, and the link's error is shown.
+                if same, config.hasDeviceKey { throw error }
                 config.clearDeviceKey()
                 config.exchangeRetryAfter = Date().addingTimeInterval(wait)
-                await adopt(hub: hub, legacyToken: token, deviceId: keepId, name: name, pin: pin)
+                await adopt(hub: hub, legacyToken: token, deviceId: keepId, name: name, pin: pin, hubId: hubId)
             }
         }
         config.permissionOfferPending = true
@@ -259,19 +401,29 @@ public final class SyncEngine: ObservableObject {
     /// Tests: the client used to pair (hub address and key given).
     public var pairingClient: ((String, String) -> HubClient?)?
 
-    /// Save the hub (the key is already in the Keychain, or `legacyToken` is the shared key), reset the local cursor
-    /// when the hub changed, register this device and sync.
-    private func adopt(hub: String, legacyToken: String?, deviceId: String?, name: String, pin: String?) async {
-        let changedHub = !Self.sameHub(config.hubURL, hub)
+    /// Save the hub (the key is already in the Keychain, or `legacyToken` is the shared key), forget the old hub's copy
+    /// when the hub changed, register this device and sync. The same hub at another address (another route to it, by
+    /// its id) keeps its copy.
+    private func adopt(hub: String, legacyToken: String?, deviceId: String?, name: String, pin: String?, hubId: String?) async {
+        let changedHub = !Self.sameHub(config.hubURL, id: config.hubId, hub, id: hubId)
+        let movedAddress = !Self.sameHub(config.hubURL, hub)
+        if changedHub { await forgetHubCopy() }
         config.hubURL = hub
         config.legacyToken = legacyToken ?? ""
-        if changedHub || pin != nil { config.hubPin = pin }
+        // The pin belongs to an address: a new address keeps none from the old one.
+        if changedHub || movedAddress || pin != nil { config.hubPin = pin }
+        if changedHub {
+            config.hubId = hubId
+            // The old hub's home addresses are not this hub's.
+            config.linkRoutes = nil
+        } else if let id = HubID.normalize(hubId) {
+            config.hubId = id
+        }
+        otherHubAtAddress = false
         config.deviceName = name
         config.deviceRemoved = false
         deviceRemoved = false
         if changedHub {
-            try? await store.setCursor(0)
-            cursor = 0
             // The old hub's module switches are not this hub's: until it answers, nothing of the person's is copied.
             config.modules = nil
             // The Watch's key belongs to the old hub.
@@ -281,14 +433,49 @@ public final class SyncEngine: ObservableObject {
         }
         config.deviceId = deviceId ?? (changedHub ? "" : config.deviceId)
         stop()
-        client = buildClient()
+        connectClient()
         status = client == nil ? .unconfigured : .offline
         started = true
         if client != nil {
             await ensureRegistered()
             startLive()
             await sync()
+            if changedHub { Task { await self.refreshHubIdentity() } }
         }
+    }
+
+    /// Another hub's items mean nothing on this one. Its local copy stayed beside the new hub's, and the edits queued
+    /// for it (a capture made offline) went to the new hub. The copy and its queue go, with what this device recorded
+    /// about its links to Apple Reminders, Calendar and Contacts (by the old hub's ids), the edits the old hub refused
+    /// and its name. Reconnecting to the same hub keeps all of it.
+    private func forgetHubCopy() async {
+        // Edits made here for the old hub exist nowhere else: they go to it first when it answers within a few
+        // seconds (this device's id and the client are still the old hub's here). What it does not take is dropped
+        // with the copy, never sent to the new hub, nor to another hub now at the old hub's address.
+        if let old = client, outboxCount > 0, !otherHubAtAddress {
+            if let t = syncTask { await t.value }
+            let have = checksRoutes ? config.hubId : nil
+            _ = try? await withDeadline(10) {
+                if let have, let said = HubID.normalize((try? await old.linkRoutes())?.hub_id), said != have { return }
+                try await self.flush(old)
+            }
+        }
+        // Nothing more goes to or comes from the old hub, and a sync with it still running ends before its copy goes.
+        stop()
+        client = nil
+        if let t = syncTask { await t.value }
+        try? await store.reset()
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        if !build.isEmpty { try? await store.setMeta("synced_build", build) }
+        entities = [:]
+        cursor = 0
+        outboxCount = 0
+        pulledOnce = false
+        AppleLinkRecords.forget()
+        config.clearSnapshot()
+        clearRejected()
+        hubIdentity = nil
+        UserDefaults.standard.removeObject(forKey: Self.hubIdentityKey)
     }
 
     // MARK: sample mode
@@ -304,30 +491,40 @@ public final class SyncEngine: ObservableObject {
         try? await store.setCursor(0)
         entities = [:]
         cursor = 0
+        pulledOnce = false
         config.sampleMode = true
         config.hubURL = Self.sampleHubURL
+        // Whatever hub was set up before is not the sample's: its id and routes go with its address.
+        config.hubId = nil
+        config.linkRoutes = nil
         config.deviceId = "sample-device"
         deviceRemoved = false
-        client = buildClient()
+        connectClient()
         status = .offline
         started = true
         await sync()
     }
 
-    /// Sample mode off: the made-up month and every edit made to it are wiped, and the device is not set up.
+    /// Sample mode off: the made-up month and every edit made to it are wiped, and the device is not set up. The
+    /// alerts planned from its reminders go too: with no sync after this, they kept firing for up to 30 days.
     public func endSample() async {
         guard config.sampleMode else { return }
         stop()
+        client = nil
         try? await store.reset()
         try? await store.setCursor(0)
         entities = [:]
         cursor = 0
+        pulledOnce = false
         config.sampleMode = false
         config.hubURL = ""
+        config.hubId = nil
+        config.linkRoutes = nil
         config.deviceId = ""
         config.clearSnapshot()
-        client = nil
+        route = nil
         status = .unconfigured
+        await takeOffPlannedAlerts()
     }
 
     /// A new name for this device, sent with its own key (which registers only this device).
@@ -347,6 +544,7 @@ public final class SyncEngine: ObservableObject {
         config.clearWatchKey()
         config.legacyToken = ""
         client = nil
+        route = nil
         status = .unconfigured
     }
 
@@ -398,7 +596,7 @@ public final class SyncEngine: ObservableObject {
             config.legacyToken = ""
             config.exchangeRetryAfter = nil
             stop()
-            client = buildClient()
+            connectClient()
             if client != nil { startLive() }
         } catch {
             if case .keepToken(let wait) = CredentialMigration.outcome(error) { config.exchangeRetryAfter = now.addingTimeInterval(wait) }
@@ -446,13 +644,24 @@ public final class SyncEngine: ObservableObject {
         lastError = HubError.deviceRemoved.errorDescription
         guard platform != .watch else { onDeviceRemoved?(); return }
         config.deviceRemoved = true
+        // Signed out (no client, `pairedWithHub` false) before the copy is emptied: the copies into this device's own
+        // stores stop first, so nothing reads the empty copy as the person deleting everything (the Health export
+        // took out every sample it had written).
         signOut()
         // Nothing of the hub's stays on a removed device: the local copy, its unsent edits and the widget snapshot go
-        // with the key. The app removes its own files (chats, caches, Spotlight) in `onDeviceRemoved`.
+        // with the key, and so do the refused edits (what was changed in which item) and the hub's name. The app
+        // removes its own files and settings (chats, caches, Spotlight, the wiki's page list) in `onDeviceRemoved`.
         let store = self.store
         Task { try? await store.reset() }
         entities = [:]
+        pulledOnce = false
         config.clearSnapshot()
+        clearRejected()
+        hubIdentity = nil
+        UserDefaults.standard.removeObject(forKey: Self.hubIdentityKey)
+        // The alerts planned from its reminders go with them: syncing stops here, so no later replan took them off,
+        // and alerts with task titles kept firing for up to 30 days.
+        Task { await self.takeOffPlannedAlerts() }
         onDeviceRemoved?()
     }
 
@@ -524,7 +733,18 @@ public final class SyncEngine: ObservableObject {
         guard let c = client else { status = .unconfigured; return }
         if status != .online { status = .connecting }
         do {
+            // A new connection: is it still the hub this device was paired with? Nothing goes out before that is known,
+            // and nothing goes to another hub at all.
+            if checksRoutes, !routesChecked {
+                let ours = try await checkHubRoutes(c)
+                if !ours {
+                    status = .offline
+                    lastError = Self.otherHubMessage
+                    return
+                }
+            }
             await ensureRegistered()
+            await takeWidgetDones()
             // A push that fails (one bad edit, a hub hiccup) must not stop changes from coming in.
             var pushError: Error?
             do { try await flush(c) } catch { pushError = error }
@@ -539,54 +759,36 @@ public final class SyncEngine: ObservableObject {
         } catch {
             note(error)
             status = client == nil ? .unconfigured : .offline
-            lookForMovedHub(after: error)
         }
         await afterChange()
     }
 
-    /// Builds the hub connection again (the way to the hub changed, such as Tailscale signed in inside Aeneas) and syncs.
-    public func rebuildClient() async {
-        guard started, !deviceRemoved, makeClient == nil else { return }
-        client = buildClient()
-        status = client == nil ? .unconfigured : .offline
-        startLive()
-        await sync()
+    /// Done taps on the Now widget the hub has not taken (`SharedConfig.pendingWidgetDones`): each becomes a queued
+    /// edit stamped with the time of the tap, sent with the rest of the queue until the hub takes it, and the task
+    /// shows done here at once instead of coming back. A task this device does not hold yet waits for a later sync.
+    func takeWidgetDones() async {
+        let waiting = config.pendingWidgetDones
+        guard !waiting.isEmpty else { return }
+        var taken: [WidgetDone] = []
+        for d in waiting where entities[d.taskId]?.kind == .task {
+            guard let e = try? await store.applyLocal(d.patch(task: entities[d.taskId])) else { continue }
+            entities[e.id] = e
+            taken.append(d)
+        }
+        guard !taken.isEmpty else { return }
+        config.removePendingWidgetDones(taken)
+        outboxCount = (try? await store.outboxCount()) ?? 0
     }
 
-    // MARK: a Home Wi-Fi hub that moved
-
-    private var lastHomeLook: Date?
-
-    /// A Home Wi-Fi hub that stopped answering may only have a new address from the router: look for its
-    /// announcement (HomeFinder), at most once a minute, and move to the new address once the hub there has shown
-    /// the pinned certificate and answered.
-    private func lookForMovedHub(after error: Error) {
-        guard platform != .watch, makeClient == nil, !deviceRemoved,
-              HomeFinder.worthLooking(hubURL: config.hubURL, pin: config.hubPin, error: error),
-              lastHomeLook.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
-        lastHomeLook = Date()
-        let current = config.hubURL
-        let pin = config.hubPin
-        let token = config.credential
-        Task { [weak self] in
-            guard let pin, let found = await HomeFinder.find(pin: pin), !HomeFinder.sameAddress(found, current) else { return }
-            // The pin is checked on this request: an announcement pointing anywhere else fails here and changes nothing.
-            guard let probe = HubClient.make(urlString: found, token: token, pin: pin) else {
-                HomeFinder.note("the hub's new address could not be used")
-                return
-            }
-            guard (try? await withDeadline(8) { try await probe.health() }) != nil else {
-                HomeFinder.note("the hub at its new address did not answer with its certificate")
-                return
-            }
-            HomeFinder.note("the hub moved; using its new address")
-            guard let self, self.config.hubURL == current else { return }
-            self.config.hubURL = found
-            self.client = self.buildClient()
-            self.lastError = nil
-            self.startLive()
-            await self.sync()
-        }
+    /// Builds the hub connection again (the way to the hub changed, such as Tailscale signed in inside Aeneas) and syncs.
+    /// A Home Wi-Fi hub that moved to another address is found again by the route chooser (Bonjour, `homeFound`).
+    public func rebuildClient() async {
+        guard started, !deviceRemoved, makeClient == nil else { return }
+        connectClient()
+        status = client == nil ? .unconfigured : .offline
+        routes.refresh()
+        startLive()
+        await sync()
     }
 
     /// The hub refuses request bodies over 2 MB: pushes are cut to about 1.5 MB of patches each.
@@ -598,6 +800,8 @@ public final class SyncEngine: ObservableObject {
 
     private func flush(_ c: HubClient) async throws {
         var limit = 500
+        /// Items sent again whole in this flush (see below): once each.
+        var resent: Set<String> = []
         while true {
             let queued = try await store.outbox(limit: limit)
             if queued.isEmpty { break }
@@ -625,6 +829,16 @@ public final class SyncEngine: ObservableObject {
             limit = 500
             try await store.removeOutbox(rowids: items.map(\.rowid))
             for r in resp.rejected {
+                // An edit of an item the hub does not have (it was restored from a copy older than the item): the item
+                // goes again whole with create, stamped with when it was made so it keeps its day, then the refused
+                // edits with their own stamps. It was deleted here, losing what had just been changed. Once each: a
+                // create the hub also refuses is a refusal like any other.
+                if r.reason.hasPrefix("entity not found"), let local = entities[r.id], !local.isDeleted, !resent.contains(r.id) {
+                    resent.insert(r.id)
+                    _ = try? await store.applyLocal(Patch(id: local.id, kind: local.kind, space: local.space, ts: local.created_at, fields: local.fields, create: true))
+                    for p in items.map(\.patch) where p.id == r.id { _ = try? await store.applyLocal(p) }
+                    continue
+                }
                 logRejected(r.id, reason: r.reason, patches: items.map(\.patch).filter { $0.id == r.id })
                 // Conflict: drop our queued patches for it and reload the hub copy.
                 try? await store.removeOutbox(entityId: r.id)
@@ -651,6 +865,7 @@ public final class SyncEngine: ObservableObject {
         var loops = 0
         // Set when the hub answered from the beginning (it was restored from an older copy): every entity it has.
         var seen: Set<String>? = nil
+        var complete = false
         while loops < 200 {
             loops += 1
             let page = try await c.changes(since: since, deviceId: config.deviceId)
@@ -673,7 +888,7 @@ public final class SyncEngine: ObservableObject {
                 try await store.setCursor(since)
                 cursor = since
             }
-            if !page.more { break }
+            if !page.more { complete = true; break }
         }
         // What this device holds that the restored hub does not, and no edit of ours is waiting to send, is gone.
         if let seen {
@@ -685,6 +900,11 @@ public final class SyncEngine: ObservableObject {
             }
             try await store.setCursor(since)
             cursor = since
+        }
+        // The whole feed is in: the copy holds the hub's items now (`hasHubCopy`). Not when this hub was left meanwhile.
+        if complete, !pulledOnce, client === c {
+            try? await store.setMeta("pulled", "1")
+            pulledOnce = true
         }
     }
 
@@ -703,19 +923,28 @@ public final class SyncEngine: ObservableObject {
 
     // MARK: live
 
+    /// When the live stream last said anything, or last started.
+    private var lastLiveEvent = Date()
+    private var liveWatch: Task<Void, Never>?
+
     /// Stream `/live` when the transport supports it; otherwise poll `/sync/changes`.
     private func startLive() {
         liveTask?.cancel()
+        liveWatch?.cancel()
+        liveWatch = nil
         guard let c = client else { return }
         guard c.supportsStreaming else { startPolling(); return }
+        lastLiveEvent = Date()
         liveTask = Task { [weak self] in
             var backoff: Double = 1
             while !Task.isCancelled {
                 do {
+                    self?.lastLiveEvent = Date()
                     for try await ev in c.live(deviceId: self?.config.deviceId) {
                         if Task.isCancelled { break }
                         backoff = 1
                         guard let self = self else { return }
+                        self.lastLiveEvent = Date()
                         switch ev {
                         case .change:
                             await self.sync()
@@ -735,6 +964,20 @@ public final class SyncEngine: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                 backoff = min(backoff * 2, 30)
                 if let self = self, !Task.isCancelled { await self.sync() }
+            }
+        }
+        // The hub pings every 25 s. A stream silent for 70 s is gone even when its connection never said so (the
+        // internet went down at home): the routes are raced again and the stream starts over. Not while a sync runs:
+        // the stream waits for it before it reads the next event.
+        liveWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                if self.syncTask == nil, Date().timeIntervalSince(self.lastLiveEvent) > 70 {
+                    self.routes.refresh()
+                    self.startLive()
+                    return
+                }
             }
         }
     }
@@ -912,9 +1155,33 @@ public final class SyncEngine: ObservableObject {
     /// Replace the pending reminder notifications with `notificationPlan`.
     /// With Reminder alerts off (Settings, Modules) nothing is scheduled and what was planned is taken off.
     public func replanNotifications() async {
+        let list = config.moduleOn(.notifications) ? reminders : []
+        if let onReplan { onReplan(list); return }
         #if canImport(UserNotifications)
-        await ReminderScheduler.shared.replan(reminders: config.moduleOn(.notifications) ? reminders : [])
+        await ReminderScheduler.shared.replan(reminders: list)
         #endif
+    }
+
+    /// Tests: stands in for the notification center, given the reminders a replan plans from.
+    var onReplan: (([Entity]) -> Void)?
+
+    /// The hub's items left this device (it was removed, or the sample ended): the alerts planned from them go too.
+    /// Activity check-ins name an activity, so they go as well.
+    private func takeOffPlannedAlerts() async {
+        guard schedulesNotifications else { return }
+        await replanNotifications()
+        #if canImport(UserNotifications)
+        if onReplan == nil { await ReminderScheduler.shared.cancelActivityCheckins() }
+        #endif
+    }
+
+    /// Background refresh (iPhone): the hub's changes come in first, so the copies to Apple's stores compare against
+    /// them (an event made in the app that this device had not pulled yet came back from Apple Calendar as a second
+    /// one); then the copies run; then what they changed goes to the hub.
+    public func refreshing(_ copies: () async -> Void) async {
+        await sync()
+        await copies()
+        await sync()
     }
 
     public func updateSnapshot() {
@@ -922,6 +1189,7 @@ public final class SyncEngine: ObservableObject {
         config.nowTaskId = now?.id
         config.nowTaskTitle = now?.str("title")
         config.nowTaskStatus = now?.str("status")
+        config.nowTaskTiming = now.map { WidgetDone.timing(of: $0) }
         config.nowBlockEnd = now.flatMap { $0.decoded(TaskFields.self)?.block }.flatMap { ISO.date($0.end) }
         let nb = nextBlockToday(excluding: now?.id)
         config.nextBlockTitle = nb?.title
@@ -941,6 +1209,13 @@ public final class SyncEngine: ObservableObject {
             #if canImport(WidgetKit)
             WidgetCenter.shared.reloadAllTimelines()
             #endif
+        }
+        if let send = onComplicationSnapshot {
+            let complications = ComplicationSnapshot(config: config)
+            if complications != lastComplications {
+                lastComplications = complications
+                send(complications)
+            }
         }
     }
 }
@@ -978,5 +1253,18 @@ extension SyncEngine {
     public func clearRejected() {
         rejectedEdits = []
         UserDefaults.standard.removeObject(forKey: Self.rejectedKey)
+    }
+}
+
+/// What this device keeps about its links to Apple Reminders, Calendar and Contacts, by the hub's ids (UserDefaults).
+/// Another hub's ids mean nothing, so a change of hub forgets them (`SyncEngine.adopt`); a reconnect to the same hub
+/// keeps them.
+public enum AppleLinkRecords {
+    public static let reminders = "ea.remindersSync.state"
+    public static let calendar = "ea.eventMirror.state"
+    public static let contacts = "ea.contacts.state"
+
+    public static func forget(_ defaults: UserDefaults = .standard) {
+        for k in [reminders, calendar, contacts] { defaults.removeObject(forKey: k) }
     }
 }

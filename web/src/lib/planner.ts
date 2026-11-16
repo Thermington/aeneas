@@ -6,7 +6,7 @@
  */
 import type { Entity } from "@everythingapp/shared";
 import { taskAlertAt } from "@everythingapp/shared";
-import { fmtTime, HOUR } from "./time";
+import { fmtDate, fmtTime, fromLocalInput, HOUR, toLocalInput } from "./time";
 
 export const DAY_START = "09:00";
 export const DAY_END = "23:00";
@@ -88,6 +88,43 @@ export function parseDue(due: string): Date {
   return isDateOnly(due) ? parseLocalDate(due) : new Date(due);
 }
 
+/**
+ * Past due: a date alone ("2026-11-17") only once that local day is over, a date and time once that moment has passed.
+ * Read as UTC midnight, a date alone was red from 7 PM the evening before in New York. The Apple app's TaskDue rule.
+ */
+export function isOverdue(due: string, now = new Date()): boolean {
+  if (isDateOnly(due)) return now.getTime() >= addDays(parseLocalDate(due), 1).getTime();
+  const t = Date.parse(due);
+  return !Number.isNaN(t) && t < now.getTime();
+}
+
+/**
+ * A deadline in words, the one way the screens show one. A date alone is that local day: "today" or "Nov 17", never
+ * the UTC midnight that showed as "7:00 PM" the day before in New York. A date and time is a moment: its time today,
+ * else its date and time. `day` gives the date alone either way ("Nov 17"), for lists that show only days.
+ */
+export function fmtDue(due: string, opts: { now?: Date; day?: boolean } = {}): string {
+  const d = parseDue(due);
+  if (Number.isNaN(d.getTime())) return due;
+  const iso = d.toISOString();
+  if (opts.day) return fmtDate(iso);
+  const today = localDate(d) === localDate(opts.now ?? new Date());
+  if (isDateOnly(due)) return today ? "today" : fmtDate(iso);
+  return today ? fmtTime(iso) : `${fmtDate(iso)} ${fmtTime(iso)}`;
+}
+
+/** The date and time box's value for a deadline: a date alone opens on its own local day (at 00:00), not the UTC one. */
+export function dueInputValue(due?: string): string {
+  if (!due) return "";
+  return isDateOnly(due) ? `${due}T00:00` : toLocalInput(due);
+}
+
+/** A deadline from the date and time box. A date alone stays a date alone while its time is left at 00:00. */
+export function dueFromInput(value: string, prev?: string): string | null {
+  if (prev && isDateOnly(prev) && /^\d{4}-\d{2}-\d{2}T00:00$/.test(value)) return value.slice(0, 10);
+  return fromLocalInput(value) ?? null;
+}
+
 export function addDays(d: Date, n: number): Date {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
@@ -98,6 +135,18 @@ export function startOfLocalDay(d: Date): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
   return x;
+}
+
+/** The local date of the day `now` is in, when days start at `startHour` (midnight unless given): 3 AM with 4 is still the day before. */
+export function localDayAt(now: Date, startHour = 0): string {
+  return localDate(now.getHours() < startHour ? addDays(now, -1) : now);
+}
+
+/** Milliseconds from `now` until the next day starts, at local `startHour`:00 (midnight unless given). */
+export function msToNextDay(now: Date, startHour = 0): number {
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), startHour);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
 }
 
 /** Local midnight of the Monday of the week containing d. */
@@ -178,11 +227,23 @@ export function commitmentsFor(rules: Entity[], date: Date): Commitment[] {
 }
 
 // ---------- spans ----------
-export const byStart = (a: Span, b: Span) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+/**
+ * Two times in order of the moments they name, not their text: an event can keep its offset ("...T19:00:00-05:00",
+ * midnight UTC) while blocks are in UTC ("...T19:00:00.000Z", 2 PM in New York), and as text the evening event came
+ * first. A time that cannot be read comes first, as an empty one did.
+ */
+export function byTime(a: string, b: string): number {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return Number.isNaN(x) ? (Number.isNaN(y) ? 0 : -1) : 1;
+  return x - y;
+}
 
-/** Strict overlap: touching ends do not overlap. */
+export const byStart = (a: Span, b: Span) => byTime(a.start, b.start);
+
+/** Strict overlap of the moments: touching ends do not overlap, and a span that cannot be read overlaps nothing. */
 export function overlaps(a: Span, b: Span): boolean {
-  return a.start < b.end && b.start < a.end;
+  return Date.parse(a.start) < Date.parse(b.end) && Date.parse(b.start) < Date.parse(a.end);
 }
 
 export function findConflict<T extends Span>(span: Span, busy: T[]): T | null {
@@ -330,7 +391,7 @@ export function timeline(day: { blocks: Block[]; commitments: Commitment[]; even
   for (const f of day.free_slots) items.push({ kind: "free", key: `f:${f.start}`, start: f.start, end: f.end, hours: f.hours });
   if (now) items.push({ kind: "now", key: "now", start: now.toISOString() });
   const rank: Record<TimelineItem["kind"], number> = { now: 0, reminder: 1, commitment: 2, event: 3, block: 4, free: 5 };
-  return items.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : rank[a.kind] - rank[b.kind]));
+  return items.sort((a, b) => byTime(a.start, b.start) || rank[a.kind] - rank[b.kind]);
 }
 
 // ---------- digest ----------

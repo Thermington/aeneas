@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { createEntity, updateEntity } from "../sync/edits";
@@ -9,7 +10,7 @@ import { useEntities } from "../sync/hooks";
 import { CsvButton } from "../components/CsvButton";
 import { refreshProfile, usePetName, useProfile } from "../lib/profile";
 import { engine } from "../sync/engine";
-import { localDate } from "../lib/planner";
+import { fmtDue, isDateOnly, localDate, parseDue } from "../lib/planner";
 
 
 const TYPES = ["vet", "med", "incident", "custody", "weight", "food", "note"] as const;
@@ -52,7 +53,7 @@ function PetView() {
   const PET_NAME = usePetName();
   const p = usePoll((c) => c.petSummary(PET_NAME));
   const s = p.data;
-  const custodyEvents = useEntities("pet_event", (e) => e.fields.type === "custody" && String(e.fields.pet).toLowerCase() === PET_NAME.toLowerCase());
+  const custodyEvents = useEntities("pet_event", (e) => e.fields.type === "custody" && String(e.fields.pet).toLowerCase() === PET_NAME.toLowerCase(), [PET_NAME]);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState(empty);
   const [flash, setFlash] = useState("");
@@ -73,7 +74,7 @@ function PetView() {
       await createEntity("pet_event", { pet: PET_NAME, type: q.type, at: new Date().toISOString(), note: q.note });
       setFlash(`${q.label.toLowerCase()}, noted`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(null);
     }
@@ -104,7 +105,7 @@ function PetView() {
           </div>
           <div className="meta">
             {f.cost != null && <span>{f.cost} cost</span>}
-            {f.next_due && <span>next {fmtDate(f.next_due)}</span>}
+            {f.next_due && <span>next {fmtDue(f.next_due, { day: true })}</span>}
           </div>
         </div>
       </div>
@@ -196,7 +197,7 @@ function PetView() {
                       <span>
                         <span className="chip static">{f.type}</span> {f.note ?? ""}
                       </span>
-                      <span className="small">{f.next_due ? `${fmtDate(f.next_due)}, ${relative(f.next_due)}` : ""}</span>
+                      <span className="small">{f.next_due ? dueWhen(f.next_due) : ""}</span>
                     </div>
                   );
                 })}
@@ -231,6 +232,8 @@ const daysUntil = (iso: string) => {
   const n = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
   return n === 0 ? "today" : n === 1 ? "tomorrow" : n < 0 ? `${-n} days ago` : `in ${n} days`;
 };
+/** When a next due falls, "Nov 17, tomorrow": a date alone is that local day and counts whole days; a moment counts down. */
+const dueWhen = (due: string) => `${fmtDue(due, { day: true })}, ${isDateOnly(due) ? daysUntil(parseDue(due).toISOString()) : relative(due)}`;
 const cycleWords = (d: number) => (d % 7 === 0 ? (d === 7 ? "every week" : `every ${d / 7} weeks`) : `every ${d} days`);
 
 /**
@@ -253,7 +256,7 @@ function CustodyCard({ now, legacy, onFlash, onError }: {
       await createEntity("pet_event", { pet: PET_NAME, type: "custody", at, with: withMe ? "me" : "other", cycle_days: cycle, next_due: nextHandoffFrom(at, cycle), note: withMe ? "Picked up" : "Dropped off at the other home" });
       onFlash(withMe ? `${PET_NAME} is with you` : `${PET_NAME} is at the other home`);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(plainError(e));
     } finally {
       setBusy(false);
     }

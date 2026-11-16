@@ -6,14 +6,15 @@ const SKIP = new Set(["attachments", "embedding", "fts", "suggested_tags_dismiss
 /** Fields that read best first, when a kind has them. */
 const LEAD = ["title", "name", "text", "type", "value", "unit", "status", "at", "due", "start", "end", "host", "company", "role", "year", "rating"];
 
-function cell(v: unknown): string {
+export function cell(v: unknown): string {
   if (v === null || v === undefined) return "";
   let s: string;
   if (Array.isArray(v)) s = v.map((x) => (x !== null && typeof x === "object" ? JSON.stringify(x) : String(x))).join("; ");
   else if (typeof v === "object") s = JSON.stringify(v);
   else s = String(v);
   // A spreadsheet runs a cell that starts with = + @ (or - before a non-number) as a formula; a leading ' keeps it text.
-  if (typeof v === "string" && /^(?:[=+@\t\r]|-(?![\d.]))/.test(s)) s = "'" + s;
+  // Lists too, once joined: note tags from a mirrored file ("=1+1") went out raw.
+  if (typeof v !== "number" && /^(?:[=+@\t\r]|-(?![\d.]))/.test(s)) s = "'" + s;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

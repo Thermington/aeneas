@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import { engine, type NotifyEvent } from "../sync/engine";
 import { db } from "../sync/db";
@@ -58,7 +59,7 @@ export function ActivityBanner() {
       await stopActivity(check.value, SOURCE);
       setCheck(null);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -110,6 +111,35 @@ export function SensorBanner() {
         Sensors
       </button>
       <button className="small" onClick={() => setN(null)} aria-label="Dismiss the sensor alert">
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Disk banner: a `notify` of kind `disk` says the disk with the hub's data is almost full (once, then once a day while
+ * it stays low). Every hub sends it, whatever modules are on: a full disk stops the hub saving anything.
+ */
+export function DiskBanner() {
+  const [n, setN] = useState<NotifyEvent | null>(null);
+  useEffect(
+    () =>
+      engine.onNotify((ev: NotifyEvent) => {
+        if (ev.kind !== "disk") return;
+        setN(ev);
+        void notify("Hub disk", ev.title);
+      }),
+    [],
+  );
+  useEscape(useCallback(() => setN(null), []));
+  if (!n) return null;
+  return (
+    <div className="banner sensor" role="status">
+      <div className="grow">
+        <strong>{n.title}</strong>
+      </div>
+      <button className="small" onClick={() => setN(null)} aria-label="Dismiss the disk alert">
         Dismiss
       </button>
     </div>
@@ -228,7 +258,7 @@ export function MonitorBanner() {
       await engine.absorb([out]).catch(() => undefined);
       drop(n.name);
     } catch (e) {
-      setErrs((x) => ({ ...x, [n.name]: e instanceof Error ? e.message : String(e) }));
+      setErrs((x) => ({ ...x, [n.name]: plainError(e) }));
     } finally {
       setBusy("");
     }

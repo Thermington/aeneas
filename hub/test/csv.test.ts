@@ -38,3 +38,10 @@ test("csv: GET /export/csv/:kind downloads one kind with field filters, oldest f
     assert.equal((await t.api("/export/csv/nonsense")).status, 400);
   } finally { t.cleanup(); }
 });
+
+test("csv: a list whose first value starts like a formula is kept as text too", async () => {
+  const { cell } = await import("../src/csv.js");
+  assert.equal(cell(["=1+1", "b"]), "'=1+1; b");
+  assert.equal(cell(-5), "-5");
+  assert.equal(cell("-x"), "'-x");
+});

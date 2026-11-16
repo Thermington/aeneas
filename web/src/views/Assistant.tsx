@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type ChatMsg, type ChatSession } from "../sync/db";
@@ -7,7 +8,7 @@ import { uuid } from "../sync/edits";
 import { useEntities } from "../sync/hooks";
 import { copyText, patchEntity, refetchAll } from "../sync/memory";
 import { Markdown } from "../components/Markdown";
-import { go } from "../lib/router";
+import { go, replace } from "../lib/router";
 import { fmtDateTime } from "../lib/time";
 import { useDictation } from "../lib/useDictation";
 import { DictationNotice } from "../components/DictationNotice";
@@ -17,6 +18,9 @@ import { showKeyboardHints } from "../lib/keyboardHints";
 import { NO_LOCAL_VOICE, localVoiceAvailable, setSpeakVoiceReplies, speak, speakVoiceReplies, speechSupported, stopSpeaking, useSpeaking } from "../lib/speech";
 import { deriveHosts, detectHost, splitPreflight, type LedgerF, type SessionClose } from "../lib/memory";
 import type { Entity } from "@everythingapp/shared";
+import { currentLedger } from "../lib/ledger";
+import { chatsGone } from "../lib/chats";
+import { ASSISTANT_DRAFT_KEY } from "../lib/reference";
 
 type ChatMeta = { reply: string; model: string; backend: string; redactions: number; rules_applied: string[]; procedure_id?: string; mode?: string; actions?: { tool: string; ok: boolean; writes: boolean }[]; pending_action?: PendingAction; images?: string[] };
 
@@ -40,7 +44,8 @@ const toolLabel = (t: string) => TOOL_LABELS[t] ?? "Working";
 
 async function newSession(id = uuid(), title = "New chat", task_type: ChatSession["task_type"] = "auto"): Promise<ChatSession> {
   const now = new Date().toISOString();
-  const s: ChatSession = { id, title, task_type, allow_cloud: false, messages: [], created_at: now, updated_at: now };
+  // Only on this device until the hub has it.
+  const s: ChatSession = { id, title, task_type, allow_cloud: false, messages: [], created_at: now, updated_at: now, on_hub: false };
   await db.sessions.put(s);
   return s;
 }
@@ -49,7 +54,7 @@ async function newSession(id = uuid(), title = "New chat", task_type: ChatSessio
 function fromHub(h: AiSession, prev?: ChatSession): ChatSession {
   return {
     id: h.session_id, title: h.title, task_type: (h.task_type as ChatSession["task_type"]) ?? "auto", allow_cloud: prev?.allow_cloud ?? false,
-    created_at: h.created_at, updated_at: h.last_at,
+    created_at: h.created_at, updated_at: h.last_at, on_hub: true,
     messages: h.messages.map((m) => ({ role: m.role, content: m.content, at: m.at ?? h.last_at, ...(m.images?.length ? { images: m.images } : {}), ...(m.actions?.length ? { actions: m.actions } : {}), ...(m.approval ? { approval: m.approval } : {}) })),
   };
 }
@@ -129,7 +134,7 @@ function LedgerLines({ ledger, field, label }: { ledger: Entity; field: "confirm
   const write = (next: string[]) =>
     patchEntity(ledger, { [field]: next })
       .then(() => setErr(""))
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+      .catch((e) => setErr(plainError(e)));
   return (
     <div>
       <strong>{label}</strong>
@@ -191,7 +196,7 @@ function CloseDialog({ session, hosts, projects, onClose }: { session: ChatSessi
       setResult(r);
       await refetchAll([r.runbook_id, r.journal_id, ...(r.journal_ids ?? []), ...(r.snippet_ids ?? [])]);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -396,11 +401,12 @@ export function Assistant({ id }: { id?: string }) {
       await db.transaction("rw", db.sessions, async () => {
         for (const r of remote) {
           const local = await db.sessions.get(r.session_id);
-          if (!local) await db.sessions.put({ id: r.session_id, title: r.title, task_type: "auto", allow_cloud: false, messages: [], created_at: r.created_at, updated_at: r.last_at });
-          else if (local.updated_at < r.last_at || local.title !== r.title) await db.sessions.update(r.session_id, { title: r.title, updated_at: r.last_at });
+          if (!local) await db.sessions.put({ id: r.session_id, title: r.title, task_type: "auto", allow_cloud: false, messages: [], created_at: r.created_at, updated_at: r.last_at, on_hub: true });
+          else if (local.updated_at < r.last_at || local.title !== r.title) await db.sessions.update(r.session_id, { title: r.title, updated_at: r.last_at, on_hub: true });
+          else if (!local.on_hub) await db.sessions.update(r.session_id, { on_hub: true });
         }
-        // A chat deleted on another device goes here too; never-sent local drafts stay.
-        for (const l of await db.sessions.toArray()) if (!ids.has(l.id) && l.messages.length && !inFlight.has(l.id)) await db.sessions.delete(l.id);
+        // A chat deleted on another device goes here too. One the hub never had stays, with what was typed in it.
+        await db.sessions.bulkDelete(chatsGone(await db.sessions.toArray(), ids, inFlight));
       });
     } catch { /* offline: keep the cached list */ }
   };
@@ -430,16 +436,29 @@ export function Assistant({ id }: { id?: string }) {
   useEffect(() => { void syncList(); const f = () => void syncList(); window.addEventListener("focus", f); return () => window.removeEventListener("focus", f); }, [engine.client]);
   // The newest conversation, not a capture's filing thread: a question typed there would join that capture.
   const latest = sessions.find((s) => !s.id.startsWith("capture-"));
+  // Assistant alone opens the newest chat in its place, so Back leaves the Assistant instead of coming back here.
   useEffect(() => {
     if (id || !loaded) return;
-    if (latest) go(`/assistant/${latest.id}`);
-    else void create();
+    if (latest) replace(`/assistant/${latest.id}`);
+    else void create(true);
   }, [id, latest?.id, !!loaded]);
   useEffect(() => { setClosing(false); setPending(null); setImages([]); if (id) void load(id); }, [id]);
+  // A chat another screen opened with its first message typed in (Reference's Ask about this page): the text waits in
+  // the box for the question to be finished, and is used once.
+  useEffect(() => {
+    if (!id) return;
+    try {
+      const raw = sessionStorage.getItem(ASSISTANT_DRAFT_KEY);
+      const d = raw ? (JSON.parse(raw) as { session?: string; text?: string }) : null;
+      if (!d || d.session !== id || typeof d.text !== "string") return;
+      sessionStorage.removeItem(ASSISTANT_DRAFT_KEY);
+      setInput(d.text);
+    } catch { /* storage unavailable, as in a private window */ }
+  }, [id]);
 
-  const create = async () => {
+  const create = async (instead = false) => {
     const s = await newSession();
-    go(`/assistant/${s.id}`);
+    (instead ? replace : go)(`/assistant/${s.id}`);
   };
 
   const patch = async (p: Partial<ChatSession>) => {
@@ -452,7 +471,7 @@ export function Assistant({ id }: { id?: string }) {
     try {
       const encoded = await Promise.all(picked.map(encodeImage));
       setImages((cur) => [...cur, ...encoded].slice(0, 4));
-    } catch (e) { setErr(`Could not read the image: ${e instanceof Error ? e.message : String(e)}`); }
+    } catch (e) { setErr(`Could not read the image: ${plainError(e)}`); }
   };
 
   /** One streamed turn: a message (with images) or an approval. The hub stores both sides. */
@@ -522,7 +541,7 @@ export function Assistant({ id }: { id?: string }) {
       if (spoken && speakReplies && reply) speak(`${session.id}:${session.messages.length + 1}`, reply);
       if (m?.procedure_id) await refetchAll([m.procedure_id]);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
       void load(session.id);
     } finally {
       setPartial("");
@@ -547,12 +566,14 @@ export function Assistant({ id }: { id?: string }) {
 
   const approve = (a: PendingAction) => run({ approve_action_id: a.id }, { role: "user", content: "Yes, run it.", at: new Date().toISOString(), approval: { action_id: a.id, host: a.host, command: a.command, status: "running" } });
   const decline = async (a: PendingAction) => {
-    try { await engine.client?.cancelAction(a.id); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    try { await engine.client?.cancelAction(a.id); } catch (e) { setErr(plainError(e)); }
     setPending(null);
     if (session) void load(session.id);
   };
 
-  const ledgerEntity = ledgers[0];
+  // A chat can have several ledgers (one closes when it worked, a new one opens if it breaks again): the open one, else
+  // the newest. The first by id could be a closed one, and edits to it missed the ledger the hub was using.
+  const ledgerEntity = currentLedger(ledgers);
   const ledger = ledgerEntity?.fields as LedgerF | undefined;
   const showLedger = !!ledgerEntity || session?.task_type === "troubleshoot";
 
@@ -579,7 +600,7 @@ export function Assistant({ id }: { id?: string }) {
                 </optgroup>
               )}
             </select>
-            <button className="small" onClick={create} disabled={busy}>
+            <button className="small" onClick={() => void create()} disabled={busy}>
               New chat
             </button>
             {/* Erasing every chat sits two menus deep and asks again, well away from erasing the open one. */}
@@ -596,8 +617,8 @@ export function Assistant({ id }: { id?: string }) {
                         try {
                           await engine.client?.wipeAiSessions();
                           await db.sessions.clear();
-                          go("/assistant");
-                        } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+                          replace("/assistant");
+                        } catch (e) { setErr(plainError(e)); }
                       })();
                     }}
                   >
@@ -614,7 +635,8 @@ export function Assistant({ id }: { id?: string }) {
                   <input type="checkbox" checked={session.allow_cloud} onChange={(e) => patch({ allow_cloud: e.target.checked })} /> use Claude
                 </label>
               )}
-              {session.messages.length > 0 && !closing && (
+              {/* Fix notes, the change journal and snippets are the Homelab module's: with it off, nothing to wrap up into. */}
+              {on("homelab") && session.messages.length > 0 && !closing && (
                 <button className="small" onClick={() => setClosing(true)} title="Write fix notes, the change log and snippets from this chat">
                   Wrap up
                 </button>
@@ -628,7 +650,7 @@ export function Assistant({ id }: { id?: string }) {
                     void (async () => {
                       try { if (session.messages.length) await engine.client?.deleteAiSession(session.id); } catch { /* not on the hub yet */ }
                       await db.sessions.delete(session.id);
-                      go("/assistant");
+                      replace("/assistant");
                     })();
                   }}
                 >
@@ -640,10 +662,10 @@ export function Assistant({ id }: { id?: string }) {
         </div>
         {!session && (
           <div className="empty">
-            No chat. <button onClick={create}>New chat</button>
+            No chat. <button onClick={() => void create()}>New chat</button>
           </div>
         )}
-        {session && closing && <CloseDialog session={session} hosts={hostNames} projects={projects} onClose={() => setClosing(false)} />}
+        {session && closing && on("homelab") && <CloseDialog session={session} hosts={hostNames} projects={projects} onClose={() => setClosing(false)} />}
         {session && (
           <div className="chat">
             {session.messages.map((m, i) => (

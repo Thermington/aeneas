@@ -119,23 +119,27 @@ function getWorker(): Worker {
   if (worker) return worker;
   const req = createRequire(import.meta.url);
   const modelDir = path.join(path.dirname(req.resolve("@spotify/basic-pitch/package.json")), "model");
-  worker = new Worker(new URL("./hum-worker.mjs", import.meta.url), { workerData: { modelDir } });
-  worker.unref();
-  worker.on("message", (m: { id: number; track?: PitchTrack; error?: string }) => {
+  const w = new Worker(new URL("./hum-worker.mjs", import.meta.url), { workerData: { modelDir } });
+  worker = w;
+  w.unref();
+  w.on("message", (m: { id: number; track?: PitchTrack; error?: string }) => {
     const p = pending.get(m.id);
     if (!p) return;
     pending.delete(m.id);
     if (m.error || !m.track) p.reject(new Error(m.error ?? "no pitch line")); else p.resolve(m.track);
     if (!pending.size) idleTimer = setTimeout(stopHumWorker, 10 * 60_000).unref();
   });
-  worker.on("error", (e) => { for (const p of pending.values()) p.reject(e); pending.clear(); worker = null; });
+  // Only for this worker: one stopped after a hum took too long ends after the next worker has started, and it used to
+  // fail the next worker's hum too.
+  w.on("error", (e) => { if (worker !== w) return; for (const p of pending.values()) p.reject(e); pending.clear(); worker = null; });
   // A worker that ends without an error event (killed for memory) would leave its jobs waiting for good.
-  worker.on("exit", (code) => {
+  w.on("exit", (code) => {
+    if (worker !== w) return;
     worker = null;
     for (const p of pending.values()) p.reject(new Error(`the listener stopped (exit ${code})`));
     pending.clear();
   });
-  return worker;
+  return w;
 }
 
 export function stopHumWorker(): void {
@@ -149,17 +153,36 @@ export function stopHumWorker(): void {
  * model ever does (about 1.2 times the recording's length on a recent processor) fails instead of leaving the idea listening.
  */
 export const basicPitch: Transcriber = (samples) => new Promise((resolve, reject) => {
-  const id = ++nextJob;
-  const timer = setTimeout(() => {
-    if (!pending.delete(id)) return;
-    reject(new Error("the listener took too long"));
-    stopHumWorker();
-  }, 60_000 + (samples.length / HUM_RATE) * 5_000);
-  timer.unref();
-  pending.set(id, { resolve: (t) => { clearTimeout(timer); resolve(t); }, reject: (e) => { clearTimeout(timer); reject(e); } });
-  const copy = new Float32Array(samples);
-  getWorker().postMessage({ id, samples: copy }, [copy.buffer]);
+  // Hums go to the worker one at a time, so each one's time limit starts when the worker starts on it: counted from
+  // when it was sent, the sixth of six 30-second hums that came together ran out of time waiting, and its timeout
+  // stopped the worker, failing every hum behind it.
+  humQueue.push(() => {
+    const id = ++nextJob;
+    const next = () => { humBusy = false; runNextHum(); };
+    const timer = setTimeout(() => {
+      if (!pending.delete(id)) return;
+      reject(new Error("the listener took too long"));
+      // Only this hum fails: the worker, which may be stuck on it, is stopped, and the next hum starts a new one.
+      stopHumWorker();
+      next();
+    }, 60_000 + (samples.length / HUM_RATE) * 5_000);
+    timer.unref();
+    pending.set(id, { resolve: (t) => { clearTimeout(timer); resolve(t); next(); }, reject: (e) => { clearTimeout(timer); reject(e); next(); } });
+    const copy = new Float32Array(samples);
+    getWorker().postMessage({ id, samples: copy }, [copy.buffer]);
+  });
+  runNextHum();
 });
+
+const humQueue: (() => void)[] = [];
+let humBusy = false;
+function runNextHum(): void {
+  if (humBusy) return;
+  const start = humQueue.shift();
+  if (!start) return;
+  humBusy = true;
+  start();
+}
 
 const median = (a: number[]) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : NaN; };
 

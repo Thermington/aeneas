@@ -161,6 +161,9 @@ public final class CalendarImporter: ObservableObject {
         repeat {
             rerun = false
             let engine = await provider()
+            // Only against a copy that holds the hub's events: on an emptied one (a removal, another hub) the app's own
+            // events in a work calendar were taken for meetings and imported a second time.
+            guard engine.hasHubCopy else { break }
             // The work space can be turned off (and erased) from any device; the last answer is kept for offline runs.
             if let c = engine.client, let s = try? await c.workSpace() { UserDefaults.standard.set(!s.enabled, forKey: Self.workOffKey) }
             if UserDefaults.standard.bool(forKey: Self.workOffKey) {
@@ -196,10 +199,15 @@ public final class CalendarImporter: ObservableObject {
             guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }
             let work = Task { @MainActor in
                 let importer = CalendarImporter.shared
-                await importer.runIfReady(reason: "background")
-                await RemindersSync.shared.runIfReady(reason: "background")
-                await EventMirrorSync.shared.runIfReady(reason: "background")
-                if let engine = await importer.engineProvider?() { await engine.sync() }
+                // The hub's changes first: the copies used to run before this device had pulled, so an event made in
+                // the app was not here yet and the Mac's copy of it in Apple Calendar came in as a second event.
+                if let engine = await importer.engineProvider?() {
+                    await engine.refreshing {
+                        await importer.runIfReady(reason: "background")
+                        await RemindersSync.shared.runIfReady(reason: "background")
+                        await EventMirrorSync.shared.runIfReady(reason: "background")
+                    }
+                }
                 refresh.setTaskCompleted(success: true)
             }
             refresh.expirationHandler = { work.cancel() }

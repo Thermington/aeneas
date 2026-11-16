@@ -5,6 +5,7 @@ import { makeHub } from "./helpers.js";
 import { scripted } from "./ai-helpers.js";
 import { setBackendOverride } from "../src/ai/backends.js";
 import { collectGenerated } from "../src/gallery.js";
+import { fileCapture } from "../src/capture-filer.js";
 import { imageWorkers } from "../src/config.js";
 import { availableTools } from "../src/ai/tools.js";
 
@@ -196,4 +197,17 @@ test("phone photos: without photo access the tool says how to turn it on", async
     const toolMsg = b.seen.at(-1)!.find((m) => m.role === "tool");
     assert.match(toolMsg!.content, /Full photo library access/);
   } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("capture filing: a photo goes into Saved pictures only while Images is on, and reaches the model either way", async () => {
+  for (const imagesOn of [true, false]) {
+    const t = makeHub();
+    try {
+      if (!imagesOn) assert.equal((await t.api("/modules", { method: "PUT", json: { images: false } })).status, 200);
+      const c = t.hub.store.create("capture", { text: "Look at this part", source: "iphone", attachments: [{ name: "part.png", mime: "image/png", bytes_b64: png(8, 8).toString("base64") }] } as never);
+      await fileCapture(t.hub, c.id);
+      assert.equal(t.hub.store.list({ kind: "image" }).length, imagesOn ? 1 : 0, imagesOn ? "kept in the gallery" : "not filed into a module that is off");
+      assert.equal(t.hub.store.get(c.id)!.fields.filing, "done");
+    } finally { t.cleanup(); }
+  }
 });

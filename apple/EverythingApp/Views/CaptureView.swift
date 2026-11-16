@@ -52,6 +52,7 @@ struct CaptureView: View {
                     if let a = attachment {
                         Label(a.name, systemImage: "photo").font(.subheadline).lineLimit(1)
                         Button { attachment = nil; photoItem = nil } label: { Image(systemName: "xmark.circle") }.buttonStyle(.borderless)
+                            .accessibilityLabel("Remove photo")
                     } else {
                         PhotosPicker(selection: $photoItem, matching: .images) { Label("Photo", systemImage: "photo") }
                             .buttonStyle(.bordered)
@@ -91,7 +92,8 @@ struct CaptureView: View {
             HStack(spacing: 10) {
                 BigButton(title: "Save", symbol: "wand.and.stars", prominent: true) { save() }
             }
-            .disabled(saving || text.trimmingCharacters(in: .whitespaces).isEmpty)
+            // While dictating, the words are not in the field yet: Save takes them too.
+            .disabled(saving || (text.trimmingCharacters(in: .whitespaces).isEmpty && !dictation.listening))
             .padding(.horizontal)
             .padding(.vertical, 8)
             .background(.bar)
@@ -237,15 +239,17 @@ struct CaptureView: View {
     }
 
     private func placeTranscript() {
-        // The last words arrive just after stopping: they are placed once they are in.
-        Task { @MainActor in
-            await dictation.finished()
-            let t = dictation.transcript.trimmingCharacters(in: .whitespaces)
-            guard !t.isEmpty else { return }
-            text = text.isEmpty ? t : text + (text.hasSuffix(" ") || text.hasSuffix("\n") ? "" : " ") + t
-            usedVoice = true
-            dictation.transcript = ""
-        }
+        Task { @MainActor in await placeWords() }
+    }
+
+    /// The last words arrive just after stopping: they are placed once they are in.
+    private func placeWords() async {
+        await dictation.finished()
+        let t = dictation.transcript.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        text = text.isEmpty ? t : text + (text.hasSuffix(" ") || text.hasSuffix("\n") ? "" : " ") + t
+        usedVoice = true
+        dictation.transcript = ""
     }
 
     private func consumePrefill() {
@@ -267,8 +271,19 @@ struct CaptureView: View {
 
     /// Every capture is sorted: into the day's diary, then filed by the assistant. Nothing waits to be sorted by hand.
     private func save() {
-        if dictation.listening { dictation.stop(); placeTranscript(); return }
         guard !saving else { return }
+        if dictation.listening {
+            // One tap while dictating: listening ends, its last words join the text, and the whole text is saved. It
+            // took a second tap.
+            dictation.stop()
+            saving = true
+            Task { @MainActor in
+                await placeWords()
+                saving = false
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { save() }
+            }
+            return
+        }
         let t = text
         let sentAttachment = attachment
         saving = true

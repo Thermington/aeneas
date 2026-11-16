@@ -150,8 +150,12 @@ test("gate: owner-only model changes, model list, private status, and background
     assert.equal((await call("jamie", "/api/version")).status, 200);
 
     const bg = call("robin", "/api/chat", { model: "qwen:27b", messages: [] }, "background");
-    await new Promise((r) => setTimeout(r, 50));
-    const status: any = await (await call("jamie", "/gate/status")).json();
+    // Wait until the gate runs it, not a fixed 50 ms (a slow test machine had not started it yet).
+    let status: any = null;
+    for (const until = Date.now() + 5_000; Date.now() < until; await new Promise((r) => setTimeout(r, 10))) {
+      status = await (await call("jamie", "/gate/status")).json();
+      if (status.running.length) break;
+    }
     assert.equal(status.running.length, 1);
     assert.equal(status.running[0].person, undefined, "another person's status names nobody");
     assert.equal(status.running[0].mine, false);

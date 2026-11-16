@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -114,7 +115,7 @@ export function Food() {
       setPick(r);
       setExcluded(exclude);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -135,7 +136,7 @@ export function Food() {
       await c.foodPicked(p.id);
       setDone(String(p.fields.name));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }

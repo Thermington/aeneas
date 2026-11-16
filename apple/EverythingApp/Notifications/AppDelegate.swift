@@ -13,6 +13,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Hums from the Watch come as file transfers and go on to the hub from here.
         WatchLink.shared.onHumReceived = { WatchHumRelay.shared.kick() }
         WatchLink.shared.onUnheardAnswer = { q, a, session in AnswerNotice.post(question: q, answer: a, session: session) }
+        // Each Watch request goes the way the iPhone's own do (the home network while the internet is down), with the
+        // Watch's own key. Until the engine has its routes (the app woken in the background for the Watch), and in
+        // sample mode, it goes to the paired address as before.
+        let routes = AppModel.shared.engine.routes
+        WatchLink.shared.transportProvider = { key in
+            if routes.hasRoutes, !SharedConfig.shared.sampleMode { return RoutedTransport(chooser: routes, key: key) }
+            return HTTPTransport.make(urlString: SharedConfig.shared.hubURL, token: key, pin: SharedConfig.shared.hubPin)
+        }
         WatchLink.shared.activate()
         // Work calendar import: the background refresh task must be registered before launch ends.
         CalendarImporter.shared.engineProvider = { @MainActor in
@@ -82,20 +90,21 @@ final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
             let name = info["activity_name"] as? String ?? ""
             let hours = info["activity_hours"] as? Double ?? 3
             let action = response.actionIdentifier
-            _ = await MainActor.run {
-                Task { @MainActor in
-                    let model = AppModel.shared
-                    await model.ensureStarted()
-                    switch action {
-                    case ActivityCheckin.stillAction: break
-                    case ActivityCheckin.stopAction:
-                        model.activityCheckin = ActivityCheckin(logId: logId, name: name, hours: hours)
-                        await model.answerCheckin(stop: true)
-                    default:
-                        model.activityCheckin = ActivityCheckin(logId: logId, name: name, hours: hours)
-                    }
+            // Awaited, as Acknowledge is: an app started for this action is suspended once the handler returns, and
+            // Stop started in a task of its own was lost then.
+            await Task { @MainActor in
+                let model = AppModel.shared
+                await model.ensureStarted()
+                switch action {
+                case ActivityCheckin.stillAction: break
+                case ActivityCheckin.stopAction:
+                    model.activityCheckin = ActivityCheckin(logId: logId, name: name, hours: hours)
+                    await model.answerCheckin(stop: true)
+                    await Self.sendNow(model.engine)
+                default:
+                    model.activityCheckin = ActivityCheckin(logId: logId, name: name, hours: hours)
                 }
-            }
+            }.value
             return
         }
         // A monitor that went down: Acknowledge on the alert, without opening the app. A tap falls through to its Ops link.
@@ -144,30 +153,39 @@ final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
         guard let id = info["reminder_id"] as? String else { return }
         let friction = Friction(rawValue: info["friction"] as? String ?? "none") ?? .none
         let typed = (response as? UNTextInputNotificationResponse)?.userText
-        await MainActor.run {
-            Task { @MainActor in
-                let model = AppModel.shared
-                await model.ensureStarted()
-                switch response.actionIdentifier {
-                case ReminderPlanner.ackAction:
-                    await model.engine.ack(id)
-                case ReminderPlanner.snoozeAction:
-                    if friction == .none {
-                        _ = await model.engine.snooze(id, minutes: 10, reason: nil)
-                    } else {
-                        // The snooze sheet alone: opening the item too asked for a second sheet at the same moment, and
-                        // only one of the two showed.
-                        model.pendingSnoozeReminderId = id
-                    }
-                case ReminderPlanner.snoozeReasonAction:
-                    // The reason typed into the notification; an empty one opens the snooze sheet instead.
-                    if await !model.engine.snooze(id, minutes: 10, reason: typed) {
-                        model.pendingSnoozeReminderId = id
-                    }
-                default:
-                    model.open(itemId: id)
+        let action = response.actionIdentifier
+        // Awaited, as Acknowledge is: Done and a typed snooze reason started in a task of their own were lost when
+        // the app had been started for them and was suspended as the handler returned.
+        await Task { @MainActor in
+            let model = AppModel.shared
+            await model.ensureStarted()
+            switch action {
+            case ReminderPlanner.ackAction:
+                await model.engine.ack(id)
+            case ReminderPlanner.snoozeAction:
+                if friction == .none {
+                    _ = await model.engine.snooze(id, minutes: 10, reason: nil)
+                } else {
+                    // The snooze sheet alone: opening the item too asked for a second sheet at the same moment, and
+                    // only one of the two showed.
+                    model.pendingSnoozeReminderId = id
                 }
+            case ReminderPlanner.snoozeReasonAction:
+                // The reason typed into the notification; an empty one opens the snooze sheet instead.
+                if await !model.engine.snooze(id, minutes: 10, reason: typed) {
+                    model.pendingSnoozeReminderId = id
+                }
+            default:
+                model.open(itemId: id)
             }
-        }
+            await Self.sendNow(model.engine)
+        }.value
+    }
+
+    /// An edit made on this device for a notification action goes to the hub before the handler returns, while the
+    /// hub answers. Offline it waits in the queue for the next start, which sends it.
+    @MainActor
+    static func sendNow(_ engine: SyncEngine) async {
+        if engine.status == .online, engine.outboxCount > 0 { await engine.sync() }
     }
 }

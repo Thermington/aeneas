@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { engine } from "./engine";
 import { HubClient, HubError } from "./api";
@@ -38,13 +39,13 @@ export function useHubPoll<T>(load: (c: HubClient) => Promise<T>, fallback: (() 
       next = { data, error: null, unavailable: false, source: "hub", at: new Date(), busy: false };
     } catch (e) {
       const unavailable = e instanceof HubError && e.status === 404;
-      const message = unavailable ? "not available on this hub" : e instanceof Error ? e.message : String(e);
+      const message = unavailable ? "not available on this hub" : plainError(e);
       if (fallback) {
         try {
           const data = await fallback();
           next = { data, error: message, unavailable, source: "local", at: new Date(), busy: false };
         } catch (e2) {
-          next = { data: null, error: e2 instanceof Error ? e2.message : String(e2), unavailable, source: null, at: new Date(), busy: false };
+          next = { data: null, error: plainError(e2), unavailable, source: null, at: new Date(), busy: false };
         }
       } else {
         next = { data: null, error: message, unavailable, source: null, at: new Date(), busy: false };

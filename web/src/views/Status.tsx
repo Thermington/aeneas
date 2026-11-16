@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import { engine } from "../sync/engine";
 import { HubError, type HubStatus, type ProofDay, type ProofRun } from "../sync/api";
@@ -6,7 +7,7 @@ import { taskAlertAt } from "@everythingapp/shared";
 import { META } from "../sync/db";
 import { useMeta, useSyncState } from "../sync/hooks";
 import { fmtBytes, fmtDateTime, fmtDuration, hoursSince, relative } from "../lib/time";
-import { linkFor } from "../lib/links";
+import { kindLabel, linkFor, platformLabel } from "../lib/links";
 
 export const BACKUP_WARN_HOURS = 30;
 
@@ -14,7 +15,7 @@ type Loaded<T> = { data: T | null; error: string | null; unavailable: boolean };
 
 function describeError(e: unknown): { error: string; unavailable: boolean } {
   if (e instanceof HubError && e.status === 404) return { error: "not available on this hub", unavailable: true };
-  return { error: e instanceof Error ? e.message : String(e), unavailable: false };
+  return { error: plainError(e), unavailable: false };
 }
 
 /** Loads both status routes; refreshes every 60 s while the tab is visible. */
@@ -200,7 +201,7 @@ export function Status() {
                     .sort(([, a], [, b]) => b - a)
                     .map(([k, n]) => (
                       <span key={k} className="chip static">
-                        {k} {n}
+                        {kindLabel(k)} {n}
                       </span>
                     ))}
                 </span>
@@ -218,7 +219,7 @@ export function Status() {
                 .map((d) => (
                   <li key={d.id} className="row between">
                     <span>
-                      {d.name} <span className="muted small">{d.platform}</span>
+                      {d.name} <span className="muted small">{platformLabel(d.platform)}</span>
                       {d.id === deviceId && <span className="muted small"> (this device)</span>}
                     </span>
                     <span className="muted small" title={fmtDateTime(d.last_seen)}>
@@ -298,7 +299,7 @@ export function Status() {
               <li key={`${f.kind}:${f.id}`} className="item">
                 <div className="body">
                   <div className="t">
-                    <span className="muted small">{f.kind} </span>
+                    <span className="muted small">{kindLabel(f.kind)} </span>
                     <a href={linkFor(f.kind, f.id)}>{f.title || "(untitled)"}</a>
                   </div>
                   {f.detail && <div className="meta">{f.detail}</div>}

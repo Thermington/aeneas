@@ -5,6 +5,7 @@ import type { Store } from "./store.js";
 import { StoreError } from "./store.js";
 import { dayKey } from "./metrics.js";
 import { linkedTask, syncLinkedTask } from "./reminders.js";
+import { aboutOwner } from "./ai/prompt.js";
 
 /**
  * Module 7, life admin: checklists (templates are copied, never ticked), the job pipeline with one linked
@@ -162,7 +163,8 @@ export async function draftCoverLetter(hub: Hub, id: string, body: { job_text?: 
   const jobText = typeof body.job_text === "string" ? body.job_text.trim().slice(0, 20000) : "";
   const tone = typeof body.tone === "string" && body.tone.trim() ? body.tone.trim().slice(0, 200) : "plain, direct and specific";
   const facts = hub.store.list({ kind: "fact", limit: 100000 })
-    .filter((f) => f.space !== "work" && (f.fields.category === "identity" || f.fields.category === "history"))
+    // The owner's own identity and history: a fact about someone else (their employer, their degree) is not the owner's.
+    .filter((f) => f.space !== "work" && aboutOwner(f) && (f.fields.category === "identity" || f.fields.category === "history"))
     .sort((a, b) => String(a.fields.category).localeCompare(String(b.fields.category)) || String(a.fields.key).localeCompare(String(b.fields.key)));
   const styleRules = hub.store.list({ kind: "rule", limit: 100000 }).filter((r) => r.fields.active !== false && (r.fields.enforce === "both" || r.fields.enforce === "filter"));
   const company = String(app.fields.company);

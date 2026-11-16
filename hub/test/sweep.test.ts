@@ -59,3 +59,23 @@ test("sweep: a note in a project's folder belongs to that project", async () => 
     assert.equal(runSweep(t.hub).projects_linked, 0, "already linked notes are left alone");
   } finally { t.cleanup(); }
 });
+
+test("sweep: reads every note once for the whole run, not once per note, with the same links and tags", async () => {
+  const { runSweep } = await import("../src/sweep.js");
+  const t = makeHub();
+  try {
+    const s = t.hub.store;
+    s.create("note", { title: "Proxmox certs", body: "renewing", path: "Homelab/Proxmox certs.md", tags: ["homelab"] } as never);
+    for (let i = 0; i < 40; i++) s.create("note", { title: `Note number ${i}`, body: `About Proxmox certs and homelab ${i}`, path: `Inbox/Note number ${i}.md` } as never);
+    let lists = 0;
+    const list = s.list.bind(s);
+    s.list = ((opts: Parameters<typeof s.list>[0]) => { if (opts?.kind === "note") lists++; return list(opts); }) as typeof s.list;
+    const r = runSweep(t.hub);
+    s.list = list;
+    assert.equal(r.notes, 41);
+    assert.ok(lists <= 3, `notes were listed ${lists} times for 41 notes`);
+    const n = s.list({ kind: "note" }).find((x) => x.fields.title === "Note number 7")!;
+    assert.ok((n.fields.links as string[]).includes("Proxmox certs"), "a title mention is still a link");
+    assert.deepEqual(n.fields.suggested_tags, ["homelab", "inbox"], "the vocabulary still suggests tags, and the folder");
+  } finally { t.cleanup(); }
+});

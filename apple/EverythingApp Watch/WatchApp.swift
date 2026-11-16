@@ -17,6 +17,12 @@ struct EverythingAppWatchApp: App {
                 .onOpenURL { model.handle(url: $0) }
         }
         .onChange(of: scenePhase) { _, p in if p == .active { Task { await model.start() } } }
+        // The iPhone's complication snapshot (or a hum's result) can wake the app in the background: the model's
+        // handlers are set up, then everything waiting comes in.
+        .backgroundTask(.watchConnectivity) {
+            await MainActor.run { _ = AppModel.shared }
+            await WatchLink.shared.receivePending()
+        }
     }
 }
 
@@ -123,6 +129,16 @@ final class AppModel: ObservableObject {
     /// Unknown or never fetched means on, so nothing disappears while the iPhone is away.
     func isOn(_ m: AppModule) -> Bool { modules.isOn(m) }
 
+    /// With Health off there is no health logging on the wrist, as on the iPhone, where activities, weight and the
+    /// other logs live under Health. The Log page stays for the pet while Pet is on.
+    func shows(_ p: WatchPage) -> Bool {
+        switch p {
+        case .log: return isOn(.health) || isOn(.pet)
+        case .activity, .weight: return isOn(.health)
+        case .voice, .now, .today: return true
+        }
+    }
+
     /// The Watch has no /live stream, so it asks on launch, on return and when the iPhone comes back in reach.
     func refreshModules() async {
         guard let c = engine.client, let list = try? await c.modules() else { return }
@@ -133,6 +149,7 @@ final class AppModel: ObservableObject {
         let before = modules
         if list != modules { modules = list }
         engine.config.modules = list
+        if !shows(page) { page = .voice }
         removed = engine.deviceRemoved
         let firstThisLaunch = !modulesFetchedThisLaunch
         modulesFetchedThisLaunch = true
@@ -192,6 +209,7 @@ final class AppModel: ObservableObject {
         case "weight": page = .weight
         default: page = .voice
         }
+        if !shows(page) { page = .voice }
     }
 }
 
@@ -208,24 +226,27 @@ final class WatchNotificationHandler: NSObject, UNUserNotificationCenterDelegate
         let info = response.notification.request.content.userInfo
         let action = response.actionIdentifier
         let typed = (response as? UNTextInputNotificationResponse)?.userText
-        _ = await MainActor.run {
-            Task { @MainActor in
-                let model = AppModel.shared
-                await model.ensureStarted()
-                if let logId = info["activity_log_id"] as? String {
-                    let c = ActivityCheckin(logId: logId, name: info["activity_name"] as? String ?? "", hours: info["activity_hours"] as? Double ?? 3)
-                    switch action {
-                    case ActivityCheckin.stillAction: break
-                    case ActivityCheckin.stopAction: await model.answerCheckin(stop: true)
-                    default: model.activityCheckin = c; model.page = .activity
-                    }
-                } else if let id = info["reminder_id"] as? String {
-                    if action == ReminderPlanner.ackAction { await model.engine.ack(id) }
-                    else if action == ReminderPlanner.snoozeAction { _ = await model.engine.snooze(id, minutes: 10, reason: nil) }
-                    // The reason is dictated or written on the wrist.
-                    else if action == ReminderPlanner.snoozeReasonAction { _ = await model.engine.snooze(id, minutes: 10, reason: typed) }
+        // Awaited: an app started for this action is suspended once the handler returns, and Done, Stop or a snooze
+        // reason started in a task of its own was lost then.
+        await Task { @MainActor in
+            let model = AppModel.shared
+            await model.ensureStarted()
+            if let logId = info["activity_log_id"] as? String {
+                let c = ActivityCheckin(logId: logId, name: info["activity_name"] as? String ?? "", hours: info["activity_hours"] as? Double ?? 3)
+                switch action {
+                case ActivityCheckin.stillAction: break
+                case ActivityCheckin.stopAction: await model.answerCheckin(stop: true)
+                default: model.activityCheckin = c; if model.shows(.activity) { model.page = .activity }
                 }
+            } else if let id = info["reminder_id"] as? String {
+                if action == ReminderPlanner.ackAction { await model.engine.ack(id) }
+                else if action == ReminderPlanner.snoozeAction { _ = await model.engine.snooze(id, minutes: 10, reason: nil) }
+                // The reason is dictated or written on the wrist.
+                else if action == ReminderPlanner.snoozeReasonAction { _ = await model.engine.snooze(id, minutes: 10, reason: typed) }
             }
-        }
+            // An edit made here goes out through the iPhone before the handler returns, while it answers; otherwise it
+            // waits in the queue for the next sync.
+            if model.engine.status == .online, model.engine.outboxCount > 0 { await model.engine.sync() }
+        }.value
     }
 }

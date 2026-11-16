@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
@@ -102,7 +103,7 @@ export function Memory() {
     engine.client
       ?.aiMemory()
       .then((m) => alive && setSeen(m))
-      .catch((e) => alive && setSeenErr(e instanceof Error ? e.message : String(e)));
+      .catch((e) => alive && setSeenErr(plainError(e)));
     return () => {
       alive = false;
     };

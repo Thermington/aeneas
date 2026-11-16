@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Entity } from "@everythingapp/shared";
 import { HubClient } from "./api";
 import { engine } from "./engine";
-import { capture, CAPTURE_HUB_WAIT_MS } from "./actions";
+import { capture, CAPTURE_HUB_WAIT_MS, completeTask } from "./actions";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -92,5 +92,35 @@ describe("capture", () => {
     const here = await engine.db.entities.get(r.capture.id);
     expect(here?.fields).toMatchObject({ processed: true, filing: "done" });
     expect(here?.fields.sort).toBeUndefined();
+  });
+});
+
+describe("completeTask", () => {
+  beforeEach(async () => {
+    await engine.db.entities.clear();
+    await engine.db.outbox.clear();
+  });
+
+  function task(id: string, fields: Record<string, unknown>): Entity {
+    const at = "2026-11-10T08:00:00.000Z";
+    return { id, kind: "task", space: "personal", created_at: at, updated_at: at, deleted_at: null, fields, field_ts: Object.fromEntries(Object.keys(fields).map((k) => [k, at])) } as Entity;
+  }
+
+  it("a repeating task moves on to its next time instead of ending (the Windows widget's Done ended it)", async () => {
+    const t = task("6f1c2a52-6a5e-4c1e-9d43-1f1d2b3c4d5e", { title: "Take the pill", status: "next", order: 1, repeat: "every 1 days", remind_at: "2026-11-10T21:00:00.000Z" });
+    await engine.db.entities.put(t);
+    const after = await completeTask(t);
+    expect(after.fields.status).toBe("next");
+    expect(Date.parse(String(after.fields.remind_at))).toBeGreaterThan(Date.parse("2026-11-10T21:00:00.000Z"));
+    const [sent] = await engine.db.outbox.toArray();
+    expect(sent.patch.fields.status).toBeUndefined();
+  });
+
+  it("a task that does not repeat is done", async () => {
+    const t = task("7a2d3b63-7b6f-4d2f-8e54-2a2e3c4d5e6f", { title: "Buy a new bike seat", status: "next", order: 2 });
+    await engine.db.entities.put(t);
+    const after = await completeTask(t);
+    expect(after.fields).toMatchObject({ status: "done", snoozed_until: null });
+    expect(typeof after.fields.done_at).toBe("string");
   });
 });

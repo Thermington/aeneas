@@ -217,7 +217,7 @@ export function entityRoutes() {
 
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const logs_7d: Record<string, { at: string; value: number | string }[]> = {};
-    for (const l of hub.store.list({ kind: "log" })) {
+    for (const l of hub.store.listWhere("log", [{ key: "at", from: since }])) {
       const at = String(l.fields.at ?? "");
       if (at < since) continue;
       const type = String(l.fields.type ?? "custom");
@@ -225,7 +225,7 @@ export function entityRoutes() {
     }
     for (const arr of Object.values(logs_7d)) arr.sort((a, b) => a.at.localeCompare(b.at));
 
-    const captures_unprocessed = hub.store.list({ kind: "capture" }).filter((cp) => cp.fields.processed !== true).length;
+    const captures_unprocessed = hub.store.countWhere("capture", [{ key: "processed", is: false }]);
     const projects_active = hub.store.list({ kind: "project" }).filter((p) => p.fields.status === "active");
     return c.json({ now, next, reminders_today, logs_7d, captures_unprocessed, projects_active });
   });

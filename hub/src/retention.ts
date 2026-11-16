@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Hub } from "./hub.js";
 import { wipeChats } from "./ai/wipe.js";
-import { scheduleDaily } from "./schedule.js";
+import { dbJobClock, scheduleDaily } from "./schedule.js";
 import { StoreError } from "./store.js";
 import { errCode } from "./logsafe.js";
 
@@ -13,7 +13,8 @@ import { errCode } from "./logsafe.js";
  * A hub without the file keeps everything, as every hub did before 2026-11-06: nothing is ever deleted unless the
  * person set a number (Settings, Privacy, or the Welcome page of a new hub). Once a night at 03:40:
  * - chats whose last message is older than `chat_keep_days` are deleted the way deleting a chat in the app does it
- *   (ai/wipe.ts: the chat, its call log and command rows, and pictures only it used);
+ *   (ai/wipe.ts: the chat, its call log and command rows, and pictures only it used), and so are the log rows of
+ *   model calls made for no chat that are older than that;
  * - the output of host commands older than `command_output_keep_days` is cleared; the command, its result code and
  *   its journal entry stay.
  */
@@ -62,6 +63,8 @@ export function applyRetention(hub: Hub, now: Date = new Date()): { chats: numbe
     const cutoff = new Date(now.getTime() - r.chat_keep_days * DAY_MS).toISOString();
     const ids = (hub.chatDb.prepare("SELECT session_id FROM sessions WHERE last_at < ?").all(cutoff) as { session_id: string }[]).map((x) => x.session_id);
     if (ids.length) chats = wipeChats(hub.chatDb, hub.store, hub.ai.images, ids).sessions;
+    // Calls made for no chat (background work, a one-off question) went with nothing, so they were kept forever.
+    hub.chatDb.prepare("DELETE FROM ai_calls WHERE session_id IS NULL AND at < ?").run(cutoff);
   }
   if (r.command_output_keep_days > 0) {
     const cutoff = new Date(now.getTime() - r.command_output_keep_days * DAY_MS).toISOString();
@@ -73,5 +76,5 @@ export function applyRetention(hub: Hub, now: Date = new Date()): { chats: numbe
 
 /** Once a night at 03:40 local. */
 export function startRetentionJob(hub: Hub): () => void {
-  return scheduleDaily("retention", 3, 40, () => { try { applyRetention(hub); } catch (e) { console.error(`[retention] ${errCode(e)}`); } });
+  return scheduleDaily("retention", 3, 40, () => { try { applyRetention(hub); } catch (e) { console.error(`[retention] ${errCode(e)}`); } }, { clock: dbJobClock(hub.db) });
 }

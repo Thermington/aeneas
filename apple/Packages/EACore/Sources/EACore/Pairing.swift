@@ -37,7 +37,7 @@ public enum PairingCode {
 }
 
 /// `everythingapp://setup?hub=&code=&name=` (and `fp=`), `?link=direct&node=&relay=&code=&name=` for a Direct link hub,
-/// or the older `?hub=&token=&name=`.
+/// or the older `?hub=&token=&name=`. Since 2026-11-16 each also carries `hid=`, the hub's own id.
 public struct SetupLink: Equatable, Sendable {
     public enum Credential: Equatable, Sendable {
         /// A one-time pairing code, normalized.
@@ -51,9 +51,11 @@ public struct SetupLink: Equatable, Sendable {
     public var name: String?
     /// The hub certificate's SHA-256, kept only for an https hub.
     public var pin: String?
+    /// The hub's own id (`hid`), uppercased. Nil from an older hub, or when it is not a hub id.
+    public var hubId: String?
 
-    public init(hub: String, credential: Credential, name: String? = nil, pin: String? = nil) {
-        self.hub = hub; self.credential = credential; self.name = name; self.pin = pin
+    public init(hub: String, credential: Credential, name: String? = nil, pin: String? = nil, hubId: String? = nil) {
+        self.hub = hub; self.credential = credential; self.name = name; self.pin = pin; self.hubId = HubID.normalize(hubId)
     }
 
     /// Nil when the link is not a setup link, names no hub address that works, or carries neither a valid code nor a token.
@@ -83,7 +85,27 @@ public struct SetupLink: Equatable, Sendable {
         } else {
             return nil
         }
-        return SetupLink(hub: hub, credential: credential, name: name.isEmpty ? nil : name, pin: HubPin.forHub(hub, pin: q("fp")))
+        return SetupLink(hub: hub, credential: credential, name: name.isEmpty ? nil : name, pin: HubPin.forHub(hub, pin: q("fp")), hubId: q("hid"))
+    }
+
+    /// Whether a device set up with `currentHub` (and `currentHubId`, when the hub said it) asks before it follows this
+    /// link. It asks for another hub: another id whatever the address, or another address when an id is not known on
+    /// both sides. It asks for its own hub when the link names another certificate than the one pinned now: taken at
+    /// once, such a link replaced the pin, so whoever holds that certificate could answer as the hub, and the device's
+    /// key went out under it. Its own hub at another address is asked about too, unless the link names the certificate
+    /// pinned now: every link carries the hub's id, so the id alone proves nothing about who answers there, while only
+    /// the hub holds its certificate.
+    public func needsConfirmation(currentHub: String, currentPin: String?, currentHubId: String? = nil) -> Bool {
+        let mine = HubID.normalize(currentHubId)
+        if let mine, let hubId, mine != hubId { return true }
+        let linkPin = HubPin.normalize(pin)
+        let pinned = HubPin.normalize(currentPin)
+        guard SyncEngine.sameHub(currentHub, hub) else {
+            guard let mine, mine == hubId, let linkPin, linkPin == pinned else { return true }
+            return false
+        }
+        guard let linkPin else { return false }
+        return linkPin != pinned
     }
 }
 

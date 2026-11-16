@@ -2,6 +2,7 @@
  * Service worker registration, update flow and the install prompt.
  * Registered only in production builds and never under Tauri (the shell loads from its own origin).
  */
+import { plainError } from "./lib/errors";
 import { isTauri } from "./tauri/bridge";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -101,7 +102,7 @@ async function register(): Promise<void> {
     });
     setInterval(() => void reg.update().catch(() => {}), 60 * 60_000);
   } catch (e) {
-    set({ error: e instanceof Error ? e.message : String(e) });
+    set({ error: plainError(e) });
   }
 }
 
@@ -157,6 +158,6 @@ export async function manifestCheck(): Promise<{ ok: boolean; detail: string }> 
     const m = (await res.json()) as { name?: string; start_url?: string; display?: string; icons?: unknown[] };
     return { ok: true, detail: `${m.name ?? "unnamed"}, ${m.display ?? "browser"}, start ${m.start_url ?? "?"}, ${m.icons?.length ?? 0} icons` };
   } catch (e) {
-    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+    return { ok: false, detail: plainError(e) };
   }
 }

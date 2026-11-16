@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { backupOverdue, copyBackup } from "../src/backup.js";
+import { backupOverdue, copyBackup, copyBackupOutside, listCopiesOutside } from "../src/backup.js";
 import { fileMode } from "./helpers.js";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "ea-backup-copy-"));
@@ -48,4 +48,29 @@ test("backups: a missed night is noticed", () => {
   const twoDays = new Date(Date.now() - 48 * 3600_000);
   fs.utimesSync(f, twoDays, twoDays);
   assert.equal(backupOverdue(dir), true);
+});
+
+test("backups: the second folder is copied to and listed outside the hub's thread, and a folder that does not answer is given up on", async () => {
+  const src = tmp(), copy = tmp();
+  const file = path.join(src, "hub-20261116-030000.sqlite.age");
+  fs.writeFileSync(file, "age-encrypted");
+  const old = path.join(copy, "hub-20260901-030000.sqlite.age");
+  fs.writeFileSync(old, "x");
+  const longAgo = new Date(Date.now() - 40 * 86400_000);
+  fs.utimesSync(old, longAgo, longAgo);
+  const mine = path.join(copy, "holiday-photos.zip");
+  fs.writeFileSync(mine, "y");
+  const r = await copyBackupOutside(file, copy);
+  assert.equal(r.copied, path.join(copy, "hub-20261116-030000.sqlite.age"));
+  assert.equal(fileMode(r.copied!), 0o600);
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(mine), true);
+  const listed = await listCopiesOutside(copy);
+  assert.deepEqual(listed?.map((b) => [b.file, b.encrypted]), [["hub-20261116-030000.sqlite.age", true]]);
+  assert.deepEqual(await copyBackupOutside(file, path.join(copy, "not-there")), { copied: null, error: `${path.join(copy, "not-there")} is not there (a drive not plugged in or not mounted?)` });
+  // A folder that does not answer in time (here: no time at all) is reported, and the hub goes on.
+  const late = await copyBackupOutside(file, copy, new Date(), 1);
+  assert.equal(late.copied, null);
+  assert.match(String(late.error), /did not answer within/);
+  assert.equal(await listCopiesOutside(copy, 1), null);
 });

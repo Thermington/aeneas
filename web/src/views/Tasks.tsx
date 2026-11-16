@@ -1,6 +1,7 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { Entity } from "@everythingapp/shared";
-import { completeTaskPatch, taskAlertAt } from "@everythingapp/shared";
+import { taskAlertAt } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
 import { createEntity, updateEntity, softDelete } from "../sync/edits";
 import { fmtDateTime, fromLocalInput, HOUR, toLocalInput } from "../lib/time";
@@ -8,7 +9,8 @@ import { useEscape } from "../lib/keys";
 import { CsvButton } from "../components/CsvButton";
 import { LinkedItem } from "../components/LinkedItem";
 import { DraftInput, DraftTextarea } from "../components/DraftField";
-import { snoozeReminder } from "../sync/actions";
+import { completeTask, snoozeReminder } from "../sync/actions";
+import { dueFromInput, dueInputValue, fmtDue, isOverdue } from "../lib/planner";
 
 const STATUSES = ["doing", "next", "inbox", "scheduled", "parked"] as const;
 const ALL = [...STATUSES, "done"] as const;
@@ -152,7 +154,7 @@ export function Tasks({ focus }: { focus?: string | null } = {}) {
 
   const setStatus = (t: Entity, status: Status) => {
     // Done on a repeating task moves its reminder and deadline on instead of finishing it.
-    if (status === "done") return void updateEntity(t, completeTaskPatch(t.fields));
+    if (status === "done") return void completeTask(t);
     const extra: Record<string, unknown> = {};
     if (status === "parked") {
       const reason = window.prompt("Why park it");
@@ -183,7 +185,7 @@ export function Tasks({ focus }: { focus?: string | null } = {}) {
     try {
       await snoozeReminder(t, until, reason);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(plainError(e));
     }
   };
 
@@ -260,7 +262,7 @@ export function Tasks({ focus }: { focus?: string | null } = {}) {
               </span>
             )}
             {f.repeat && <span>{repeatLabel(f.repeat)}</span>}
-            {f.due && <span className={f.status !== "done" && Date.parse(f.due) < Date.now() ? "error" : ""}>due {fmtDateTime(f.due)}</span>}
+            {f.due && <span className={f.status !== "done" && isOverdue(f.due) ? "error" : ""}>due {fmtDue(f.due)}</span>}
             {f.linked_id && <LinkedItem id={f.linked_id} />}
             {!listFilter && f.apple?.list_title && f.apple.list_title !== "Reminders" && <span title="Apple Reminders list">{f.apple.list_title} list</span>}
             {f.block && <span>block {fmtDateTime(f.block.start)}</span>}
@@ -325,7 +327,7 @@ export function Tasks({ focus }: { focus?: string | null } = {}) {
                 </div>
                 <div className="grow">
                   <label htmlFor={`due-${t.id}`}>Due</label>
-                  <input id={`due-${t.id}`} type="datetime-local" value={toLocalInput(f.due)} onChange={(e) => updateEntity(t, { due: fromLocalInput(e.target.value) ?? null })} />
+                  <input id={`due-${t.id}`} type="datetime-local" value={dueInputValue(f.due)} onChange={(e) => updateEntity(t, { due: dueFromInput(e.target.value, f.due) })} />
                 </div>
               </div>
               <div className="row">

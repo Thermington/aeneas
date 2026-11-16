@@ -45,15 +45,14 @@ struct WidgetDoneIntent: AppIntent {
         let c = SharedConfig.shared
         // The device's own key, read from the Keychain the app shares with its widgets.
         guard let id = c.nowTaskId, !c.deviceId.isEmpty else { return .result() }
-        let now = ISO.now()
-        if let client = HubClient.make(config: c) {
-            _ = try? await client.push(deviceId: c.deviceId, patches: [Patch(id: id, kind: .task, ts: now, fields: ["status": .string("done"), "done_at": .string(now)])])
-        } else if DirectHub.isDirect(c.hubURL) {
-            // Widgets cannot reach a Direct link hub themselves: the app sends this when it next opens.
-            c.pendingWidgetDone = "\(id)|\(now)"
-        } else {
-            return .result()
-        }
+        // Widgets cannot reach a Direct link hub themselves (no iroh here); any other hub needs a client.
+        let client = HubClient.make(config: c)
+        guard client != nil || DirectHub.isDirect(c.hubURL) else { return .result() }
+        // Kept until the hub has it: a hub out of reach or a send cut short used to lose the tap, and the task came
+        // back not done. The app's next sync sends what is still waiting.
+        let done = WidgetDone(taskId: id, at: ISO.now(), timing: c.nowTaskTiming ?? "")
+        c.addPendingWidgetDone(done)
+        if let client, (try? await client.push(deviceId: c.deviceId, patches: [done.patch()])) != nil { c.removePendingWidgetDones([done]) }
         c.nowTaskId = nil
         c.nowTaskTitle = nil
         c.nowTaskStatus = nil

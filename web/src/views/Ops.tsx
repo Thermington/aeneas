@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -35,7 +36,7 @@ import {
   type OpsMonitor,
 } from "../lib/ops";
 
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const msg = (e: unknown) => plainError(e);
 const checksFailed = (n?: number) => `${n ?? 0} check${n === 1 ? "" : "s"} failed`;
 const DAY = 86400_000;
 

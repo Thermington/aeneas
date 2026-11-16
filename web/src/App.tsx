@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
 import { useRoute } from "./lib/router";
 import { useGlobalKeys } from "./lib/keys";
 import { engine } from "./sync/engine";
@@ -6,57 +6,65 @@ import { META, db, getMeta } from "./sync/db";
 import { getFeel, updateFeel, useFeel } from "./feel/store";
 import { applyAppTheme } from "./feel/appTheme";
 import { useMeta } from "./sync/hooks";
-import { Shell, Library } from "./components/Shell";
-import { ReminderBanner } from "./components/ReminderBanner";
-import { ActivityBanner, DigestToast, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
-import { UpdateToast } from "./components/UpdateToast";
-import { Today } from "./views/Today";
-import { Week } from "./views/Week";
-import { Renewals } from "./views/Renewals";
-import { PlanRules } from "./views/PlanRules";
-import { Dashboard } from "./views/Dashboard";
 import { isWindowsApp, onNavigate, onSetupLink, windowLabel } from "./tauri/bridge";
 import { applySetupFile } from "./tauri/setupFile";
-import { Now } from "./views/Now";
-import { Capture } from "./views/Capture";
-import { Inbox } from "./views/Inbox";
-import { Tasks } from "./views/Tasks";
-import { Notes } from "./views/Notes";
-import { NotesMap } from "./views/NotesMap";
-import { Hosts } from "./views/Hosts";
-import { Projects } from "./views/Projects";
-import { Procedures } from "./views/Procedures";
-import { Music } from "./views/Music";
-import { Wiki } from "./views/Wiki";
-import { Quiz } from "./views/Quiz";
-import { Images } from "./views/Images";
-import { Gallery } from "./views/Gallery";
-import { Layouts } from "./views/Layouts";
-import { Item } from "./views/Item";
-import { People } from "./views/People";
-import { Journal } from "./views/Journal";
-import { Snippets } from "./views/Snippets";
-import { Logs } from "./views/Logs";
-import { Health } from "./views/Health";
-import { Pet } from "./views/Pet";
-import { Sensors } from "./views/Sensors";
-import { Ops } from "./views/Ops";
-import { Food } from "./views/Food";
-import { Lists } from "./views/Lists";
-import { JobApplications } from "./views/JobApplications";
-import { Games } from "./views/Games";
-import { Films } from "./views/Films";
-import { Calc } from "./views/Calc";
-import { Memory } from "./views/Memory";
-import { Assistant } from "./views/Assistant";
-import { Search } from "./views/Search";
-import { Status } from "./views/Status";
-import { Settings } from "./views/Settings";
-import { Setup } from "./views/Setup";
-import { Welcome } from "./views/Welcome";
-import HelpConnections from "./views/HelpConnections";
-import { Widget } from "./views/Widget";
-import { IfModule, ModuleGate } from "./components/ModuleGate";
+import { ModuleGate } from "./components/ModuleGate";
+
+/**
+ * A screen loaded the first time it shows, from a file of its own: each window downloads only what it shows (the
+ * capture window Capture alone, the Now widget the widget alone). The offline service worker keeps every file.
+ */
+function screen<P>(load: () => Promise<ComponentType<P>>) {
+  return lazy(() => load().then((c) => ({ default: c })));
+}
+
+const MainWindow = screen(() => import("./MainWindow").then((m) => m.MainWindow));
+const Library = screen(() => import("./components/Shell").then((m) => m.Library));
+const Today = screen(() => import("./views/Today").then((m) => m.Today));
+const Week = screen(() => import("./views/Week").then((m) => m.Week));
+const Renewals = screen(() => import("./views/Renewals").then((m) => m.Renewals));
+const PlanRules = screen(() => import("./views/PlanRules").then((m) => m.PlanRules));
+const Dashboard = screen(() => import("./views/Dashboard").then((m) => m.Dashboard));
+const Now = screen(() => import("./views/Now").then((m) => m.Now));
+const Capture = screen(() => import("./views/Capture").then((m) => m.Capture));
+const Inbox = screen(() => import("./views/Inbox").then((m) => m.Inbox));
+const Tasks = screen(() => import("./views/Tasks").then((m) => m.Tasks));
+const Notes = screen(() => import("./views/Notes").then((m) => m.Notes));
+const NotesMap = screen(() => import("./views/NotesMap").then((m) => m.NotesMap));
+const Hosts = screen(() => import("./views/Hosts").then((m) => m.Hosts));
+const Projects = screen(() => import("./views/Projects").then((m) => m.Projects));
+const Procedures = screen(() => import("./views/Procedures").then((m) => m.Procedures));
+const Music = screen(() => import("./views/Music").then((m) => m.Music));
+const Wiki = screen(() => import("./views/Wiki").then((m) => m.Wiki));
+const Quiz = screen(() => import("./views/Quiz").then((m) => m.Quiz));
+const Images = screen(() => import("./views/Images").then((m) => m.Images));
+const Gallery = screen(() => import("./views/Gallery").then((m) => m.Gallery));
+const Layouts = screen(() => import("./views/Layouts").then((m) => m.Layouts));
+const Item = screen(() => import("./views/Item").then((m) => m.Item));
+const People = screen(() => import("./views/People").then((m) => m.People));
+const Journal = screen(() => import("./views/Journal").then((m) => m.Journal));
+const Snippets = screen(() => import("./views/Snippets").then((m) => m.Snippets));
+const Logs = screen(() => import("./views/Logs").then((m) => m.Logs));
+const Health = screen(() => import("./views/Health").then((m) => m.Health));
+const Pet = screen(() => import("./views/Pet").then((m) => m.Pet));
+const Sensors = screen(() => import("./views/Sensors").then((m) => m.Sensors));
+const Ops = screen(() => import("./views/Ops").then((m) => m.Ops));
+const Food = screen(() => import("./views/Food").then((m) => m.Food));
+const Lists = screen(() => import("./views/Lists").then((m) => m.Lists));
+const JobApplications = screen(() => import("./views/JobApplications").then((m) => m.JobApplications));
+const Games = screen(() => import("./views/Games").then((m) => m.Games));
+const Films = screen(() => import("./views/Films").then((m) => m.Films));
+const Calc = screen(() => import("./views/Calc").then((m) => m.Calc));
+const Memory = screen(() => import("./views/Memory").then((m) => m.Memory));
+const Reference = screen(() => import("./views/Reference").then((m) => m.Reference));
+const Assistant = screen(() => import("./views/Assistant").then((m) => m.Assistant));
+const Search = screen(() => import("./views/Search").then((m) => m.Search));
+const Status = screen(() => import("./views/Status").then((m) => m.Status));
+const Settings = screen(() => import("./views/Settings").then((m) => m.Settings));
+const Setup = screen(() => import("./views/Setup").then((m) => m.Setup));
+const Welcome = screen(() => import("./views/Welcome").then((m) => m.Welcome));
+const HelpConnections = screen(() => import("./views/HelpConnections").then((m) => m.default));
+const Widget = screen(() => import("./views/Widget").then((m) => m.Widget));
 
 /**
  * The app's colors come from the feel setting (one for every device). A light or dark choice made on this device
@@ -136,19 +144,19 @@ export function App() {
     return (
       <div className="capture-mini">
         <main className="main">
-          <Capture mini />
+          <Suspense fallback={null}><Capture mini /></Suspense>
         </main>
       </div>
     );
   }
 
-  if (label === "widget" || route.path === "/widget") return <Widget />;
+  if (label === "widget" || route.path === "/widget") return <Suspense fallback={null}><Widget /></Suspense>;
 
   const configured = !!hubUrl && !!token;
   // A pairing link (#/setup?hub=&code=, or an older one with token=) connects this device, even one connected to a hub before.
   if (booted && ((!configured && !route.path.startsWith("/settings")) || (route.path === "/setup" && (route.params.get("code") || route.params.get("token"))))) {
     // A new pairing link while Setup shows starts it afresh, so it reads that link.
-    return <Setup key={route.path === "/setup" ? window.location.hash : "setup"} />;
+    return <Suspense fallback={null}><Setup key={route.path === "/setup" ? window.location.hash : "setup"} /></Suspense>;
   }
 
   let view: JSX.Element;
@@ -190,6 +198,7 @@ export function App() {
   else if (p.startsWith("/films")) view = <Films key={route.params.get("q") ?? ""} q={route.params.get("q") ?? ""} />;
   else if (p.startsWith("/calc")) view = <Calc />;
   else if (p.startsWith("/memory")) view = <Memory />;
+  else if (p === "/reference" || p.startsWith("/reference/")) view = <Reference path={p} params={route.params} />;
   else if (p.startsWith("/assistant")) view = <Assistant id={route.parts[1]} />;
   else if (p.startsWith("/search")) view = <Search q={route.params.get("q") ?? ""} />;
   else if (p.startsWith("/status")) view = <Status />;
@@ -203,24 +212,11 @@ export function App() {
   if (route.params.get("pop") === "1") {
     return (
       <div className="popout">
-        <main className="main"><ModuleGate path={p}>{view}</ModuleGate></main>
+        <main className="main"><ModuleGate path={p}><Suspense fallback={null}>{view}</Suspense></ModuleGate></main>
       </div>
     );
   }
 
-  return (
-    <Shell route={route}>
-      <div className="banners">
-        <ReminderBanner />
-        <ActivityBanner />
-        <IfModule id="sensors"><SensorBanner /></IfModule>
-        <IfModule id="homelab"><MonitorBanner /></IfModule>
-      </div>
-      <ModuleGate path={p}>{view}</ModuleGate>
-      <UpdateToast />
-      <DigestToast />
-      <IfModule id="quiz"><QuizToast /></IfModule>
-    </Shell>
-  );
+  return <Suspense fallback={null}><MainWindow route={route} view={view} /></Suspense>;
 }
 

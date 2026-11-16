@@ -13,7 +13,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
     // Plan
     case inbox, tasks, reminders, week, renewals, dashboard, planRules, now
     // Notes
-    case notes, memory, people
+    case notes, memory, people, reference
     // Homelab
     case ops, hosts, journal, snippets
     // Making
@@ -42,6 +42,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .notes: return "Notes"
         case .memory: return "Memory"
         case .people: return "People"
+        case .reference: return "Reference"
         case .ops: return "Ops"
         case .hosts: return "Machines"
         case .journal: return "Change journal"
@@ -83,6 +84,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .notes: return "doc.text"
         case .memory: return "brain"
         case .people: return "person.2"
+        case .reference: return "text.book.closed"
         case .ops: return "server.rack"
         case .hosts: return "desktopcomputer"
         case .journal: return "list.bullet.clipboard"
@@ -119,7 +121,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
     /// Library: every screen that is not a tab, grouped by area of life, the same on every device.
     static let areas: [LibraryArea] = [
         LibraryArea(title: "Plan", sections: [.inbox, .tasks, .week, .renewals, .dashboard]),
-        LibraryArea(title: "Notes", sections: [.notes, .memory, .people]),
+        LibraryArea(title: "Notes", sections: [.notes, .memory, .people, .reference]),
         LibraryArea(title: "Homelab", sections: [.ops, .hosts, .journal, .snippets]),
         LibraryArea(title: "Making", sections: [.projects, .wiki, .images, .procedures, .music, .quiz]),
         LibraryArea(title: "Body and home", sections: [.health, .logs, .pet, .food, .sensors]),
@@ -133,6 +135,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         switch self {
         case .renewals: return .renewals
         case .dashboard: return .dashboard
+        case .reference: return .reference
         case .ops, .hosts, .journal, .snippets: return .homelab
         case .projects, .procedures: return .projects
         case .music: return .music
@@ -252,11 +255,19 @@ final class AppModel: ObservableObject {
             }
         #endif
         #if os(iOS)
-        // A log made anywhere (this phone, the Mac, the assistant) reaches Health a few seconds after it syncs here.
+        // The Watch complications follow what this iPhone shows, sent when it changes; never the sample month.
+        if platform == .iphone {
+            engine.onComplicationSnapshot = { [weak self] snapshot in
+                guard let self, !self.config.sampleMode else { return }
+                WatchLink.shared.sendComplications(snapshot)
+            }
+        }
+        // A log made anywhere (this phone, the Mac, the assistant) reaches Health a few seconds after it syncs here;
+        // never the sample month's, as with Contacts, Calendar and Reminders (exportNow checks it too).
         healthWrites = engine.$entities
             .debounce(for: .seconds(4), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.config.healthImportEnabled, self.isOn(.health) else { return }
+                guard let self, self.config.healthImportEnabled, self.isOn(.health), !self.config.sampleMode else { return }
                 Task { await HealthImporter.shared.exportNow(self.engine) }
             }
         #endif
@@ -289,16 +300,6 @@ final class AppModel: ObservableObject {
 
     var config: SharedConfig { engine.config }
 
-    /// The Now widget's Done for a Direct link hub, which the widget could not send itself.
-    func sendPendingWidgetDone() async {
-        guard let p = config.pendingWidgetDone else { return }
-        let parts = p.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { config.pendingWidgetDone = nil; return }
-        guard !config.deviceId.isEmpty, let client = HubClient.make(config: config) else { return }
-        let done = Patch(id: parts[0], kind: .task, ts: parts[1], fields: ["status": .string("done"), "done_at": .string(parts[1])])
-        if (try? await client.push(deviceId: config.deviceId, patches: [done])) != nil { config.pendingWidgetDone = nil }
-    }
-
     func start() async {
         // Out of iCloud Backup unless the person chose otherwise (Settings, Privacy on this device).
         BackupExclusion.apply(config: engine.config)
@@ -311,7 +312,6 @@ final class AppModel: ObservableObject {
             await RemindersSync.shared.runIfReady(reason: "foreground")
             await EventMirrorSync.shared.runIfReady(reason: "foreground")
             await ContactsSync.shared.runNow(reason: "foreground")
-            await sendPendingWidgetDone()
             #if os(iOS)
             await sendPendingShares()
             // Hums from the Watch that could not reach the hub before go now.
@@ -358,6 +358,8 @@ final class AppModel: ObservableObject {
     struct PendingSetup: Identifiable, Equatable {
         let link: SetupLink
         let current: String
+        /// The id of the hub this device uses now, when known: a link with another id is for another hub, whatever its address.
+        var currentId: String? = nil
         var hub: String { link.hub }
         var id: String { link.hub }
     }
@@ -388,16 +390,21 @@ final class AppModel: ObservableObject {
         await ensureStarted()
         guard HTTPTransport.hubURL(link.hub) != nil else { return "That hub address is not valid." }
         defer { if isConfigured { unreachedSetup = nil } }
+        // Moving to another hub (or from the sample month): the engine forgets the old hub's copy, and this app's own
+        // files from it (chats, caches, Spotlight, the pet's name) go once the new hub took this device. The same hub
+        // reached at another address (its id says so) keeps them.
+        let otherHub = !config.hubURL.isEmpty && !SyncEngine.sameHub(config.hubURL, id: config.hubId, link.hub, id: link.hubId)
         do {
             switch link.credential {
-            case .code(let code): try await engine.pair(hubURL: link.hub, code: code, deviceName: link.name, pin: link.pin)
-            case .token(let token): try await engine.connect(hubURL: link.hub, token: token, deviceName: link.name, pin: link.pin)
+            case .code(let code): try await engine.pair(hubURL: link.hub, code: code, deviceName: link.name, pin: link.pin, hubId: link.hubId)
+            case .token(let token): try await engine.connect(hubURL: link.hub, token: token, deviceName: link.name, pin: link.pin, hubId: link.hubId)
             }
         } catch {
             Self.log.notice("pairing failed: \(String(describing: type(of: error)), privacy: .public)")
             if Tailnet.isTailnetHub(link.hub), let h = error as? HubError, case .transport = h { unreachedSetup = link }
             return Self.pairingMessage(error)
         }
+        if otherHub { await LocalCopy.wipeAppFiles() }
         isConfigured = config.isConfigured
         deviceRemoved = false
         setupError = nil
@@ -544,10 +551,11 @@ final class AppModel: ObservableObject {
 
     func ensureStarted() async { if !started { await start() } }
 
-    /// Things shared while the hub was out of reach wait in the app group; send them now.
+    /// Things shared while the hub was out of reach wait in the app group; send them now, with the id the share sheet
+    /// gave each, so one whose reply was lost is answered with the capture the hub already has.
     func sendPendingShares() async {
         for (file, req) in PendingShares.all() {
-            if await engine.capture(req.text, attachments: req.attachments, source: req.source) != nil { PendingShares.remove(file) }
+            if await engine.capture(req.text, attachments: req.attachments, source: req.source, id: req.id) != nil { PendingShares.remove(file) }
         }
     }
 
@@ -560,6 +568,14 @@ final class AppModel: ObservableObject {
 
     func openChat(_ id: String) {
         openChatId = id
+        section = .assistant
+    }
+    /// Words for a new chat's box, started on another screen (Reference, Ask about this page). The Assistant starts a
+    /// chat with them in the box and waits for the question; nothing is sent until the person sends it.
+    @Published var assistantPrefill: String?
+
+    func ask(_ prefill: String) {
+        assistantPrefill = prefill
         section = .assistant
     }
     /// An item shown on its own over the current screen (ItemView), for kinds whose screen has no selection.
@@ -609,16 +625,19 @@ final class AppModel: ObservableObject {
             captureRequested = true
             section = .capture
         case "setup":
-            // everythingapp://setup?hub=<hub url>&code=<one-time code>&name=<device name>[&fp=<certificate SHA-256>],
-            // or an older link with &token= (traded for this device's own key at once).
+            // everythingapp://setup?hub=<hub url>&code=<one-time code>&name=<device name>[&fp=<certificate SHA-256>]
+            // [&hid=<hub id>], or an older link with &token= (traded for this device's own key at once).
             guard let link = SetupLink.parse(url) else {
                 setupError = "That setup link is not complete. Make a new pairing code on a device that is already paired."
                 return
             }
             // A link to another hub than this device's waits for a yes: a link in a note, a page or an email must not
-            // move the device to someone else's hub unnoticed. A first setup, or the same hub, connects at once.
-            if isConfigured, !Self.sameHub(config.hubURL, link.hub) {
-                pendingSetup = PendingSetup(link: link, current: config.hubURL)
+            // move the device to someone else's hub unnoticed. Another hub id is another hub even at this address. So
+            // does one to this hub that names another certificate than the one pinned now (taken at once, it replaced
+            // the pin), or this hub at another address without the pinned certificate (the id alone proves nothing).
+            // A first setup, or the same hub and certificate, connects at once.
+            if isConfigured, link.needsConfirmation(currentHub: config.hubURL, currentPin: config.hubPin, currentHubId: config.hubId) {
+                pendingSetup = PendingSetup(link: link, current: config.hubURL, currentId: config.hubId)
                 return
             }
             Task { setupError = await connect(link) }
@@ -661,7 +680,7 @@ final class AppModel: ObservableObject {
 
     func healthImportIfDue() async {
         #if os(iOS)
-        guard config.healthImportEnabled, isOn(.health) else { return }
+        guard config.healthImportEnabled, isOn(.health), !config.sampleMode else { return }
         HealthImporter.shared.startObserving(engine)
         // Every return to the app sends what is new, at most every 15 minutes.
         if let last = config.lastHealthImport, Date().timeIntervalSince(last) < 900 { return }

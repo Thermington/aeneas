@@ -9,6 +9,7 @@ import { homeStatus } from "./sensors.js";
 import { creativeStatus } from "./quiz.js";
 import { opsStatus } from "./monitors.js";
 import { adminStatus } from "./admin.js";
+import { diskSpace } from "./diskspace.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEALTH_TYPES = new Set(["weight", "med", "bp", "caffeine", "mood", "sleep"]);
@@ -188,6 +189,8 @@ export function statusReport(hub: Hub, now: Date = new Date()): Record<string, u
     creative: creativeStatus(hub, now),
     ops: opsStatus(hub),
     admin: adminStatus(hub.store),
-    captures_unprocessed: hub.store.list({ kind: "capture", limit: 100000 }).filter((c) => c.fields.processed !== true).length,
+    captures_unprocessed: hub.store.countWhere("capture", [{ key: "processed", is: false }]),
+    // The disk with the data folder: low at 95% used or under 2 GB free (diskspace.ts).
+    disk: diskSpace(hub.cfg.dataDir),
   };
 }

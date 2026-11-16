@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Entity, Patch } from "@everythingapp/shared";
 import { EADatabase, META, getMeta, setMeta, type RejectedEdit } from "./db";
 import { SyncEngine } from "./engine";
@@ -12,7 +12,7 @@ interface Call {
   body?: any;
 }
 
-function fakeHub(opts: { reject?: string[]; serverEntity?: (id: string) => Entity | undefined } = {}) {
+function fakeHub(opts: { reject?: string[]; missing?: Set<string>; serverEntity?: (id: string) => Entity | undefined } = {}) {
   const calls: Call[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -24,8 +24,14 @@ function fakeHub(opts: { reject?: string[]; serverEntity?: (id: string) => Entit
     if (path.startsWith("/sync/changes")) return json(200, { changes: [], seq: 7, more: false });
     if (path === "/sync/push") {
       const patches = body.patches as Patch[];
-      const rejected = patches.filter((p) => opts.reject?.includes(p.id)).map((p) => ({ id: p.id, reason: "test" }));
-      const applied = patches.filter((p) => !opts.reject?.includes(p.id)).map((p, i) => ({ id: p.id, seq: 10 + i }));
+      // `missing`: ids a restored hub does not have; an edit is refused as the hub does, a create brings the item back.
+      const gone = (p: Patch) => !!opts.missing?.has(p.id) && !p.create;
+      for (const p of patches) if (p.create) opts.missing?.delete(p.id);
+      const rejected = [
+        ...patches.filter((p) => opts.reject?.includes(p.id)).map((p) => ({ id: p.id, reason: "test" })),
+        ...patches.filter(gone).map((p) => ({ id: p.id, reason: "entity not found; send create: true to create it" })),
+      ];
+      const applied = patches.filter((p) => !opts.reject?.includes(p.id) && !gone(p)).map((p, i) => ({ id: p.id, seq: 10 + i }));
       return json(200, { applied, rejected, seq: 20 });
     }
     const m = /^\/entities\/(.+)$/.exec(path);
@@ -129,6 +135,25 @@ describe("SyncEngine", () => {
     expect((await db.entities.get(ID2))!.fields.title).toBe("other");
   });
 
+  it("an edit of an item a restored hub does not have sends the item again whole instead of deleting it", async () => {
+    const missing = new Set([ID1]);
+    const hub = fakeHub({ missing });
+    const eng = new SyncEngine({ db, fetchImpl: hub.fetchImpl, live: false });
+    await eng.configure();
+    await db.entities.put({ id: ID1, kind: "task", space: "personal", created_at: "2026-11-15T10:00:00.000Z", updated_at: "2026-11-15T10:00:00.000Z", deleted_at: null, fields: { title: "Call the vet", status: "next", order: 3 }, field_ts: {} } as Entity);
+    const editedAt = new Date().toISOString();
+    await eng.enqueue({ id: ID1, kind: "task", ts: editedAt, fields: { title: "Call the vet about Rex" } });
+    await eng.flush();
+    const pushes = hub.calls.filter((c) => c.path === "/sync/push").map((c) => c.body.patches as Patch[]);
+    expect(pushes.length).toBe(2);
+    // Stamped with when it was made, so the hub keeps its day; then the edit again with its own stamp.
+    expect(pushes[1][0]).toMatchObject({ id: ID1, create: true, ts: "2026-11-15T10:00:00.000Z", fields: { title: "Call the vet about Rex", status: "next", order: 3 } });
+    expect(pushes[1][1]).toMatchObject({ id: ID1, ts: editedAt, fields: { title: "Call the vet about Rex" } });
+    expect((await db.entities.get(ID1))?.fields.title).toBe("Call the vet about Rex");
+    expect(await db.outbox.count()).toBe(0);
+    expect((await getMeta<RejectedEdit[]>(META.rejected, db)) ?? []).toEqual([]);
+  });
+
   it("keeps a record of a refused edit instead of losing it silently", async () => {
     const hub = fakeHub({ reject: [ID1] });
     const eng = new SyncEngine({ db, fetchImpl: hub.fetchImpl, live: false });
@@ -178,5 +203,65 @@ describe("SyncEngine", () => {
     await eng.start();
     expect(hub.calls.some((c) => c.path === "/sync/changes?since=0&device_id=dev-1")).toBe(true);
     eng.stop();
+  });
+
+  it("takes its catch-up on showing the window off when stopped, instead of adding one more on every start", async () => {
+    const listening = new Map<string, Set<unknown>>();
+    const target = () => ({
+      addEventListener: (type: string, fn: unknown) => void (listening.get(type) ?? listening.set(type, new Set()).get(type)!).add(fn),
+      removeEventListener: (type: string, fn: unknown) => void listening.get(type)?.delete(fn),
+    });
+    vi.stubGlobal("window", target());
+    vi.stubGlobal("document", { ...target(), visibilityState: "visible" });
+    try {
+      const eng = new SyncEngine({ db, fetchImpl: fakeHub().fetchImpl, live: false });
+      for (let i = 0; i < 3; i++) {
+        await eng.start();
+        eng.stop();
+      }
+      expect(listening.get("visibilitychange")?.size ?? 0).toBe(0);
+      expect(listening.get("online")?.size ?? 0).toBe(0);
+      await eng.start();
+      expect(listening.get("visibilitychange")?.size).toBe(1);
+      eng.stop();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lets go of the live stream's watchdog when the stream ends by itself, not only when stopped", async () => {
+    // The watchdog is the 20 s timer; every other timer passes through untouched.
+    const watchdogs = new Set<unknown>();
+    const realSet = globalThis.setInterval;
+    const realClear = globalThis.clearInterval;
+    const setSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: () => void, ms?: number) => {
+      const id = realSet(fn, ms);
+      if (ms === 20_000) watchdogs.add(id);
+      return id;
+    }) as typeof setInterval);
+    const clearSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(((id?: Parameters<typeof clearInterval>[0]) => {
+      watchdogs.delete(id);
+      realClear(id);
+    }) as typeof clearInterval);
+    let end: (() => void) | undefined;
+    const hub = fakeHub();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("/live")) return hub.fetchImpl(input, init);
+      const body = new ReadableStream<Uint8Array>({ start: (c) => void (end = () => c.close()) });
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+    const eng = new SyncEngine({ db, fetchImpl, live: true });
+    try {
+      await eng.start();
+      await vi.waitFor(() => expect(watchdogs.size).toBe(1));
+      // The hub closes the stream (a restart, say); the engine opens a new one later.
+      end!();
+      await vi.waitFor(() => expect(eng.state.live).toBe(false));
+      expect(watchdogs.size).toBe(0);
+    } finally {
+      eng.stop();
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
   });
 });

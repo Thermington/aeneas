@@ -142,13 +142,16 @@ public actor SyncStore {
         return sqlite3_step(s) == SQLITE_ROW ? Int(sqlite3_column_int64(s, 0)) : 0
     }
 
-    /// Store a hub copy, merging per field against any local copy. Returns the stored entity.
-    /// A copy that changes nothing is not written again (screens load the same monitors every 30 s).
+    /// Store a hub copy. With an edit of it waiting to send, merged per field against the local copy, so the edit is not
+    /// clobbered by an older hub value; with none, the hub's copy is the truth, as on the web: a later stamp kept here
+    /// from a clock that ran fast (the hub counts such a stamp as the moment it arrived) used to keep this device's
+    /// value after another device's newer edit had won on the hub. Returns the stored entity. A copy that changes
+    /// nothing is not written again (screens load the same monitors every 30 s).
     @discardableResult
     public func upsertFromHub(_ hub: Entity) throws -> Entity {
         if var local = try get(hub.id) {
             let before = local
-            local.merge(hub: hub)
+            if try hasOutbox(entityId: hub.id) { local.merge(hub: hub) } else { local = hub }
             if local != before { try write(local) }
             return local
         }
@@ -223,6 +226,14 @@ public actor SyncStore {
     }
 
     /// Remove every queued patch for an entity (after the hub rejected one and we reloaded).
+    /// Whether an edit of this entity is waiting to send.
+    public func hasOutbox(entityId: String) throws -> Bool {
+        let s = try prepare("SELECT 1 FROM outbox WHERE entity_id = ? LIMIT 1")
+        defer { sqlite3_finalize(s) }
+        bind(s, 1, entityId)
+        return sqlite3_step(s) == SQLITE_ROW
+    }
+
     public func removeOutbox(entityId: String) throws {
         let s = try prepare("DELETE FROM outbox WHERE entity_id = ?")
         defer { sqlite3_finalize(s) }

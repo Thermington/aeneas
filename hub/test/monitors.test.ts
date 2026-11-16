@@ -319,3 +319,29 @@ test("steady-state checks do not write to the sync feed; transitions do", async 
     assert.equal(t.hub.store.seq(), afterDown, "repeated failures while down must not add change rows");
   } finally { t.cleanup(); }
 });
+
+test("monitors: turning a machine's ping off during its outage gives its services their full count before they alert", async () => {
+  const { runCheck } = await import("../src/monitors.js");
+  const t = makeHub();
+  try {
+    const T0 = new Date("2026-11-13T12:00:00Z");
+    const at = (min: number) => new Date(T0.getTime() + min * 60_000);
+    const down = new Set<string>(["desk", "http://desk:11434/api/tags"]);
+    const fake = async ({ target }: { target: string }) => (down.has(target) ? { ok: false, error: "no reply" } : { ok: true });
+    t.hub.checkers = { ...t.hub.checkers, ping: fake as never, http: fake as never };
+    const alerts: { name?: string; state?: string }[] = [];
+    t.hub.bus.on("notify", (e) => { alerts.push(e); });
+    const ping = t.hub.store.create("monitor", { name: "desk ping", type: "ping", target: "desk", host: "desk", interval_s: 60, timeout_s: 2, fails_before_down: 3, enabled: true } as never);
+    const svc = t.hub.store.create("monitor", { name: "Ollama", type: "http", target: "http://desk:11434/api/tags", host: "desk", interval_s: 60, timeout_s: 2, fails_before_down: 3, enabled: true } as never);
+    let m = 0;
+    for (let i = 0; i < 3; i++) await runCheck(t.hub, ping.id, at(m++));
+    for (let i = 0; i < 6; i++) await runCheck(t.hub, svc.id, at(m++));
+    t.hub.store.patch(ping.id, { enabled: false });
+    const before = alerts.length;
+    await runCheck(t.hub, svc.id, at(m++));
+    assert.equal(alerts.slice(before).filter((a) => a.name === "Ollama" && a.state === "down").length, 0, "no alert at the next failed check");
+    await runCheck(t.hub, svc.id, at(m++));
+    await runCheck(t.hub, svc.id, at(m++));
+    assert.equal(alerts.slice(before).filter((a) => a.name === "Ollama" && a.state === "down").length, 1, "an alert after fails_before_down more");
+  } finally { t.cleanup(); }
+});

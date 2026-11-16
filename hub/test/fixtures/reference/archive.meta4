@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <generator>MirrorBrain/2.19.0</generator>
+  <origin dynamic="true">https://lb.download.kiwix.org/zim/test/devdocs_en_bash_2026-10.zim.meta4</origin>
+  <published>2026-11-16T17:23:59Z</published>
+  <file name="devdocs_en_bash_2026-10.zim">
+    <size>10000</size>
+    <!-- a comment the parser skips -->
+    <hash type="md5">98ce369474f0a0c5b0ca940d4987ffc7</hash>
+    <hash type="sha-1">c2dd150606b4c02bb4e585d1e90a31245d0a55f5</hash>
+    <hash type="sha-256">E0CABB299CE29D7A60E0A65CAB4D3E14D8E60B5995DAEB60B2932BBAC04E505B</hash>
+    <pieces length="4096" type="sha-1">
+      <hash>520dc310763b299cef3f483d587e65c37ec136e6</hash>
+      <hash>1041cb71db1356c7db07f90f0edf3446df63cf8d</hash>
+      <hash>a5da535582bdd8ea49c12c3efc55b557364a8834</hash>
+    </pieces>
+    <url location="nl" priority="2">https://mirror-two.example.org/kiwix/zim/test/devdocs_en_bash_2026-10.zim</url>
+    <url location="us" priority="1">https://mirror-one.example.org/kiwix/zim/test/devdocs_en_bash_2026-10.zim</url>
+    <url location="xx" priority="3">http://plain.example.org/kiwix/zim/test/devdocs_en_bash_2026-10.zim</url>
+    <url location="yy" priority="4">ftp://ftp.example.org/kiwix/zim/test/devdocs_en_bash_2026-10.zim</url>
+  </file>
+</metalink>

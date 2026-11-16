@@ -345,15 +345,20 @@ struct ConnectionsSettingsView: View {
     @ViewBuilder private func health(_ h: Connections.Health) -> some View {
         SwiftUI.Section {
             #if os(iOS)
-            Toggle("Sync with Apple Health", isOn: $healthOn)
-                .onChange(of: healthOn) { _, v in
-                    guard v != model.config.healthImportEnabled else { return }
-                    model.config.healthImportEnabled = v
-                    if v { sendHealth(ask: true) }
+            if model.config.sampleMode {
+                // As with Contacts, Calendar and Reminders: no sample reading goes into the person's own Health.
+                Text(HealthImporter.sampleOff).font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Toggle("Sync with Apple Health", isOn: $healthOn)
+                    .onChange(of: healthOn) { _, v in
+                        guard v != model.config.healthImportEnabled else { return }
+                        model.config.healthImportEnabled = v
+                        if v { sendHealth(ask: true) }
+                    }
+                if healthOn {
+                    Button(busy == "health" ? "Sending" : "Send now") { sendHealth(ask: false) }
+                        .disabled(busy != nil)
                 }
-            if healthOn {
-                Button(busy == "health" ? "Sending" : "Send now") { sendHealth(ask: false) }
-                    .disabled(busy != nil)
             }
             #endif
             LabeledContent("Readings from Health", value: "\(h.total)")

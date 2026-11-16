@@ -1,3 +1,5 @@
+import type { LayoutPlatform } from "../sync/api";
+
 /** Hash route for an entity of a given kind, used by search hits, Capture results and the Status friction list.
  * `title` narrows screens that list many items (games, films) to the one found. */
 export function linkFor(kind: string, id: string, title?: string): string {
@@ -75,3 +77,9 @@ export const KIND_LABELS: Record<string, string> = {
   checklist: "list", application: "job application", game: "game", film: "film", person: "person", image: "image",
 };
 export const kindLabel = (kind: string) => KIND_LABELS[kind] ?? kind;
+
+/** A device or sketch platform as people say it ("iPhone", not "iphone"). */
+export const PLATFORM_LABEL: Record<LayoutPlatform, string> = {
+  iphone: "iPhone", ipad: "iPad", mac: "Mac", watch: "Watch", windows: "Windows", web: "Web", other: "Other",
+};
+export const platformLabel = (platform: string) => (PLATFORM_LABEL as Record<string, string>)[platform] ?? platform;

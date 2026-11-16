@@ -139,13 +139,14 @@ extension SyncEngine {
 
     /// Capture text, always sorted: online `POST /capture` with `auto`, so it goes into the day's diary and the assistant
     /// files it. Offline: a local capture with `sort: true`, pushed later through the outbox; the hub sorts it on arrival,
-    /// so nothing saved away from the hub waits in Unsorted Info.
+    /// so nothing saved away from the hub waits in Unsorted Info. `id`: the capture's own id when it already has one (a
+    /// share sent again), so the hub answers with the capture it may already have instead of saving a second copy.
     @discardableResult
-    public func capture(_ text: String, attachments: [Attachment]? = nil, source: Source? = nil, transcriptConfidence: Double? = nil) async -> Entity? {
+    public func capture(_ text: String, attachments: [Attachment]? = nil, source: Source? = nil, transcriptConfidence: Double? = nil, id captureId: String? = nil) async -> Entity? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let src = source ?? captureSource
-        let id = UUID().uuidString.lowercased()
+        let id = captureId ?? UUID().uuidString.lowercased()
         if let c = client, status != .unconfigured {
             do {
                 let resp = try await c.capture(CaptureRequest(text: trimmed, source: src, attachments: attachments, auto: true, id: id))
@@ -432,6 +433,14 @@ extension SyncEngine {
     public var facts: [Entity] { list(.fact) }
     public var rules: [Entity] { list(.rule) }
     public var ledgers: [Entity] { list(.ledger) }
+
+    /// The ledger a chat is using: its open one, else the newest. A chat can have several (one closes when it worked,
+    /// a new one opens if it breaks again), and the first found could be a closed one.
+    public func ledger(for sessionId: String) -> Entity? {
+        let mine = ledgers.filter { $0.str("session_id") == sessionId }
+        let open = mine.filter { $0.fields["open"] != .bool(false) }
+        return (open.isEmpty ? mine : open).max { $0.updated_at < $1.updated_at }
+    }
     public var projects: [Entity] { list(.project) }
 
     /// Style patterns from active filter rules, for display.

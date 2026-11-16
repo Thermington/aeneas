@@ -119,8 +119,17 @@ git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
 FROM="$(git -C "$APP_DIR" rev-parse HEAD)"
 
 # A backup that a stopped update left (a reboot during it): put back while the code is still on the commit it belongs
-# to, else of no more use.
+# to. A stopped update that had already moved the code on (cut off during npm ci, after git merge) left half its
+# packages and a hub that cannot start: the code goes back to the commit the backup belongs to, with its packages, and
+# this run updates from there. That backup used to be deleted as of no more use, and the run then said the hub was
+# up to date, so it stayed down.
 if [ -d "$BACKUP" ]; then
+  had="$(cat "$BACKUP/.commit" 2>/dev/null)"
+  if ! backup_fits && [ -n "$had" ] && git -C "$APP_DIR" cat-file -e "$had^{commit}" 2>/dev/null \
+      && git -C "$APP_DIR" merge-base --is-ancestor "$had" HEAD 2>/dev/null; then
+    echo "a stopped update had moved the code on: back to the version it had, with its packages"
+    git -C "$APP_DIR" reset --quiet --hard "$had" && FROM="$had"
+  fi
   if backup_fits; then
     echo "putting back the packages a stopped update set aside"
     put_back || echo "not everything set aside could be put back"

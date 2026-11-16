@@ -15,7 +15,8 @@ const HOUR_MS = 3600_000;
 
 /** Every activity still open (its start log), newest first. */
 export function openActivities(hub: Hub): Entity[] {
-  return activitySpans(hub.store.list({ kind: "log", limit: 100000 }))
+  // Only activity logs: every log (weights, doses, moods) used to be parsed every minute.
+  return activitySpans(hub.store.listWhere("log", [{ key: "type", is: "activity" }]))
     .filter((s) => s.to === null)
     .sort((a, b) => b.from - a.from)
     .map((s) => s.start);

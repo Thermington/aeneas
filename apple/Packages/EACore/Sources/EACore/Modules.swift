@@ -52,6 +52,8 @@ public enum AppModule: String, CaseIterable, Sendable {
     case renewals, dashboard, homelab, projects, music, wiki, images, quiz, health, pet, food, sensors, games, films, calc, jobs, web
     // Device features with no screen of their own (group "On your devices"), and newer areas.
     case voice, notifications, layouts, mail, contacts
+    /// Offline reference: Wikipedia and other open references kept on the hub (since 2026-11-16).
+    case reference
     case appleReminders = "apple_reminders"
     case appleCalendar = "apple_calendar"
 

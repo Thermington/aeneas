@@ -15,7 +15,7 @@ import os
 public final class EventMirrorSync: ObservableObject {
     public static let shared = EventMirrorSync()
     private static let log = Logger(subsystem: SharedConfig.logSubsystem, category: "calendar-mirror")
-    private static let stateKey = "ea.eventMirror.state"
+    private static let stateKey = AppleLinkRecords.calendar
 
     @Published public private(set) var lastRun: Date?
     @Published public private(set) var lastSummary: String?
@@ -79,6 +79,8 @@ public final class EventMirrorSync: ObservableObject {
         repeat {
             rerun = false
             let engine = await provider()
+            // Only against a copy that holds the hub's events (not on an unpaired or removed device, or an emptied copy).
+            guard engine.hasHubCopy else { break }
             await runOnce(engine: engine, reason: reason)
         } while rerun
     }
@@ -177,9 +179,11 @@ public final class EventMirrorSync: ObservableObject {
             newState.removeValue(forKey: e.id)
         }
         // Events made in the personal calendar come into the app. Read after the writes above, so the links just
-        // recorded keep the app's own copies from coming back as new events.
+        // recorded keep the app's own copies from coming back as new events. Only while the hub answers: a copy
+        // behind the hub lacks an event made in the app whose copy the Mac already put in the calendar, and took
+        // that copy for a new event (a second one in the app).
         var adopted = 0, repeating = 0
-        if let cal = personalCal, !work.contains(cal), let ekCal = store.calendar(withIdentifier: cal) {
+        if engine.hubInReach, let cal = personalCal, !work.contains(cal), let ekCal = store.calendar(withIdentifier: cal) {
             let events = engine.list(.event) + ((try? await engine.store.all(kind: .event, includeDeleted: true)) ?? []).filter { $0.isDeleted }
             #if os(macOS)
             let settled: (AppleEvent) -> Bool = { _ in true }

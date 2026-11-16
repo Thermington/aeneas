@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { engine } from "../sync/engine";
 import { HubError } from "../sync/api";
@@ -28,7 +29,7 @@ import {
 } from "../lib/wiki";
 
 const FOLD_KEY = "ea.wiki.folded";
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const msg = (e: unknown) => plainError(e);
 
 function readFolds(): Record<string, boolean> {
   try {
@@ -252,14 +253,17 @@ function Reader({ id }: { id: string }) {
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     const a = (e.target as HTMLElement).closest("a");
     if (!a || !body.current?.contains(a)) return;
-    const link = classifyLink(a.getAttribute("href"));
-    if (link.kind === "none") return;
-    e.preventDefault();
-    if (link.kind === "external" && hubUrl && link.url.startsWith(hubFileUrl(hubUrl, "/wiki/media/"))) {
-      // An attachment on the hub: fetched with the key in a header and opened from memory, never with the key in a link.
-      hubFileBlob(link.url, token).then((u) => { window.open(u, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(u), 60_000); }, () => undefined);
+    const href = a.getAttribute("href");
+    // An attachment on the hub: fetched with the key in a header and opened from memory, never with the key in a link.
+    // Checked first: a Direct link hub's address (iroh://) is not a web link.
+    if (href && hubUrl && href.startsWith(hubFileUrl(hubUrl, "/wiki/media/"))) {
+      e.preventDefault();
+      hubFileBlob(href, token).then((u) => { window.open(u, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(u), 60_000); }, () => undefined);
       return;
     }
+    const link = classifyLink(href);
+    if (link.kind === "none") return;
+    e.preventDefault();
     if (link.kind === "page") go(wikiPath(link.id));
     else if (link.kind === "anchor") body.current.querySelector(`[id="h-${CSS.escape(link.id)}"]`)?.scrollIntoView({ block: "start" });
     else void openExternal(link.url).catch(() => undefined);

@@ -9,6 +9,7 @@ import { StoreError } from "./store.js";
 import { showCode } from "./devicekeys.js";
 import { isLoopbackHost, tlsFingerprint } from "./tls.js";
 import { SecretBox } from "./secretbox.js";
+import { homeCertificate, hubId } from "./homeroute.js";
 
 /**
  * First-run setup, so someone new gets from an installed hub to a working assistant without editing files:
@@ -427,18 +428,28 @@ function hostName(address: string): string {
   try { return new URL(address).hostname.replace(/^\[|\]$/g, ""); } catch { return ""; }
 }
 
+/** The home certificate's fingerprint when `address` is the home route (the home port), else null. */
+function homeRouteFingerprint(hub: Hub, address: string): string | null {
+  let port = 0;
+  try { port = Number(new URL(address).port); } catch { return null; }
+  return port === hub.cfg.homePort ? homeCertificate(hub.cfg.dataDir)?.fingerprint ?? null : null;
+}
+
 export function pairingLinks(hub: Hub, address: string, name: string, by?: string) {
   const c = hub.deviceKeys.newCode(name || "My device", Date.now(), by);
   // A hub serving its own certificate (a home network, no Tailscale) puts its fingerprint in the link, so the app
   // accepts that certificate and no other: nobody on the network can stand in for the hub.
-  const fp = address.startsWith("https:") ? tlsFingerprint(hub.cfg) : null;
+  // Over the home route (homeroute.ts, its own port), it is the home certificate's.
+  const fp = address.startsWith("https:") ? tlsFingerprint(hub.cfg) ?? homeRouteFingerprint(hub, address) : null;
   // A Direct link hub adds its public key and relay (link.ts): the app connects to that key and no other. The
   // address is left out when it is this machine only, which no other device can use.
   const direct = currentMethod(hub.cfg) === "direct" ? directStatus() : null;
   const node = direct?.state === "online" && direct.id && direct.relay ? { link: "direct", node: direct.id, relay: direct.relay } : null;
   const local = isLoopbackHost(hostName(address));
-  const params: Record<string, string> = { ...(node && local ? {} : { hub: address }), code: c.code, name: c.name, ...(fp ? { fp } : {}), ...(node ?? {}) };
+  // The hub's own id (homeroute.ts): apps tell hubs apart by it, so this hub reached another way is still this hub.
+  const hid = hubId(hub.cfg.dataDir);
+  const params: Record<string, string> = { ...(node && local ? {} : { hub: address }), ...(hid ? { hid } : {}), code: c.code, name: c.name, ...(fp ? { fp } : {}), ...(node ?? {}) };
   // Spaces as %20, not "+": every client reads that the same way (Apple's URLComponents keeps a "+" as a plus).
   const q = new URLSearchParams(params).toString().replace(/\+/g, "%20");
-  return { hub: address, code: showCode(c.code), expires_at: c.expires_at, fp, link: node ? "direct" : currentMethod(hub.cfg), node: node?.node ?? null, app: `everythingapp://setup?${q}`, web: `${address}/app/#/setup?${q}` };
+  return { hub: address, hub_id: hid, code: showCode(c.code), expires_at: c.expires_at, fp, link: node ? "direct" : currentMethod(hub.cfg), node: node?.node ?? null, app: `everythingapp://setup?${q}`, web: `${address}/app/#/setup?${q}` };
 }

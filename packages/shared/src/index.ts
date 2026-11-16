@@ -15,7 +15,7 @@ export type Kind = z.infer<typeof Kind>;
 export const Space = z.enum(["personal", "work"]);
 export type Space = z.infer<typeof Space>;
 
-export const Source = z.enum(["watch", "iphone", "ipad", "mac", "windows", "web", "shortcut", "voice", "api"]);
+export const Source = z.enum(["watch", "iphone", "ipad", "mac", "windows", "android", "web", "shortcut", "voice", "api"]);
 export type Source = z.infer<typeof Source>;
 
 export const TaskStatus = z.enum(["inbox", "next", "scheduled", "doing", "done", "parked"]);
@@ -25,7 +25,7 @@ export const LogType = z.enum(["weight", "med", "bp", "caffeine", "sleep", "mood
 export const FactCategory = z.enum(["identity", "constraint", "preference", "health", "relationship", "host", "project", "gear", "history"]);
 export const RuleEnforce = z.enum(["prompt", "filter", "both"]);
 export const ProjectStatus = z.enum(["active", "parked", "done"]);
-export const Platform = z.enum(["watch", "iphone", "ipad", "mac", "windows", "web"]);
+export const Platform = z.enum(["watch", "iphone", "ipad", "mac", "windows", "android", "web"]);
 // "auto" lets the hub decide per message (troubleshooting, drafting, planning); the others force a mode.
 export const TaskType = z.enum(["auto", "general", "troubleshoot", "draft", "classify", "plan"]);
 

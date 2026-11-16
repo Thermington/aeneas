@@ -151,6 +151,12 @@ final class SiriAnswer {
     }
 }
 
+extension IntentDialog {
+    /// Health off (Settings, Modules): Siri logs no weight, mood, caffeine, meds, blood pressure or activity, as the
+    /// app and the Watch show no logging then.
+    static var healthOff: IntentDialog { "Health is off. Turn it on in Settings, Modules." }
+}
+
 struct LogWeightIntent: AppIntent {
     static let title: LocalizedStringResource = "Log Weight"
     static let description = IntentDescription("Log a weight in pounds")
@@ -168,6 +174,7 @@ struct LogWeightIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
         await model.ensureStarted()
+        guard model.isOn(.health) else { return .result(dialog: .healthOff) }
         _ = await model.engine.log(type: .weight, value: .number(value), unit: "lb", source: .shortcut)
         return .result(dialog: "Logged \(value.formatted()) lb")
     }
@@ -209,6 +216,8 @@ struct StartActivityIntent: AppIntent {
         let model = AppModel.shared
         await model.ensureStarted()
         let wasCurrent = model.engine.currentActivity?.name.caseInsensitiveCompare(name) == .orderedSame
+        // Health off: one already running can still be ended, but none is started.
+        guard model.isOn(.health) || wasCurrent else { return .result(dialog: .healthOff) }
         await model.engine.toggleActivity(name)
         return .result(dialog: wasCurrent ? "Ended \(name)" : "Started \(name)")
     }
@@ -240,6 +249,7 @@ struct LogMoodIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
         await model.ensureStarted()
+        guard model.isOn(.health) else { return .result(dialog: .healthOff) }
         _ = await model.engine.log(type: .mood, value: .number(Double(mood.rawValue)), source: .shortcut)
         return .result(dialog: "Logged")
     }
@@ -261,6 +271,7 @@ struct LogCaffeineIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
         await model.ensureStarted()
+        guard model.isOn(.health) else { return .result(dialog: .healthOff) }
         _ = await model.engine.log(type: .caffeine, value: .number(cups), source: .shortcut)
         let today = model.engine.logs(type: .caffeine, days: 1).filter { Calendar.current.isDateInToday($0.date("at") ?? .distantPast) }.reduce(0.0) { $0 + ($1.number("value") ?? 1) }
         return .result(dialog: "Logged. \(today.formatted()) today.")
@@ -293,6 +304,7 @@ struct LogMedIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
         await model.ensureStarted()
+        guard model.isOn(.health) else { return .result(dialog: .healthOff) }
         _ = await model.engine.log(type: .med, value: .string(name), source: .shortcut)
         return .result(dialog: "Logged \(name)")
     }
@@ -316,6 +328,7 @@ struct LogBloodPressureIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
         await model.ensureStarted()
+        guard model.isOn(.health) else { return .result(dialog: .healthOff) }
         let v = "\(systolic)/\(diastolic)"
         _ = await model.engine.log(type: .bp, value: .string(v), unit: "mmHg", source: .shortcut)
         return .result(dialog: "Logged \(v)")

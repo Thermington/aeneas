@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import EACore
 
 /// The week: on iPhone a day-by-day list with a day switcher; on iPad and Mac a seven-column
@@ -56,7 +57,9 @@ struct WeekView: View {
         .sheet(item: $scheduling) { slot in SchedulePicker(slot: slot, next: engine.upNext) { await reload() } }
         .task { await reload() }
         .refreshable { await engine.sync(); await reload() }
-        .onReceive(engine.$entities) { _ in
+        // Only changes to what the week shows reload it, as on Today. Every change fetched the week again, Ops's fresh
+        // monitors every 30 s among them.
+        .onReceive(engine.$entities.map(TodayView.signature).removeDuplicates()) { _ in
             reloadTask?.cancel()
             reloadTask = Task { try? await Task.sleep(nanoseconds: 300_000_000); if !Task.isCancelled { await reload() } }
         }

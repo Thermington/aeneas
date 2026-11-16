@@ -1,7 +1,8 @@
 import Foundation
 
-/// One Apple Reminders item as the sync sees it. Dates are ISO strings rounded to the minute; a date-only due is
-/// local midnight. `repeatRule` uses the app's repeat grammar and is nil when Apple's rule has no equivalent.
+/// One Apple Reminders item as the sync sees it. Dates are ISO strings rounded to the minute; a due date with no time
+/// is the day alone (YYYY-MM-DD), the same day in every time zone (`ReminderDates`). `repeatRule` uses the app's
+/// repeat grammar and is nil when Apple's rule has no equivalent.
 public struct ReminderItem: Equatable, Sendable {
     /// The calendar server's id, the same on every device. The key the iPhone and the Mac agree on.
     public var externalId: String
@@ -62,8 +63,9 @@ public struct RemindersPlan: Equatable, Sendable {
 }
 
 /// Two-way merge between tasks and Apple Reminders, field by field against what both sides last agreed on:
-/// a field changed on one side only goes to the other; changed on both, the newer side wins. A side with no
-/// record yet takes the newer value too. Pure, so it is tested without EventKit.
+/// a field changed on one side only goes to the other; changed on both, the newer side wins. With no record yet (a
+/// first match), an empty value is filled from the other side and never clears it, and two values that differ go to
+/// the newer side (to the task when the match was by title alone). Pure, so it is tested without EventKit.
 public enum RemindersMerge {
     public static let fieldNames = ["title", "notes", "due", "remind_at", "repeat", "done"]
     /// Finished Apple items older than this are not brought in.
@@ -77,6 +79,14 @@ public enum RemindersMerge {
         return ISO.string(Date(timeIntervalSince1970: (d.timeIntervalSince1970 / 60).rounded(.down) * 60))
     }
 
+    /// A deadline as both sides compare it: a day alone (YYYY-MM-DD) stays that day, as the contract allows; a moment
+    /// is rounded to the minute. A day read as local midnight was another moment in every time zone, and went back to
+    /// Apple Reminders with an hour (3:00 AM after a flight west).
+    public static func due(_ s: String?) -> String {
+        guard let s, !s.isEmpty else { return "" }
+        return TaskDue.isDateOnly(s) ? s : minute(s)
+    }
+
     /// A repeat Apple Reminders can hold too (days and longer); minutes and hours stay app-only.
     public static func appleRepeat(_ r: String?) -> String {
         guard let r, let rule = RepeatRule.parse(r), ![.minutes, .hours].contains(rule.unit) else { return "" }
@@ -84,12 +94,12 @@ public enum RemindersMerge {
     }
 
     public static func fields(of item: ReminderItem) -> [String: String] {
-        ["title": item.title, "notes": item.notes ?? "", "due": minute(item.due), "remind_at": minute(item.remindAt),
+        ["title": item.title, "notes": item.notes ?? "", "due": due(item.due), "remind_at": minute(item.remindAt),
          "repeat": appleRepeat(item.repeatRule), "done": item.done ? "1" : "0"]
     }
 
     public static func fields(of task: Entity) -> [String: String] {
-        ["title": task.str("title"), "notes": task.str("notes"), "due": minute(task.str("due")), "remind_at": minute(task.str("remind_at")),
+        ["title": task.str("title"), "notes": task.str("notes"), "due": due(task.str("due")), "remind_at": minute(task.str("remind_at")),
          "repeat": appleRepeat(task.fields["repeat"]?.stringValue), "done": task.str("status") == "done" ? "1" : "0"]
     }
 
@@ -136,26 +146,46 @@ public enum RemindersMerge {
         let byLocal = Dictionary(state.map { ($0.value.localId, $0.key) }, uniquingKeysWith: { a, _ in a })
         var seen = Set<String>()
         let ts = ISO.string(now)
+        // One Apple item per task. Two items that both took one task (the same title in two lists) moved its link
+        // back and forth on every run, a hub write each time.
+        var taken = Set<String>()
+        // A task a record already ties to an item is not free for a match by title.
+        let recorded = Set(state.values.map(\.taskId))
+        func linkId(_ t: Entity) -> String { t.fields["apple"]?.objectValue?["id"]?.stringValue ?? "" }
+        func plain(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        for item in items {
+        // The same order on every run and every device, so a title meets the same task everywhere.
+        for item in items.sorted(by: { $0.externalId < $1.externalId }) {
             if item.isWork && workOff { continue }
             // An item whose server id changed after its first save keeps its record by this device's id.
             let key = state[item.externalId] != nil ? item.externalId : (byLocal[item.localId] ?? item.externalId)
             seen.insert(key)
             let prior = state[key]
-            var task = byLink[item.externalId] ?? byLink[key] ?? prior.flatMap { byId[$0.taskId] } ?? byId[taskId(forExternal: item.externalId)]
-            if task == nil, prior == nil {
+            var task = byLink[item.externalId] ?? byLink[key]
+            if task == nil, let t = prior.flatMap({ byId[$0.taskId] }) {
+                // The record's task, unless it is linked to another item now: then the record came from two items
+                // taking one task, and this item is left to come in as its own on the next run.
+                let other = linkId(t)
+                if other.isEmpty || other == item.externalId || other == key { task = t }
+            }
+            if task == nil { task = byId[taskId(forExternal: item.externalId)] }
+            if let t = task, taken.contains(t.id) { task = nil }
+            var byTitle = false
+            if task == nil, prior == nil, !item.done {
                 // A task made in the app whose Apple item came here before its link did (the other device made the
                 // item, and iCloud was quicker than the hub), or whose link was lost when the app stopped: the same
                 // title, open, not linked yet and made in the last day. Without this match it became a second task.
-                let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                // Only an open item: a finished one is another reminder that only shares the name.
+                let title = plain(item.title)
                 let space: Space = item.isWork ? .work : .personal
-                task = tasks.first { t in
+                task = tasks.filter { t in
                     t.kind == .task && !t.isDeleted && t.fields["apple"] == nil && t.space == space && t.str("status") != "done"
-                        && t.str("title").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == title && !title.isEmpty
+                        && !taken.contains(t.id) && !recorded.contains(t.id) && !title.isEmpty && plain(t.str("title")) == title
                         && (ISO.date(t.created_at).map { now.timeIntervalSince($0) < 86400 } ?? false)
-                }
+                }.min { ($0.created_at, $0.id) < ($1.created_at, $1.id) }
+                byTitle = task != nil
             }
+            if let t = task { taken.insert(t.id) }
             let a = fields(of: item)
             let link: JSONValue = .object(["id": .string(item.externalId), "list": .string(item.listId), "list_title": .string(item.listTitle)])
 
@@ -190,8 +220,18 @@ public enum RemindersMerge {
             for k in fieldNames {
                 let av = a[k] ?? "", tv = tf[k] ?? ""
                 if av == tv { continue }
-                let aChanged = prior == nil || av != (s[k] ?? "")
-                let tChanged = prior == nil || tv != (s[k] ?? "")
+                guard prior != nil else {
+                    // Met for the first time, with no record of what the two last agreed on: an empty value is filled
+                    // from the other side and never clears it (a deadline, an alarm, notes). Matched by title alone,
+                    // the item may be the person's own reminder that only shares the name: its values stay, and the
+                    // task takes them.
+                    if av.isEmpty { toApple[k] = tv }
+                    else if tv.isEmpty || byTitle || appleNewer { toTask[k] = av }
+                    else { toApple[k] = tv }
+                    continue
+                }
+                let aChanged = av != (s[k] ?? "")
+                let tChanged = tv != (s[k] ?? "")
                 if aChanged && !tChanged { toTask[k] = av }
                 else if tChanged && !aChanged { toApple[k] = tv }
                 else if appleNewer { toTask[k] = av } else { toApple[k] = tv }
@@ -242,5 +282,123 @@ public enum RemindersMerge {
             }
         }
         return out
+    }
+}
+
+/// An Apple Reminders alarm as the date rules see it: at a moment, or an offset from the due date. One tied to a
+/// place (arriving or leaving) is kept as it is when dates move.
+public struct ReminderAlarm: Equatable, Sendable {
+    public var absolute: Date?
+    public var offset: TimeInterval
+    public var place: Bool
+    public init(absolute: Date? = nil, offset: TimeInterval = 0, place: Bool = false) { self.absolute = absolute; self.offset = offset; self.place = place }
+}
+
+/// How an Apple item's due date and alarms read as a task's `due` and `remind_at`, and what is written back when they
+/// change. Pure, so it is tested without EventKit (RemindersSync reads and writes the EventKit side).
+public enum ReminderDates {
+    /// The due date and reminder time Apple's fields stand for. A due date with no time is the day alone
+    /// (YYYY-MM-DD): read as local midnight, it was another moment in every time zone. Apple puts a timed reminder's
+    /// time in both the due date and its alarm; that reads as a reminder with no separate deadline.
+    public static func read(due c: DateComponents?, alarms: [ReminderAlarm], calendar: Calendar = .current) -> (due: String?, remindAt: String?) {
+        let dueDate = c.flatMap { moment($0, calendar: calendar) }
+        let alarm = alarms.lazy.compactMap { a in a.absolute ?? dueDate.map { $0.addingTimeInterval(a.offset) } }.first
+        let remindAt = alarm.map { ISO.string($0) }
+        guard let c, let d = dueDate, alarm.map({ abs($0.timeIntervalSince(d)) < 60 }) != true else { return (nil, remindAt) }
+        return (dayAlone(c) ?? ISO.string(d), remindAt)
+    }
+
+    /// YYYY-MM-DD for a due date with no time; nil for one with a time.
+    static func dayAlone(_ c: DateComponents) -> String? {
+        guard c.hour == nil, let y = c.year, let m = c.month, let d = c.day else { return nil }
+        return String(format: "%04d-%02d-%02d", y, m, d)
+    }
+
+    /// The moment a due date stands for on this device: a day alone at local midnight (alarms set from the due date
+    /// count from there).
+    static func moment(_ c: DateComponents, calendar: Calendar) -> Date? {
+        var c = c
+        if c.calendar == nil { c.calendar = calendar }
+        if c.hour == nil { c.hour = 0; c.minute = 0 }
+        return c.date
+    }
+
+    /// The due date written for a task's `due` (or its reminder time when it has no deadline). A day alone is a date
+    /// with no time, whatever the time zone; so is a moment at local midnight, which is how older builds kept a day.
+    public static func components(_ s: String?, calendar: Calendar = .current) -> DateComponents? {
+        guard let s, !s.isEmpty else { return nil }
+        if TaskDue.isDateOnly(s) {
+            let p = s.split(separator: "-").compactMap { Int($0) }
+            guard p.count == 3 else { return nil }
+            var out = DateComponents(year: p[0], month: p[1], day: p[2])
+            out.calendar = calendar
+            return out
+        }
+        guard let d = ISO.date(s) else { return nil }
+        let hm = calendar.dateComponents([.hour, .minute], from: d)
+        let timed = !(hm.hour == 0 && hm.minute == 0)
+        var out = calendar.dateComponents(timed ? [.year, .month, .day, .hour, .minute] : [.year, .month, .day], from: d)
+        out.calendar = calendar
+        out.timeZone = timed ? calendar.timeZone : nil
+        return out
+    }
+
+    /// One alarm after a change of dates: `from` is the index of one kept from before (moved to `at` when that is
+    /// set), nil a new one at `at`.
+    public struct AlarmWrite: Equatable, Sendable {
+        public var from: Int?
+        public var at: Date?
+        public init(from: Int?, at: Date?) { self.from = from; self.at = at }
+    }
+
+    public struct Write: Equatable, Sendable {
+        public var due: DateComponents?
+        public var alarms: [AlarmWrite]
+        /// Apple's repeat rule stays as it is; otherwise it is made again from the app's repeat.
+        public var keepsRepeat: Bool
+    }
+
+    /// What to write after the task's due date, reminder time or repeat changed in the app.
+    /// - Parameters:
+    ///   - full: the task's fields, as `RemindersMerge.fields(of:)` gives them.
+    ///   - repeatChanged: the repeat itself changed, so Apple's rule is made again from the app's.
+    ///   - current, alarms: the item's due date and alarms as they are now.
+    /// When only the dates moved (Done on a repeating task moves them to the next time), Apple's rule and alarms stay:
+    /// they can hold what the app's repeat cannot (an end date, a count, "last Friday", a place). Alarms at a moment
+    /// move as far as the reminder time did, those counted from the due date move with it, and those tied to a place
+    /// stay. Only when that would not read back as the task's dates are the alarms made again, as before: one at the
+    /// reminder time.
+    public static func write(full: [String: String], repeatChanged: Bool, due current: DateComponents?, alarms: [ReminderAlarm],
+                             calendar: Calendar = .current) -> Write {
+        let deadline = full["due"] ?? ""
+        let due = components(deadline.isEmpty ? full["remind_at"] : deadline, calendar: calendar)
+        let at = ISO.date(full["remind_at"])
+        let rebuilt = at.map { [AlarmWrite(from: nil, at: $0)] } ?? []
+        guard !repeatChanged else { return Write(due: due, alarms: rebuilt, keepsRepeat: false) }
+        let keeps = due != nil
+        // What the item has to read as afterwards, or the next run takes Apple's side for a change and undoes the edit.
+        let wantDue = deadline.isEmpty ? "" : RemindersMerge.due(read(due: due, alarms: [], calendar: calendar).due)
+        let wantAt = RemindersMerge.minute(full["remind_at"])
+        let oldAt = ISO.date(read(due: current, alarms: alarms, calendar: calendar).remindAt)
+        let shift = at.flatMap { a in oldAt.map { a.timeIntervalSince($0) } } ?? 0
+        var moved: [AlarmWrite] = []
+        for (i, a) in alarms.enumerated() {
+            if a.place { moved.append(AlarmWrite(from: i, at: nil)); continue }
+            // No reminder time any more: the alarms with a time go; one tied to a place stays.
+            guard at != nil else { continue }
+            if let t = a.absolute, shift != 0 { moved.append(AlarmWrite(from: i, at: t.addingTimeInterval(shift))) }
+            else { moved.append(AlarmWrite(from: i, at: nil)) }
+        }
+        let after = moved.map { w -> ReminderAlarm in
+            guard let i = w.from else { return ReminderAlarm(absolute: w.at) }
+            var a = alarms[i]
+            if let t = w.at { a.absolute = t }
+            return a
+        }
+        let r = read(due: due, alarms: after, calendar: calendar)
+        if RemindersMerge.due(r.due) == wantDue, RemindersMerge.minute(r.remindAt) == wantAt {
+            return Write(due: due, alarms: moved, keepsRepeat: keeps)
+        }
+        return Write(due: due, alarms: rebuilt, keepsRepeat: keeps)
     }
 }

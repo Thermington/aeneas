@@ -5,7 +5,7 @@ import type { Entity } from "@everythingapp/shared";
 import type { Hub } from "./hub.js";
 import type { Store } from "./store.js";
 import { StoreError } from "./store.js";
-import { scheduleDaily } from "./schedule.js";
+import { dbJobClock, scheduleDaily } from "./schedule.js";
 import { probeTls } from "./watches.js";
 import { hostsSummary } from "./memory.js";
 import { localDateOf } from "./planner.js";
@@ -326,13 +326,7 @@ async function checkOnce(hub: Hub, id: string, now: Date): Promise<Entity> {
     if (prev !== "up") { diff.state = "up"; hub.store.patch(id, diff); } else hub.store.patchSilent(id, diff);
     // Any open incident ends with a success, also one left from before the monitor was turned off and on again.
     const inc = openIncident(hub.store, id);
-    if (inc) {
-      hub.store.patch(inc.id, { closed_at: at });
-      mapFor(notifiedAt, hub).delete(inc.id);
-      // The machine answers again: what went down with it gets its full count of failures before it is a problem of
-      // its own (a service starting a minute after its machine woke sent a down and an up alert).
-      for (const j of hub.store.list({ kind: "monitor", limit: 100000 })) if (j.fields.joined_incident === inc.id && j.fields.state === "down") hub.store.patchSilent(j.id, { consecutive_fails: 0 });
-    }
+    if (inc) closeIncident(hub, inc, at);
     // A monitor that was down only as part of its machine's incident comes back quietly: the machine's alert says so.
     if (inc || (prev === "down" && !f.joined_incident)) emitMonitor(hub, m, "up", undefined, at);
   } else if (prev !== "down" && fails >= threshold) {
@@ -415,8 +409,7 @@ export function renotifyTick(hub: Hub, now: Date = new Date()): string[] {
     // acknowledged or not (one left open from a deleted monitor kept Ops saying an incident was open).
     const m = hub.store.get(String(inc.fields.monitor_id));
     if (!m || m.deleted_at || m.fields.enabled === false) {
-      hub.store.patch(inc.id, { closed_at: now.toISOString() });
-      last.delete(inc.id);
+      closeIncident(hub, inc, now.toISOString());
       continue;
     }
     if (inc.fields.acknowledged_at) { last.delete(inc.id); continue; }
@@ -504,7 +497,7 @@ export function pruneChecks(hub: Hub, keepDays = CHECK_KEEP_DAYS, now: Date = ne
 
 /** Once a night at 03:30 local. */
 export function startCheckPruneJob(hub: Hub): () => void {
-  return scheduleDaily("checks", 3, 30, () => { pruneChecks(hub); });
+  return scheduleDaily("checks", 3, 30, () => { pruneChecks(hub); }, { clock: dbJobClock(hub.db) });
 }
 
 // ---------- views ----------
@@ -537,6 +530,17 @@ export function opsView(hub: Hub, now: Date = new Date()): Record<string, unknow
 }
 
 /**
+ * An incident ends. What went down with it as part of its machine (joined_incident) gets its full count of failures
+ * before it is a problem of its own: a service starting a minute after its machine woke sent a down and an up alert,
+ * and with the machine's ping turned off during an outage every service on it alerted at its next failed check.
+ */
+function closeIncident(hub: Hub, inc: Entity, at: string): void {
+  hub.store.patch(inc.id, { closed_at: at });
+  mapFor(notifiedAt, hub).delete(inc.id);
+  for (const j of hub.store.list({ kind: "monitor", limit: 100000 })) if (j.fields.joined_incident === inc.id && j.fields.state === "down") hub.store.patchSilent(j.id, { consecutive_fails: 0 });
+}
+
+/**
  * Disabling a monitor takes it out of the picture: its state becomes `unknown` and any open incident is closed,
  * so a monitor that is off never shows as down or keeps re-notifying.
  */
@@ -546,7 +550,7 @@ export function installMonitorHooks(hub: Hub): void {
     if (entity.kind !== "monitor" || (!entity.deleted_at && entity.fields.enabled !== false)) return;
     const at = new Date().toISOString();
     const inc = openIncident(hub.store, entity.id);
-    if (inc) { hub.store.patch(inc.id, { closed_at: at }); mapFor(notifiedAt, hub).delete(inc.id); }
+    if (inc) closeIncident(hub, inc, at);
     if (entity.deleted_at) return;
     if (entity.fields.state !== "unknown" || entity.fields.consecutive_fails || entity.fields.joined_incident) hub.store.patch(entity.id, { state: "unknown", consecutive_fails: 0, joined_incident: null });
   });

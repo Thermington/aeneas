@@ -988,6 +988,29 @@ function wgetReads(ws: string[]): boolean {
   return toStdout;
 }
 
+/** Commands that look a name up: the name goes out to the DNS servers that answer for its domain. */
+const LOOKUPS = new Set(["ping", "traceroute", "tracepath", "mtr", "dig", "nslookup", "host", "whois"]);
+/** Public names people look up to test a connection or DNS; a name on this list carries nothing. */
+const PUBLIC_NAMES = new Set(["example.com", "example.org", "example.net", "google.com", "www.google.com", "dns.google",
+  "cloudflare.com", "one.one.one.one", "github.com", "apple.com", "microsoft.com", "tailscale.com",
+  "controlplane.tailscale.com", "login.tailscale.com", "ollama.com", "registry.ollama.ai"]);
+
+/**
+ * A lookup that runs at once asks only about a name on this network, an address, or a well-known public name. Any
+ * other name reaches the servers of its domain, so a lookup of "jamie-555-0100.collector.example" carried a contact
+ * out with no approval (a page or an email the assistant read could ask for it). Such a lookup waits like a change.
+ */
+function lookupsOnlyPrivate(w0: string, ws: string[]): boolean {
+  if (!LOOKUPS.has(w0)) return true;
+  return ws.slice(1).every((w) => {
+    if (/^[-+@]/.test(w) || /^\d+$/.test(w)) return true; // flags, dig's +options and @server (serversPrivate), counts
+    const name = w.toLowerCase().replace(/\.$/, "");
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name) || name.includes(":")) return true; // an address: no name is looked up
+    if (!/^[a-z0-9._-]+$/.test(name)) return true; // not a host name
+    return isPrivateHost(name) || PUBLIC_NAMES.has(name);
+  });
+}
+
 /** Every server a lookup or openssl connects to is on the network, or a lookup goes to a known public resolver. */
 function serversPrivate(w0: string, ws: string[]): boolean {
   const args = ws.slice(1);
@@ -1082,6 +1105,7 @@ function segmentReads(seg: string, cwdMoved: boolean): boolean {
   if (w0 === "nmcli" && !nmcliReads(ws.slice(1))) return false;
   if (w0 === "npm" && firstArg === "config" && !/^(get|list|ls)$/.test(ws[ws.indexOf("config") + 1] ?? "list")) return false;
   if (!serversPrivate(w0, ws)) return false;
+  if (!lookupsOnlyPrivate(w0, ws)) return false;
   if (w0 === "sed" && !sedReads(ws)) return false;
   if (showsSecrets(w0, firstArg, ws)) return false;
   if (readsSecretTree(w0, ws.slice(1), cwdMoved)) return false;

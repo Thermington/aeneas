@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useMemo, useState } from "react";
 import { useHubPoll } from "../sync/useHubPoll";
 import { localToday, scheduleTask, unscheduleTask, conflictMessage } from "../sync/planner";
@@ -11,7 +12,8 @@ import { Timeline } from "../components/Timeline";
 import { TaskPicker } from "../components/TaskPicker";
 import { createEntity } from "../sync/edits";
 import { SOURCE } from "../sync/actions";
-import { diaryToday, followUpsDue, regularMeds } from "../lib/today";
+import { DIARY_DAY_START, diaryToday, followUpsDue, regularMeds } from "../lib/today";
+import { useLocalDate } from "../lib/useLocalDate";
 import { datePhrase, datesSoon, peopleInPlans, plansToday } from "@everythingapp/shared";
 
 /**
@@ -24,17 +26,21 @@ export function Today() {
   const poll = useHubPoll<PlannerToday>((c) => c.plannerToday(), localToday, []);
   const { on } = useModules();
   const t = poll.data;
+  // What today holds is worked out again when the day changes with the screen open, not only when the items do:
+  // yesterday's meds showed as taken after midnight. The diary's day starts at 4 AM.
+  const today = useLocalDate();
+  const diaryDay = useLocalDate(DIARY_DAY_START);
   const events = useEntities("event");
   const apps = useEntities("application", (e) => !!e.fields.next_at);
   const medLogs = useEntities("log", (e) => e.fields.type === "med");
-  const followUps = useMemo(() => followUpsDue(apps, new Date()), [apps]);
+  const followUps = useMemo(() => followUpsDue(apps, new Date()), [apps, today]);
   const people = useEntities("person");
   const facts = useEntities("fact", (e) => !!e.fields.person_id || !!e.fields.person);
   const tasks = useEntities("task", (e) => e.fields.status === "doing" || !!e.fields.due);
-  const dates = useMemo(() => datesSoon(people, new Date(), 14), [people]);
+  const dates = useMemo(() => datesSoon(people, new Date(), 14), [people, today]);
   const diaryNotes = useEntities("note", (e) => String(e.fields.path ?? "").startsWith("Diary/"));
-  const diary = useMemo(() => diaryToday(diaryNotes, new Date()), [diaryNotes]);
-  const meds = useMemo(() => regularMeds(medLogs, new Date()), [medLogs]);
+  const diary = useMemo(() => diaryToday(diaryNotes, new Date()), [diaryNotes, diaryDay]);
+  const meds = useMemo(() => regularMeds(medLogs, new Date()), [medLogs, today]);
   const [slot, setSlot] = useState<{ start: string; hours: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -65,7 +71,7 @@ export function Today() {
       await poll.reload();
     } catch (e) {
       const c = conflictMessage(e);
-      setErr(c ?? (e instanceof Error ? e.message : String(e)));
+      setErr(c ?? (plainError(e)));
       if (c) setForce({ taskId, start, hours });
     } finally {
       setBusy(false);

@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities, useEntity } from "../sync/hooks";
@@ -129,7 +130,7 @@ export function Notes({ id }: { id?: string }) {
       const blob = await engine.client!.exportNotes();
       saveBlob(blob, `notes-${localDate(new Date())}.tar.gz`);
     } catch (e) {
-      alert(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Export failed: ${plainError(e)}`);
     }
   };
 

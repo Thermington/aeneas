@@ -278,3 +278,11 @@ test("hum: even quarter notes at a slow tempo are read at that tempo, not as dot
     }
   }
 });
+
+test("hum: hums sent together are heard one after another, each with its own time limit", async () => {
+  const melody = readWav(writeWav(hum([60, 62, 64, 65, 67], 120, 44100), 44100));
+  const results = await Promise.all([basicPitch(melody), basicPitch(melody), basicPitch(melody)]);
+  assert.equal(results.length, 3);
+  for (const r of results) assert.ok(r && typeof r === "object", "each hum got its pitch line");
+  stopHumWorker();
+});

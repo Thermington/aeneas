@@ -1,3 +1,4 @@
+import { plainError } from "../../lib/errors";
 import { useEffect, type ReactNode } from "react";
 
 /** Page titles by path, for headings and the "‹ Parent" back links (the Shell's phone top bar uses them too). */
@@ -18,6 +19,7 @@ export const SETTINGS_TITLES: Record<string, string> = {
   "/settings/windows": "Windows app",
   "/settings/about": "About",
   "/settings/people": "People on this machine",
+  "/settings/reference": "Reference",
 };
 
 /** The page one level up from a Settings sub-page, or null outside them. */
@@ -94,5 +96,5 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
 
 /** A plain-words message from an error. */
 export function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return plainError(e);
 }

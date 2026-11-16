@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities } from "../sync/hooks";
@@ -39,7 +40,7 @@ export function JournalForm({ host, hosts, onDone }: { host?: string; hosts: str
         setErr("");
         createEntity("journal", journalFields(d))
           .then(onDone)
-          .catch((x) => setErr(x instanceof Error ? x.message : String(x)));
+          .catch((x) => setErr(plainError(x)));
       }}
     >
       {!host && (
@@ -132,7 +133,7 @@ export function JournalEntry({ e, showHost, focus }: { e: Entity; showHost?: boo
     try {
       await patchEntity(e, { outcome });
     } catch (x) {
-      setErr(x instanceof Error ? x.message : String(x));
+      setErr(plainError(x));
     } finally {
       setBusy(false);
     }

@@ -1,9 +1,14 @@
+import { plainError } from "../lib/errors";
 import type { Entity, Patch } from "@everythingapp/shared";
 import { db as defaultDb, EADatabase, META, getMeta, setMeta, type OutboxItem, type RejectedEdit } from "./db";
 import { HubClient, HubError, isDeviceKey, readSse, type FetchLike, type ModuleInfo } from "./api";
 import { applyPatchLocal, mergeIncoming, planFlush, rejectedIds } from "./merge";
 import { celebrate } from "../feel/events";
 import { hubFetch } from "./direct";
+import { router as appRouter, type HubRouter } from "./home";
+import { normalizeHubId } from "./hubid";
+import { parseRoutes, type HubRoutes, type RouteName, type Trigger } from "./route";
+import { isTauri } from "../tauri/bridge";
 
 export type SyncStatus = "setup" | "offline" | "syncing" | "synced";
 
@@ -13,11 +18,20 @@ export interface SyncState {
   lastError?: string;
   live: boolean;
   seq: number;
+  /** How the Windows or Android app reaches its hub right now (Settings, Connection); null in a browser. */
+  route: RouteName | null;
 }
+
+/** Said when the hub's address now answers with another hub's id: nothing is synced with it. */
+export const OTHER_HUB = "This address now leads to another hub, so nothing is synced. Pair this device again with a code from your own hub.";
+
+/** The hub's answer to GET /link/routes, kept for the next start. */
+export interface KeptRoutes extends HubRoutes { at: string }
 
 /**
  * A `notify` event from /live. `reminder` carries id and friction, `digest` only a title (the first
- * digest line), `activity` the open log's id as `log_id`, `sensor` the sensor's name, value and unit.
+ * digest line), `activity` the open log's id as `log_id`, `sensor` the sensor's name, value and unit, `disk` its
+ * whole message in the title.
  */
 export interface NotifyEvent {
   kind: string;
@@ -44,12 +58,14 @@ export interface EngineOptions {
   platform?: () => string;
   deviceName?: () => string;
   live?: boolean;
+  /** The Windows and Android apps' choice between the home network and the remote route (home.ts). None in a browser. */
+  router?: HubRouter | null;
 }
 
 export class SyncEngine {
   db: EADatabase;
   client: HubClient | null = null;
-  state: SyncState = { status: "setup", outbox: 0, live: false, seq: 0 };
+  state: SyncState = { status: "setup", outbox: 0, live: false, seq: 0, route: null };
   private listeners = new Set<Listener>();
   private notifyListeners = new Set<(n: NotifyEvent) => void>();
   private moduleListeners = new Set<(m: ModuleInfo[]) => void>();
@@ -69,6 +85,11 @@ export class SyncEngine {
   private pullAgain = false;
   /** When this device last tried to trade the hub's main key for its own (a failure waits a minute). */
   private exchangeAt = 0;
+  private router: HubRouter | null;
+  /** The hub was asked which ways reach it since this connection began (GET /link/routes). */
+  private routesFresh = false;
+  /** The hub's address answered with another hub's id: nothing is synced until it is ours again. */
+  private otherHub = false;
 
   constructor(opts: EngineOptions = {}) {
     this.db = opts.db ?? defaultDb;
@@ -76,6 +97,8 @@ export class SyncEngine {
     this.platform = opts.platform ?? (() => "web");
     this.deviceName = opts.deviceName ?? (() => "web");
     this.liveEnabled = opts.live ?? true;
+    this.router = opts.router !== undefined ? opts.router : isTauri ? appRouter : null;
+    this.router?.chooser.subscribe(() => this.onRouteChange());
   }
 
   subscribe(fn: Listener): () => void {
@@ -114,11 +137,18 @@ export class SyncEngine {
       return false;
     }
     this.client = new HubClient({ hubUrl, token }, this.fetchImpl);
+    if (this.router) {
+      // Raced at once with the ways the hub named last time; asked again on the first connect.
+      this.router.start(hubUrl, this.client.url(""), parseRoutes(await getMeta<KeptRoutes>(META.routes, this.db)));
+      this.set({ route: this.router.name });
+    }
     return true;
   }
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.routesFresh = false;
+    this.otherHub = false;
     await this.refreshOutboxCount();
     const seq = (await getMeta<number>(META.seq, this.db)) ?? 0;
     this.set({ seq });
@@ -126,10 +156,11 @@ export class SyncEngine {
     this.set({ status: "syncing" });
     if (typeof window !== "undefined") {
       window.addEventListener("online", this.onOnline);
-      // Back from sleep or another tab: catch up at once rather than trusting a stream that may have died quietly.
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") this.onOnline();
-      });
+      document.addEventListener("visibilitychange", this.onVisible);
+      if (this.router) {
+        window.addEventListener("offline", this.onOffline);
+        netInfo()?.addEventListener("change", this.onNetwork);
+      }
     }
     await this.cycle();
     if (this.liveEnabled) this.openLive();
@@ -148,7 +179,13 @@ export class SyncEngine {
     if (this.pullTimer) clearTimeout(this.pullTimer);
     if (this.retryTimer) clearInterval(this.retryTimer);
     this.retryTimer = null;
-    if (typeof window !== "undefined") window.removeEventListener("online", this.onOnline);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", this.onOnline);
+      document.removeEventListener("visibilitychange", this.onVisible);
+      window.removeEventListener("offline", this.onOffline);
+      netInfo()?.removeEventListener("change", this.onNetwork);
+    }
+    this.router?.stop();
     this.set({ live: false });
   }
 
@@ -157,10 +194,85 @@ export class SyncEngine {
     await this.start();
   }
 
-  private onOnline = () => {
+  private onOnline = () => this.wake("network");
+
+  /**
+   * Back from sleep or another tab: catch up at once rather than trusting a stream that may have died quietly. One
+   * handler kept here, so stop() can take it off again; a new one on every start piled up, each syncing on its own.
+   */
+  private onVisible = () => {
+    if (document.visibilityState === "visible") this.wake("foreground");
+  };
+
+  /** Offline, or on another network: the Windows and Android apps race the ways to the hub again. */
+  private onOffline = () => void this.router?.chooser.trigger("network");
+  private onNetwork = () => this.wake("network");
+
+  /** Online again, back in the foreground or on another network: race the routes (the apps), then catch up. */
+  private wake(why: Trigger) {
+    if (this.router) {
+      this.routesFresh = false;
+      void this.router.chooser.trigger(why);
+    }
     void this.cycle();
     if (this.liveEnabled && !this.liveAbort) this.openLive();
-  };
+  }
+
+  /** The app moved to the other route: the live updates move with it, and the hub is asked again which ways reach it. */
+  private onRouteChange() {
+    if (this.router) this.set({ route: this.router.name });
+    if (this.stopped || !this.client) return;
+    this.routesFresh = false;
+    this.reopenLive();
+    void this.cycle();
+  }
+
+  private reopenLive() {
+    if (!this.liveAbort) return;
+    this.liveAbort.abort();
+    this.liveAbort = null;
+    if (this.liveEnabled && !this.stopped) this.openLive();
+  }
+
+  /**
+   * The Windows and Android apps ask the hub which ways reach it on every connect (GET /link/routes) and keep the
+   * answer for the next start. When the answer names another hub than the one this device was paired with, nothing is
+   * synced: false. A device paired before hubs had ids learns its hub's id here.
+   */
+  private async checkRoutes(): Promise<boolean> {
+    if (!this.router || !this.client || (this.routesFresh && !this.otherHub)) return true;
+    let answer: unknown;
+    try {
+      answer = await this.client.linkRoutes(timeoutSignal(15_000));
+    } catch (e) {
+      // An older hub has no such route (or not for this key): it is reached at its one address, as before.
+      if (e instanceof HubError && (e.status === 403 || e.status === 404 || e.status === 405)) {
+        this.routesFresh = true;
+        return true;
+      }
+      throw e;
+    }
+    const routes = parseRoutes(answer);
+    const stored = normalizeHubId(await getMeta<string>(META.hubId, this.db));
+    if (routes?.hub_id && stored && routes.hub_id !== stored) {
+      this.otherHub = true;
+      this.liveAbort?.abort();
+      this.liveAbort = null;
+      this.set({ status: "offline", live: false, lastError: OTHER_HUB });
+      return false;
+    }
+    if (routes) {
+      if (routes.hub_id && !stored) await setMeta(META.hubId, routes.hub_id, this.db);
+      await setMeta(META.routes, { ...routes, at: new Date().toISOString() } satisfies KeptRoutes, this.db);
+      this.router.setRoutes(routes);
+    }
+    this.routesFresh = true;
+    if (this.otherHub) {
+      this.otherHub = false;
+      if (this.liveEnabled && !this.liveAbort && !this.stopped) this.openLive();
+    }
+    return true;
+  }
 
   /**
    * A device set up with the hub's main key (before devices had keys, or from a setup file) trades it for a key of
@@ -192,7 +304,7 @@ export class SyncEngine {
   private useKey(hubUrl: string, key: string) {
     if (this.client?.cfg.token === key) return;
     this.client = new HubClient({ hubUrl, token: key }, this.fetchImpl);
-    if (this.liveAbort) { this.liveAbort.abort(); this.liveAbort = null; if (this.liveEnabled && !this.stopped) this.openLive(); }
+    this.reopenLive();
   }
 
   /** Removed from the hub (Settings, Devices on another device): forget the key so setup shows. */
@@ -221,6 +333,8 @@ export class SyncEngine {
     if (!this.client || this.stopped) return;
     try {
       await this.ensureOwnKey();
+      // The Windows and Android apps make sure the address still leads to this device's hub before syncing anything.
+      if (!(await this.checkRoutes())) return;
       await this.ensureDevice();
       // A push that fails (one bad edit, a hub hiccup) must not stop changes from coming in.
       let pushError: unknown;
@@ -233,11 +347,13 @@ export class SyncEngine {
       if (pushError) throw pushError;
       this.set({ status: (await this.db.outbox.count()) === 0 ? "synced" : "syncing", lastError: undefined });
     } catch (e) {
+      // The next connect asks the hub again which ways reach it.
+      this.routesFresh = false;
       const d = e instanceof HubError && e.status === 401 ? (e.detail as { device_removed?: boolean; unknown_key?: boolean } | undefined) : undefined;
       if (d?.device_removed) { await this.forgetRemovedDevice(); return; }
       // The hub does not know this key at all (its keys file was lost or restored): keep the key, in case it comes back.
       if (d?.unknown_key) { this.set({ status: "offline", lastError: "The hub does not know this device's key. If the hub was restored or moved, pair this device again in Settings, Connection." }); return; }
-      this.set({ status: "offline", lastError: e instanceof Error ? e.message : String(e) });
+      this.set({ status: "offline", lastError: plainError(e) });
     }
   }
 
@@ -332,6 +448,7 @@ export class SyncEngine {
   async flush(): Promise<void> {
     if (!this.client || this.flushing) return;
     this.flushing = true;
+    let again = false;
     try {
       await this.withLock("ea-flush", async () => {
         const deviceId = await this.ensureDevice();
@@ -358,12 +475,17 @@ export class SyncEngine {
           }
           const okIds = new Set(res.applied.map((a) => a.id));
           const badIds = new Set(rejectedIds(res.rejected));
-          if (res.rejected.length) await this.logRejected(res.rejected, batch.map((b) => b.patch));
+          // An edit of an item the hub does not have (it was restored from a copy older than the item) sends the item
+          // again whole, with create: it was deleted here, losing what the person had just changed.
+          const resent = await this.resendMissing(res.rejected, batch.map((b) => b.patch));
+          const refused = res.rejected.filter((r) => !resent.has(r.id));
+          if (refused.length) await this.logRejected(refused, batch.map((b) => b.patch));
           const doneSeqs = batch.filter((b) => okIds.has(b.patch.id) || badIds.has(b.patch.id)).map((b) => b.seq!);
           // Anything the hub did not mention stays queued for the next flush.
           await this.db.outbox.bulkDelete(doneSeqs);
           // At once, batch by batch: a later batch failing (the network gone) must not leave a refused edit showing.
-          for (const id of badIds) if (!toRefetch.has(id)) { toRefetch.add(id); await this.refetch(id); }
+          for (const id of badIds) if (!toRefetch.has(id) && !resent.has(id)) { toRefetch.add(id); await this.refetch(id); }
+          if (resent.size) again = true;
           await this.refreshOutboxCount();
         }
       });
@@ -371,6 +493,29 @@ export class SyncEngine {
       this.flushing = false;
       await this.refreshOutboxCount();
     }
+    // A resent item goes now, not at the next edit or timer.
+    if (again) await this.flush();
+  }
+
+  /**
+   * The items the hub answered "entity not found" for that this device still holds, queued again whole with create,
+   * stamped with when the item was made (the hub dates a new item by its stamp: "now" moved yesterday's capture to
+   * today), then the refused edits again with their own stamps. Once each: a create the hub also refuses (invalid
+   * fields) is a refusal like any other.
+   */
+  private async resendMissing(rejected: Array<{ id: string; reason: string }>, sent: Patch[]): Promise<Set<string>> {
+    const resent = new Set<string>();
+    const now = new Date().toISOString();
+    for (const r of rejected) {
+      if (!/^entity not found/.test(r.reason) || resent.has(r.id)) continue;
+      const local = await this.db.entities.get(r.id);
+      if (!local || local.deleted_at) continue;
+      const create: Patch = { id: local.id, kind: local.kind, space: local.space, ts: local.created_at || now, fields: { ...local.fields }, create: true };
+      await this.db.outbox.add({ patch: create, attempts: 0, enqueued_at: now });
+      for (const p of sent) if (p.id === r.id) await this.db.outbox.add({ patch: p, attempts: 0, enqueued_at: now });
+      resent.add(r.id);
+    }
+    return resent;
   }
 
   /** Keep a record of edits the hub refused (it then sends its own copy), so nothing is lost silently. */
@@ -447,10 +592,12 @@ export class SyncEngine {
   }
 
   openLive(): void {
-    if (!this.client || this.stopped || this.liveAbort) return;
+    if (!this.client || this.stopped || this.liveAbort || this.otherHub) return;
     const ac = new AbortController();
     this.liveAbort = ac;
     const run = async () => {
+      // Cleared however the stream ends: one left running at every normal end kept firing for good.
+      let watchdog: ReturnType<typeof setInterval> | undefined;
       try {
         const deviceId = await getMeta<string>(META.deviceId, this.db);
         const path = deviceId ? `/live?device_id=${encodeURIComponent(deviceId)}` : "/live";
@@ -463,7 +610,7 @@ export class SyncEngine {
           this.client!.modules().then((r) => { for (const l of this.moduleListeners) l(r.modules); }).catch(() => undefined);
         }
         // A stream can die without closing (sleep, network change): after 70 s of silence, open a new one.
-        const watchdog = setInterval(() => {
+        watchdog = setInterval(() => {
           if (Date.now() - this.liveHeard > 70_000) {
             clearInterval(watchdog);
             ac.abort();
@@ -497,6 +644,8 @@ export class SyncEngine {
         });
       } catch {
         /* fallthrough to reconnect */
+      } finally {
+        clearInterval(watchdog);
       }
       this.set({ live: false });
       if (ac.signal.aborted || this.stopped) {
@@ -514,6 +663,19 @@ export class SyncEngine {
     };
     void run();
   }
+}
+
+/** The Network Information API (Chromium's WebView2 and Android WebView): it says when the device changes networks. */
+function netInfo(): EventTarget | null {
+  if (typeof navigator === "undefined") return null;
+  const c = (navigator as Navigator & { connection?: EventTarget }).connection;
+  return c && typeof c.addEventListener === "function" ? c : null;
+}
+
+/** An abort signal that fires after `ms`, so a request cannot hang. */
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal) return AbortSignal.timeout(ms);
+  return undefined;
 }
 
 export const engine = new SyncEngine({

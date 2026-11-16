@@ -123,6 +123,7 @@ enum DashboardCache {
     static func save(_ b: DashboardBoard) {
         if let d = try? JSONCoding.data(b) { UserDefaults.standard.set(d, forKey: key) }
     }
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 }
 
 struct DashboardTileCard: View {

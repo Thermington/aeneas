@@ -11,6 +11,8 @@ struct NowView: View {
     @State private var parkTaskId: String?
     @State private var showUpNext = false
     @State private var parkReason = ""
+    /// The task's title: 34 points at the default text size, following the text size set on the device.
+    @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 34
 
     var body: some View {
         VStack(spacing: 16) {
@@ -71,7 +73,7 @@ struct NowView: View {
                 }
             }
             Text(StyleGuard.dashes(task.str("title")))
-                .font(.system(size: 34, weight: .bold))
+                .font(.system(size: titleSize, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
             if let n = f?.notes, !n.isEmpty {
                 Text(StyleGuard.dashes(n)).font(.title3).foregroundStyle(.secondary).lineLimit(6)

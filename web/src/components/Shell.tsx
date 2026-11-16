@@ -2,6 +2,7 @@ import { trafficLight } from "../lib/ops";
 import { useEffect, useState, type ReactNode } from "react";
 import { HubChip } from "./HubChip";
 import { showKeyboardHints } from "../lib/keyboardHints";
+import { listedKeys } from "../lib/keys";
 import { refreshHubIdentity, useHubTitle } from "../lib/hubIdentity";
 import { useLiveQuery } from "dexie-react-hooks";
 import { taskAlertAt } from "@everythingapp/shared";
@@ -10,7 +11,7 @@ import { useEntities } from "../sync/hooks";
 import { db } from "../sync/db";
 import { StatusDot } from "./StatusDot";
 import { ScreenBoundary } from "./ScreenBoundary";
-import { settingsBack } from "../views/settings/common";
+import { SETTINGS_TITLES, settingsBack } from "../views/settings/common";
 import { openWindow } from "../tauri/bridge";
 import { usePetName } from "../lib/profile";
 import { moduleOfScreen, useModules } from "../lib/modules";
@@ -38,6 +39,7 @@ export const AREAS: Array<{ title: string; items: Item[] }> = [
     { path: "/notes", label: "Notes" },
     { path: "/memory", label: "Memory" },
     { path: "/people", label: "People" },
+    { path: "/reference", label: "Reference" },
   ] },
   { title: "Homelab", items: [
     { path: "/ops", label: "Ops" },
@@ -76,9 +78,69 @@ const SETTINGS: Item = { path: "/settings", label: "Settings" };
 
 export const NAV: Item[] = [...PRIMARY, ...AREAS.flatMap((a) => a.items), ...SYSTEM, SETTINGS];
 
+/** Screens not in the lists above, by path, for the window title. */
+const OTHER: Item[] = [
+  { path: "/now", label: "Now" },
+  { path: "/search", label: "Search" },
+  { path: "/library", label: "Library" },
+  { path: "/more", label: "Library" },
+  { path: "/plan-rules", label: "Plan rules" },
+  { path: "/notes/map", label: "Notes map" },
+  { path: "/images", label: "Create image" },
+  { path: "/lists/jobs", label: "Job applications" },
+  { path: "/career", label: "Job applications" },
+  { path: "/reminders", label: "Tasks" },
+  { path: "/item", label: "Item" },
+  { path: "/welcome", label: "Welcome" },
+  { path: "/help/connections", label: "Connections help" },
+];
+
+/**
+ * The screen a path shows: its name, for the window title, and a key that changes only when the screen does. A note
+ * picked in Notes or a chat in the Assistant stays on that screen; each Settings page and each item is one of its own.
+ * A path the app does not know shows Now.
+ */
+export function screenOf(path: string): { key: string; title: string } {
+  if (path === "/settings" || path.startsWith("/settings/")) {
+    let p = path;
+    while (p.length > "/settings".length && !SETTINGS_TITLES[p]) p = p.slice(0, p.lastIndexOf("/"));
+    return { key: path, title: SETTINGS_TITLES[p] ?? "Settings" };
+  }
+  const hit = [...NAV, ...OTHER].filter((n) => path === n.path || path.startsWith(n.path + "/")).sort((a, b) => b.path.length - a.path.length)[0];
+  if (!hit) return { key: "/now", title: "Now" };
+  return { key: hit.path === "/item" ? path : hit.path, title: hit.label };
+}
+
+/** The screen last started (see ScreenStart); kept outside the component, which a switched-off module unmounts. */
+let shownScreen: string | null = null;
+
+/**
+ * Placed after the screen, inside its loading boundary, so it runs once the new screen has drawn: the screen starts
+ * at its top, not part way down where the last one was scrolled, and the keyboard focus moves to its heading (a
+ * screen reader says where you are; Tab goes on from the top). The first screen after the app opens keeps the
+ * browser's own focus.
+ */
+export function ScreenStart({ screen }: { screen: string }) {
+  useEffect(() => {
+    if (shownScreen === screen) return;
+    const first = shownScreen === null;
+    shownScreen = screen;
+    if (first) return;
+    window.scrollTo(0, 0);
+    const main = document.getElementById("main");
+    // A screen that put the focus somewhere itself (Capture's text box) keeps it there.
+    if (main?.contains(document.activeElement) && document.activeElement !== main) return;
+    const heading = main?.querySelector<HTMLElement>("h1") ?? main;
+    if (!heading) return;
+    if (!heading.hasAttribute("tabindex")) heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }, [screen]);
+  return null;
+}
+
 /** The keyboard shortcuts line, naming only screens of modules that are on. */
-function keysHint(on: (id: string) => boolean): string {
-  return ["t today", "a assistant", "c capture", "n now", "w week", on("homelab") && "h hosts", on("homelab") && "o ops", on("food") && "f food", on("projects") && "p procedures", "l lists", "/ search"].filter(Boolean).join(", ");
+function keysHint(on: (id: string | undefined) => boolean): string {
+  return listedKeys(on).map((k) => `${k.key} ${k.label}`).join(", ");
 }
 
 /** The Library areas with only the screens of modules that are on (Settings, Modules); an emptied area goes too. */
@@ -165,7 +227,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const areas = useAreas();
   const { on } = useModules();
   useKeyboardOpen();
-  useHubTitle();
+  useHubTitle(screenOf(route.path).title);
   useEffect(() => {
     void refreshHubIdentity();
     const again = () => { if (document.visibilityState === "visible") void refreshHubIdentity(); };

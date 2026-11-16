@@ -11,7 +11,7 @@ import { errCode } from "./logsafe.js";
 export const MODULE_IDS = [
   "voice", "notifications", "apple_reminders", "apple_calendar", "contacts",
   "renewals", "dashboard", "homelab", "projects", "music", "wiki", "images", "quiz",
-  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "web",
+  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "web", "reference",
 ] as const;
 export type ModuleId = (typeof MODULE_IDS)[number];
 
@@ -41,7 +41,7 @@ export interface ModuleDef {
   /** Set when part of it needs the person's own key or app. */
   setup?: AdvancedSetup;
   /** The Library area it sits in (Assistant: something the assistant may do, not a screen; On your devices: a device feature with no screen of its own). */
-  group: "On your devices" | "Plan" | "Homelab" | "Making" | "Body and home" | "Life admin" | "Assistant";
+  group: "On your devices" | "Plan" | "Notes" | "Homelab" | "Making" | "Body and home" | "Life admin" | "Assistant";
   /** On for a new hub. */
   default: boolean;
   /**
@@ -80,6 +80,7 @@ export const MODULES: ModuleDef[] = [
   { id: "layouts", title: "Layout sketches", summary: "Move, resize or take away parts of a picture of any screen to show how you want it laid out.", example: "You want the Today screen rearranged. You drag and resize parts of a screenshot to show it, instead of describing it.", group: "Making", default: false, prefixes: ["/layouts"], kinds: [] },
   { id: "mail", title: "Mail receipts", summary: "Receipts, renewal notices and vet mail from Gmail, filed as renewals and pet visits.", example: "A renewal notice arrives in Gmail. It's filed as a renewal with its date and price, without you touching it.", reads: "Gmail messages that look like receipts, renewals or vet mail, read by your own model. The mail itself is not kept.", setup: { minutes: "10 to 15", needs: "your own Google app, and the hub reached through Tailscale (Google returns only to an https name)" }, group: "Life admin", default: false, wasCore: true, prefixes: ["/connections/google"], kinds: [] },
   { id: "web", title: "Web lookups", summary: "The assistant searches the web and reads pages to answer what it does not know.", example: "You ask \"what time does the hardware store close today?\" The assistant looks it up through Tor and answers.", reads: "Searches go to DuckDuckGo, Brave, Mwmbl and Wikipedia through your hub's own search server, and the hub fetches the pages it reads, all only through Tor: the engines and sites see the words searched and a Tor address, never your home one. If Tor is not set up on the hub, lookups stay off. Captures are never searched.", group: "Assistant", default: false, wasCore: true, prefixes: [], kinds: [] },
+  { id: "reference", title: "Offline reference", summary: "Wikipedia, dictionaries, medical and repair guides and more, kept on the hub: search and read them, and the assistant cites them, with no internet.", example: "The internet is down and your daughter has a fever. You search \"fever in children\" and read the medical guide's page on the iPad, and the assistant answers from it, naming the source and its date.", reads: "Nothing of yours. It downloads the public archives you pick from Kiwix's servers; searches and reading stay on the hub.", group: "Notes", default: false, prefixes: ["/reference"], kinds: [] },
 ];
 
 const BY_ID = new Map(MODULES.map((m) => [m.id, m]));

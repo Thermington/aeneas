@@ -4,115 +4,129 @@ The app is called Aeneas (on the App Store: Aeneas: Mind Workbench). The project
 
 One SwiftUI codebase. The contract in `packages/shared/CONTRACT.md` is the source of truth; this client implements it as written.
 
-## Layout
+## Targets
 
-- `project.yml`: the xcodegen project definition. The `.xcodeproj` is generated and git-ignored.
-- `Packages/EACore`: local Swift package shared by every target. Models (`Entity`, `Patch`, every kind as a Codable struct with the contract's field names), `HubTransport` with `HTTPTransport` (direct, iPhone, iPad, Mac) and `WatchRelayTransport` (through the iPhone), `HubClient` (every route, SSE readers for `/live` and `/ai/chat/stream` over HTTP), `SyncStore` (SQLite via the C API, tables `entities`, `outbox`, `meta`), `SyncEngine` (offline-first coordinator), `ReminderPlanner` and `ReminderScheduler` (local notifications), `RepeatRule` (repeat grammar), `StyleGuard` (display-side style filter), `Classifier` (offline capture classifier), `SharedConfig` (app group config and the Now snapshot for widgets).
-- `EverythingApp`: the iPhone, iPad and Mac app. Today (digest, Now card, timeline, renewals due soon, free slots with Schedule here), Week (day list on iPhone, seven-column grid on iPad and Mac), Renewals (watches grouped overdue, next 30 days, later, with Renewed), Plan rules under Settings. Mac adds a menu bar extra, a floating quick-capture panel and the Control+Option+Space hotkey.
-- `EverythingApp Watch`: the watchOS app (Now, one-tap activity tracker, capture with confirm, weight with the Digital Crown).
-- `EverythingAppWidgets`: iOS and macOS WidgetKit small and medium widgets.
-- `EverythingAppWatchWidgets`: watch face complications (circular, rectangular, inline).
-- `Shared`: App Intents used by both apps (Capture, Log Weight, Mark Now Done, Start Activity; Configure Hub on the phone only).
-- `screenshots`: simulator screenshots of Setup, Now, Today, Week (iPhone and iPad), Renewals and Plan rules.
+`project.yml` is the xcodegen definition; the `.xcodeproj` it makes is git-ignored and never edited by hand. Minimum systems: iOS and iPadOS 18, macOS 15, watchOS 11.
 
-Bundle ids: `$(EA_BUNDLE_PREFIX).everythingapp`, `.watchkitapp`, `.widgets`, `.share`, `.watchkitapp.watchwidgets`. App group: `group.$(EA_BUNDLE_PREFIX).everythingapp`. Both come from `Signing.xcconfig`, which holds this project's own team (`EA_TEAM_ID`) and prefix (`EA_BUNDLE_PREFIX = com.gnomecannon`). The code reads the app group from each target's Info.plist (`EAAppGroup`), so nothing else names them.
+| Target | Runs on | What it is |
+| --- | --- | --- |
+| `EverythingApp` | iPhone, iPad, Mac | The app, from `EverythingApp/` and `Shared/`. The Mac build is for Apple silicon only (iroh's Mac library is arm64 only). |
+| `EverythingAppWidgets` | iPhone, iPad, Mac | The Now widget (small and medium, with a Done button). On iPhone and iPad also its Lock Screen sizes and the Capture and Log controls, and on iPhone the Live Activity for a running activity or focus block. |
+| `EverythingAppShare` | iPhone, iPad | The share sheet: text, a link or an image goes to Capture. What cannot reach the hub waits in the app group until the app sends it. |
+| `EverythingApp Watch` | Apple Watch | One SwiftUI target, embedded in the iPhone app: Ask, Capture and Hum on the first page, then Now, Today, and with Health on Log, Activity and Weight. |
+| `EverythingAppWatchWidgets` | Apple Watch | Complications: Now, Next up, and one tap Ask, Capture and Hum. |
+| `EverythingAppUITests` | iPhone simulator | Pairing with a code, the removed screen, and setup links. |
+
+Schemes: `EverythingApp` (the app with its extensions and the Watch app), `EverythingApp Watch`, `EverythingAppWidgets` and `EverythingAppWatchWidgets`.
+
+## Packages and folders
+
+- `Packages/EACore`: shared by every target. The contract's models (`Entity`, `Patch`, each kind as a Codable struct with the contract's field names), `HubClient` (every route; `/live` and `/ai/chat/stream` over HTTP), `HTTPTransport` and, on the Watch, `WatchRelayTransport`, `SyncStore` (SQLite through the C API), `SyncEngine` (offline first: the outbox, `/sync/changes` and `/live`), reminder planning, the local planner, `SharedConfig` (settings in the app group and the snapshot the widgets read), the Watch link and sample mode. Its tests run with `swift test`.
+- `Packages/EALink`: Direct link for the iPhone, iPad and Mac app: a hub saved as `iroh://<hub key>` is reached over iroh. Swift Package Manager fetches n0's `iroh-ffi` at the pinned version and checks its framework against the pinned checksum.
+- `Packages/EATailnet`: Tailscale inside Aeneas (Tailscale's libtailscale, as TailscaleKit) for the iPhone, iPad and Mac app. `TailscaleKit.xcframework` is not in git: `scripts/build-tailscalekit.sh` builds it from a pinned commit.
+- `Shared`: in both the app and the Watch app. The App Intents for Siri, Shortcuts and the Action Button (Ask, Capture, Log Weight, Mood, Caffeine, Medication and Blood Pressure, Mark Now Done, Start Activity, Add Task, Complete Task; Configure Hub and Open Screen on iPhone, iPad and Mac), the Live Activity's attributes, and the choice of voice that answers are read aloud in.
+- `EverythingApp/Resources`: `SampleHub.json` and `SampleMealsTax.json`, for sample mode.
+- `screenshots`: simulator screenshots, and in `screenshots/app-store` the ones for the store listing.
 
 ## Build it yourself
 
-Anyone can build and change the Apple apps (the code is AGPL-3.0, see `LICENSE`; a copy you share goes under its own name, see `TRADEMARKS.md`). What you need, all from Apple:
+Anyone can build and change the Apple apps (the code is AGPL-3.0, see `LICENSE`; a copy you share goes under its own name, see `TRADEMARKS.md`). You need:
 
-- A Mac with Xcode 26.6 or newer, and xcodegen (`brew install xcodegen`).
+- A Mac with Xcode 26.6 or newer, xcodegen 2.45 or newer (`brew install xcodegen`) and Go (`brew install go`, for TailscaleKit).
 - An Apple account signed in to Xcode (Xcode, Settings, Accounts). A free account works for your own devices, but apps it signs stop opening after 7 days until you build and install again, and it allows only a few apps at a time. The paid Apple Developer Program ($99 a year) makes an install last a year.
-- Your own hub to pair with (see the main README).
+- Your own hub to pair with (see the main README), or none at all to look around in sample mode.
 
 Steps:
 
-1. `cd apple`, then `cp Signing.local.xcconfig.example Signing.local.xcconfig`. Git ignores the copy, so your values never end up in a commit.
-2. In `Signing.local.xcconfig`, set `EA_TEAM_ID` to your team's 10-character id (Xcode, Settings, Accounts, select the team) and `EA_BUNDLE_PREFIX` to a reverse-domain name of your own, such as `io.github.yourname`. Every bundle id and the app group are built from it, and they must be unique across Apple.
-3. `xcodegen generate`, then `open EverythingApp.xcodeproj`, pick the `EverythingApp` scheme and your device, and Run. Xcode registers your ids and app group the first time.
-4. Pair it with your hub as in step 4 below. Change anything you like and Run again; the Watch app installs with the iPhone app.
+1. `cd apple`, then `scripts/build-tailscalekit.sh` once (again only when its pinned commit changes).
+2. `cp Signing.local.xcconfig.example Signing.local.xcconfig` and put your team and prefix in the copy (see Signing).
+3. `xcodegen generate`, then `open EverythingApp.xcodeproj`. Run `xcodegen generate` again after adding or removing a file.
+4. Pick the `EverythingApp` scheme and your iPhone, iPad or Mac, then Run. Xcode registers your bundle ids and app group the first time. The Watch app installs with the iPhone app.
 
-Features that need a paid account or Apple's approval for a capability may not build with a free account; if Xcode reports a capability it cannot add, remove that capability's entry from `project.yml` (and its module will simply not ask for it).
-
-## Generate the project
-
-Requires Xcode 26.6 and xcodegen 2.45 or newer.
-
-    cd apple
-    xcodegen generate
-    open EverythingApp.xcodeproj
+Features that need a paid account or Apple's approval for a capability may not build with a free account; if Xcode reports a capability it cannot add, remove that capability's entry from `project.yml` (its module then never asks for it).
 
 Build settings that xcodegen normally fills from its preset bundle are written out in `project.yml`, so generation works even when that bundle is missing.
 
-## Select the team and run on a device
+## Signing
 
-1. Sign in to Xcode with the Apple ID that owns the team in `Signing.xcconfig` (`EA_TEAM_ID`), or yours from `Signing.local.xcconfig` (Xcode, Settings, Accounts). Without a signed-in account Xcode cannot create provisioning profiles, and `xcodebuild` fails with "No profiles for" the app's bundle id.
-2. Signing is automatic and the team is already set on every target. Xcode registers the app group, HealthKit and the bundle ids the first time you build for a device.
-3. Select the `EverythingApp` scheme and your iPhone, iPad or Mac, then Run.
-4. First launch shows Setup. Each device gets its own key from a one-time pairing code (8 characters, works once, for 10 minutes). On a device that is already paired, Settings, Connection, Pair another device shows the code in large text and as a QR code; on a new hub the Welcome page shows one. Scan it with the Camera (it opens `everythingapp://setup?hub=&code=&name=`), or type the hub address and the code on the Setup screen. The app trades the code at `POST /devices/claim` for its key, keeps the key in the Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced, shared with the widgets, share extension and intents through the app group as the keychain access group; the data protection keychain on the Mac), registers, syncs and shows Today. A link may carry `fp=` (the SHA-256 of the hub's certificate); with an https hub only that certificate is then accepted. The `Configure Hub` intent takes the hub address, a pairing code and a name.
-   - An older link with `&token=` still works: the token is traded at once (`POST /devices/exchange`) and never stored. Only a hub too old to trade it (404) or one out of reach leaves it in use, and the app trades it later.
-   - An install paired before device keys trades the shared token on its next start, keeping its device id, then deletes it; the iPhone also trades for its Watch. Offline or an older hub: the token keeps working quietly and the trade is tried again later.
-   - The Watch never holds a key. The iPhone keeps one for it (traded with the shared token, or claimed with a one-time code made with the iPhone's own key) and relays the Watch's requests with it, so the Watch is a device of its own on the hub.
-   - Settings, Connection, Devices lists every paired device with Remove. A removed device gets 401 `device_removed` and shows "This device was removed" with Pair again; its key is deleted.
-5. Permissions are asked only for modules that are on, never at launch. Right after pairing, once the modules are known, one screen lists what they need (notifications, microphone, speech, Reminders, Calendars, Contacts, Health, Photos) in plain words with the modules each is for; Continue asks each in turn, Not now asks nothing. A module switched on later (Settings, Modules, or another device over `/live`) offers its own. Otherwise a feature asks only from its own screen, when you tap something that needs it (the mic button, Allow calendar access, Sync with Apple Reminders, Sync Apple Contacts, Health Send now, Save to Photos, Settings, Notifications).
+`Signing.xcconfig` holds the project's own team (`EA_TEAM_ID`) and the prefix every id is built from (`EA_BUNDLE_PREFIX = com.gnomecannon`). Leave it as it is for your own copy: it includes `Signing.local.xcconfig` when that file exists, and the values there win. Git ignores the local file, so your values never end up in a commit.
 
-No arbitrary loads: plain `http://` is allowed only to a local hub (`NSAllowsLocalNetworking`: IP addresses, unqualified names, `.local`) and to Tailscale names under `ts.net`, whose traffic WireGuard encrypts. The Watch has no transport exceptions (it never reaches the hub itself).
+- `EA_TEAM_ID`: Xcode, Settings, Accounts, your team, the 10 character Team ID (a free account has one too).
+- `EA_BUNDLE_PREFIX`: a reverse-domain name of your own, such as `io.github.yourname`. Ids must be unique across Apple.
+
+From the prefix come the bundle ids (`<prefix>.everythingapp`, `.widgets`, `.share`, `.watchkitapp` and `.watchkitapp.watchwidgets`) and the app group `group.<prefix>.everythingapp`, which the app, the widgets, the share extension and the Watch share, and which is also the Keychain access group for the device key. The code reads the app group from each target's Info.plist (`EAAppGroup`), so nothing else names it.
+
+Signing is automatic. With no account signed in to Xcode, a device build fails with "No profiles for" a bundle id. `CODE_SIGNING_ALLOWED=NO` is only for simulator and local checks: an unsigned build cannot use the app group, so its store and settings fall back to the app's own container.
+
+## Sample mode
+
+With no hub, Setup offers Try it with sample data: the app runs on a made-up month, with no hub and no network. Every answer comes from `EverythingApp/Resources/SampleHub.json`, a recording of a demo hub whose dates move to the viewer's today (`SampleTransport` in EACore); the bill splitter's Use my location reads `SampleMealsTax.json`. Edits stay on the device. Leaving sample mode (the Sample data banner) or pairing a hub wipes the sample and every change made to it. Apple Contacts, Calendar and Reminders stay off in sample mode, so no sample data reaches the device's own stores.
+
+To record the sample again, follow the steps at the top of `Packages/EACore/Tests/EACoreTests/SampleRecorderTests.swift`; `SampleHubTests` then checks the recording on every day of the week.
+
+## Pairing
+
+First launch shows Setup. Each device gets its own key from a one-time pairing code (8 characters, works once, for 10 minutes). On a device that is already paired, Settings, Connection, Pair another device shows the code in large text and as a QR code (on a Mac also the link, to copy); on a new hub the Welcome page shows one. Scan it with the Camera (it opens `everythingapp://setup?hub=&code=&name=`), or type the hub address and the code on the Setup screen. The app trades the code at `POST /devices/claim` for its key, keeps the key in the Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, never synced, shared with the widgets, share extension and intents through the app group; the data protection keychain on the Mac), registers, syncs and shows Today. A link may carry `fp=` (the SHA-256 of the hub's certificate); with an https hub only that certificate is then accepted. The `Configure Hub` intent takes the hub address, a pairing code and a name.
+
+- An older link with `&token=` still works: the token is traded at once (`POST /devices/exchange`) and never stored. Only a hub too old to trade it, or one out of reach, leaves it in use until the app can trade it.
+- The Watch never holds a key. The iPhone keeps one for it and relays the Watch's requests with it, so the Watch is a device of its own on the hub.
+- Settings, Connection, Devices lists every paired device with Remove. A removed device hears `device_removed` and shows "This device was removed" with Pair again. Its key, its local copy and what the app kept from the hub go.
+
+## Permissions and privacy
+
+Permissions are asked only for modules that are on, never at launch. Right after pairing, once the modules are known, one screen lists what they need (notifications, microphone, speech recognition where it is used, Reminders, Calendars, Contacts, Health, Photos, location) in plain words with the modules each is for; Continue asks each in turn, Not now asks nothing. A module switched on later (Settings, Modules, or another device over `/live`) offers its own. Otherwise a feature asks only on its own screen, when you tap something that needs it.
+
+No arbitrary loads: plain `http://` is allowed only to a local hub (`NSAllowsLocalNetworking`: IP addresses, unqualified names, `.local`) and to Tailscale names under `ts.net`, whose traffic WireGuard encrypts. A Direct link hub is reached over iroh. The Watch has no transport exceptions; it never reaches the hub itself.
 
 Files on the iPhone, iPad and Watch carry an explicit data protection class: the sync store (and its WAL files), the Spotlight list and the Watch hum queue are complete until first user authentication (widgets, background refresh, the Watch relay and notification actions use them while locked); image caches, chat copies, shared items waiting to send, unsent hums, MIDI and wiki attachments are complete; a hum being recorded and an import being uploaded are complete unless open. The Mac relies on FileVault.
 
-## Install the Watch app
+## Apple Watch
 
-The Watch app is embedded in the iPhone app and installs with it through the Watch app on the phone (My Watch, Available Apps). There is nothing to configure on the wrist. The Watch cannot reach the hub itself (the hub is only on the tailnet, Watch traffic does not pass through the iPhone's VPN, and the Watch cannot resolve MagicDNS names), so every hub call from the Watch is relayed through the iPhone app over WatchConnectivity (`WatchRelayTransport` and `WatchLink` in EACore): the Watch packs `{id, method, path, query, body}` into a message, the phone performs the HTTP call with its own hub URL and token and answers with `{status, data}`. The Watch registers itself as platform `watch`, named `<phone device name> Watch` (the phone fills the name in). Relays are not gated on `isReachable` (it lags; sending from an active Watch app wakes the phone app). When the phone is out of reach the Watch shows "iPhone not reachable", keeps its outbox, and retries; tapping that line opens a diagnostics sheet (session state, reachability, companion app, last relay error, and a Try now button that runs `GET /health` through the relay). Both sides log under subsystem `com.gnomecannon.everythingapp`, category `watchlink` (method and path only, never bodies or the token). Registration reuses an existing `device` row for the platform (and name on the phone) before posting `/devices/register`, so a lost reply does not create duplicate rows; it polls `/sync/changes` on foreground and every 60 s while active instead of streaming `/live`. Requests over about 60 KB are refused by the relay, which only matters for photo attachments, and those are never sent from the Watch. The phone activates its WatchConnectivity session in `application(_:didFinishLaunchingWithOptions:)`, so relayed requests work even when iOS launches the phone app in the background for them. Add the Now complication from the watch face editor; the circular one is a tap target for capture.
+The Watch app is embedded in the iPhone app and installs with it (the Watch app on the iPhone, My Watch, Available Apps). There is nothing to set up on the wrist. Every hub call from the Watch is relayed through the iPhone app over WatchConnectivity (`WatchRelayTransport` and `WatchLink` in EACore): the Watch packs `{id, method, path, query, body}` into a message, and the iPhone performs it with its hub address and the Watch's key and answers with `{status, data}`; an answer too big for one message comes back compressed, in parts. Hums go as file transfers and wait in a queue on each side. The Watch reads `/sync/changes` on return to the screen and every 60 s while it is open instead of streaming `/live`, keeps its own outbox while the iPhone is out of reach and says so; tapping that line opens the relay diagnostics. The iPhone activates its WatchConnectivity session at launch, so relayed requests work when iOS starts the app in the background for them. When what the complications show (Now, the running activity, Next up) changes on the iPhone, it sends that to the Watch, which draws them again without waiting for its own sync. Both sides log under the target's bundle id, category `watchlink` (method and path only, never bodies or keys).
 
-## Work calendar (iPhone and iPad)
+## Work calendar
 
-Settings, Work calendar: allow calendar access, then tick the calendars that are work. On first run Exchange calendars are preselected, plus any calendar whose account contains the domain of the email in the `identity` fact keyed `job`; otherwise nothing is preselected and the list is shown. Each occurrence from 7 days back to 30 days ahead becomes an `event` in the `work` space with `source: eventkit` and `external_id` = `eventIdentifier|ISO start`, carrying only title, start, end and all_day. Location, notes, URL and attendees are never stored or sent; cancelled and declined meetings are skipped. Occurrences that vanish inside the window, or whose calendar is unticked, are soft-deleted; meetings that age out of the back of the window are kept as history. The import runs on launch, on foreground, 5 s after the Calendar store changes, and in the `<bundle id>.calendar` background refresh task. Work events show with a Work chip in Today and Week and count as busy time in the local planner.
+Settings, Calendar and work: allow calendar access, then tick the calendars that are work. On first run Exchange calendars are preselected, plus any calendar whose account contains the domain of the email in the `identity` fact keyed `job`; otherwise nothing is preselected and the list is shown. Each occurrence from 7 days back to 30 days ahead becomes an `event` in the `work` space with `source: eventkit` and `external_id` = `eventIdentifier|ISO start`, carrying only title, start, end and all_day. Location, notes, URL and attendees are never stored or sent; cancelled and declined meetings are skipped. Occurrences that vanish inside the window, or whose calendar is unticked, are soft-deleted; meetings that age out of the back of the window are kept as history. The import runs on launch, on return to the app, 5 s after the Calendar store changes, and on iPhone and iPad in the `<bundle id>.calendar` background refresh task; the Mac imports the same meetings, keyed by the calendar server's id. Work events show with a Work chip in Today and Week and count as busy time in the local planner.
 
-Simulator check (Debug builds): `xcrun simctl privacy booted grant calendar com.gnomecannon.everythingapp`, then `xcrun simctl launch booted com.gnomecannon.everythingapp -EASeedWorkCalendar YES -EASection settings -EASettingsFocus workCalendar` creates a local "Work (simulator)" calendar with two events, selects it and opens the section.
+Simulator check (Debug builds): `xcrun simctl privacy booted grant calendar com.gnomecannon.everythingapp`, then `xcrun simctl launch booted com.gnomecannon.everythingapp -EASeedWorkCalendar YES -EASection settings -EASettingsPage calendar` creates a local "Work (simulator)" calendar with two events, selects it and opens the page.
 
 ## Mac
 
-The Mac build is sandboxed, with network client, microphone (push-to-talk dictation) and the app group. The menu bar item shows the Now task and a capture field. Control+Option+Space opens the floating capture panel from any app. The hotkey is a Carbon `RegisterEventHotKey`, so it needs no accessibility permission.
-
-## TestFlight
-
-Archive the `EverythingApp` scheme (Product, Archive) with the Distribution certificate `Apple Distribution: <your name> (<team id>)` and upload through the Organizer. The watch app and both extensions are included in the archive. The macOS build needs a separate archive from the same scheme with My Mac selected. Bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml` before each upload.
+The Mac app is sandboxed, with the hardened runtime. The menu bar item shows the Now task and a capture field. A global shortcut opens the floating Quick Capture panel from any app: Control Shift Space unless another is chosen in Settings, Privacy on this device (a Mac set up before the choice existed keeps Control Option Space). It is a Carbon `RegisterEventHotKey`, so it needs no accessibility permission. Debug builds take launch arguments for checks without clicking (`EverythingApp/Debug/DebugHooksMac.swift`).
 
 ## Verify from the command line
 
+Keep DerivedData outside iCloud Drive (`-derivedDataPath`): this repository lives in Documents, and codesign rejects the file provider's attributes on products built there.
+
     cd apple/Packages/EACore && swift test
     cd apple
-    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO build
-    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO build
-    xcodebuild -project EverythingApp.xcodeproj -scheme 'EverythingApp Watch' -destination 'platform=watchOS Simulator,name=Apple Watch Series 11 (46mm)' CODE_SIGNING_ALLOWED=NO build
-    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingAppWidgets -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO build
-    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingAppWatchWidgets -destination 'platform=watchOS Simulator,name=Apple Watch Series 11 (46mm)' CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath ~/Library/Caches/everythingapp-dd CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=macOS,arch=arm64' -configuration Debug -derivedDataPath ~/Library/Caches/everythingapp-dd CODE_SIGNING_ALLOWED=NO build
+    xcodebuild -project EverythingApp.xcodeproj -scheme 'EverythingApp Watch' -destination 'generic/platform=watchOS Simulator' -configuration Debug -derivedDataPath ~/Library/Caches/everythingapp-dd CODE_SIGNING_ALLOWED=NO build
 
-The setup URL has a UI test that also answers the "Open in Aeneas?" prompt iOS shows for scheme URLs opened from outside the app (which is why a bare `xcrun simctl openurl` stops at that prompt):
+The UI tests also answer the "Open in Aeneas?" prompt iOS shows for scheme links opened from outside the app (which is why a bare `xcrun simctl openurl` stops at that prompt):
 
     xcodebuild -project EverythingApp.xcodeproj -scheme EverythingApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -derivedDataPath ~/Library/Caches/everythingapp-dd-test CODE_SIGNING_ALLOWED=NO -only-testing:EverythingAppUITests test
 
-Every device build gets a fresh build number so watchOS picks up the embedded Watch app: run `xcrun agvtool new-version -all $(date +%Y%m%d%H%M)` in `apple/` after `xcodegen generate` and before building (the project uses apple-generic versioning; `CFBundleShortVersionString` stays 0.1.0).
+iCloud Drive can leave copies named like `File 2.swift` after a branch switch, and they break the build. Delete such a copy when git does not track it and it is the same as its original.
 
-Keep DerivedData outside iCloud Drive (for example `-derivedDataPath ~/Library/Caches/everythingapp-dd-test`): the repo lives in Documents and codesign rejects file-provider attributes on products built there.
+## Releases
 
-`CODE_SIGNING_ALLOWED=NO` is only for simulator and local checks; the project itself stays on automatic signing with the real team. Unsigned builds cannot use the app group, so the store and config fall back to the app's own container in that case.
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml` are the version and build. Archive the `EverythingApp` scheme (Product, Archive) for iOS, which brings the Watch app and the extensions with it, and again with My Mac selected, then upload from the Organizer. Every device build needs a new build number for watchOS to pick up the embedded Watch app: run `xcrun agvtool new-version -all $(date +%Y%m%d%H%M)` in `apple/` after `xcodegen generate` and before building.
 
 ## Behaviour notes
 
-- The device registers exactly once per configure and reuses the stored device id on later launches; concurrent sync and configure calls share one in-flight registration.
-- Every edit is a `Patch` with `ts = now`, applied locally at once and queued in the outbox; the outbox is flushed whenever the hub answers, then `/sync/changes` is pulled until `more` is false. `/live` is held open with the bearer header and reconnects with backoff up to 30 s. A rejected patch drops the queued patches for that entity and reloads it from the hub.
-- Capture goes through `POST /capture` when online (Save and sort sends `auto: true`); offline it becomes a local `capture` entity with a locally suggested kind and is pushed later.
-- Reminders are planned into `UNUserNotificationCenter` on every sync from `at`, `snoozed_until` and `repeat`. Notification actions are Ack and Snooze 10 min; when friction is `reason` the snooze action has a text box for the reason (typed, dictated, or Scribble on the Watch), and an empty one opens the app's reason sheet.
-- Dictation is push-to-talk: it transcribes only while the button is held and the transcript lands in the field for review. Nothing is sent until you tap Save. On the Watch the transcript goes to a confirm screen first.
+- The device registers once per pairing and reuses its device id on later launches; sync and pairing at the same time share one registration.
+- Every edit is a `Patch` stamped with the time it was made, applied locally at once and queued in the outbox; the outbox is sent whenever the hub answers, then `/sync/changes` is read until `more` is false. `/live` is held open with the device key and reconnects with backoff up to 30 s. A refused patch drops the queued patches for that item and reloads it from the hub; the refusal is kept in Settings until it is cleared.
+- Capture goes through `POST /capture` with `auto: true` when the hub answers, under an id the device made, so a capture sent again after a lost reply is the one the hub already has; offline it becomes a local `capture` with `sort: true`, and the hub sorts it when it arrives. The share sheet works the same way and waits at most a few seconds before leaving it to the app.
+- The Now widget's Done goes straight to the hub. One the hub does not take (out of reach, or a Direct link hub, which widgets cannot reach) waits in the app group, and the app's next sync sends it.
+- Reminders are planned into `UNUserNotificationCenter` from `remind_at`, `snoozed_until` and `repeat`, after a sync or an edit and only when the plan changed. The alert actions are Done and Snooze 10 min; with friction `reason` the snooze action has a text box for the reason (typed, dictated, or Scribble on the Watch), and an empty one opens the app's reason sheet. The hub's announcement of a due reminder and the alert this device planned for that time are one alert.
+- Dictation: tap the mic to start and again to stop; in the Assistant a pause after speaking can send (a setting), and on Capture Save also ends it. On iOS 26 and macOS 26 it runs on Apple's SpeechAnalyzer on the device and needs only the microphone; earlier systems use SFSpeechRecognizer, on the device when it can. Nothing reaches the hub until Save or Send.
+- Use Claude (when the hub has a cloud model) is each chat's own choice, off for a new chat, as on the web.
 - Notes: folders nest (Writing, then Comedy, then Sketches) and start collapsed; the ones opened stay open on the device. Ideas (notes tagged `idea`) are grouped by form above the folders. Tags and links come from the hub's note linker and title mentions, never typed; the editor shows Related (links, backlinks, similar). The tags field is sent only when it was changed there, so tags the linker adds while a note is open are kept.
 - Display text runs through `StyleGuard` (em and en dashes become commas, filler stripped) plus any active filter rules from Memory.
-- Planner (Module 1): Today and Week load `GET /planner/today` and `GET /planner/week` when the hub answers; otherwise `LocalPlanner` in EACore computes the same shape from the local store (day window 09:00 to 23:00, minus plan rule blackouts and commitments, task blocks and events) and the screen says "Planned on this device". Schedule here posts `/planner/schedule` with 3 h; a 409 comes back as `HubError.conflict` with the conflicting block, commitment or blackout and the picker offers Schedule anyway (`force`). Offline, the block is checked against local rules and patched locally. Renewed uses `/watches/:id/renewed` online and rolls `due` by `repeat` locally otherwise.
-- Activity check-in: `notify` events of kind `activity` on `/live` (and, on the Watch, a new entry on the running activity log's `checkins` found by the 60 s poll) show a banner "On <value> for <h> h" with Still on it and Stop (Stop writes the `end` log). Starting an activity also schedules a local notification 3 hours later (category `EA_ACTIVITY`, actions Still on it and Stop) that the end log cancels, so the question is asked with no hub. `notify` kind `digest` becomes a local notification with the digest's first line that opens `everythingapp://today`.
-- URL paths: `everythingapp://today`, `week`, `renewals`, `now`, `reminders`, `capture?text=`, `setup?hub=&code=&name=` (and `&fp=`; the older `&token=` is traded at once). The launch argument `-EASection week` (any `Section` raw value) opens that screen first, for screenshots and UI tests.
-- The medium iOS widget shows the next block today under the Now task when there is one (`SharedConfig.nextBlockTitle` and `nextBlockStart`, written with the Now snapshot).
-
-
-## Building from this folder
-
-This repo lives under Documents, which is an iCloud Drive folder. The file provider adds extended attributes to build products there and codesign rejects them ("resource fork, Finder information, or similar detritus not allowed"). Always build with DerivedData outside iCloud, for example `-derivedDataPath ~/Library/Caches/everythingapp-dd`. Xcode's default DerivedData location is fine too.
+- Planner: Today and Week load `GET /planner/today` and `GET /planner/week` when the hub answers; otherwise `LocalPlanner` in EACore computes the same shape from the local store (day window 09:00 to 23:00, minus plan rule blackouts and commitments, task blocks and events) and the screen says "Planned on this device". Both load again only when what they show changed. Schedule here posts `/planner/schedule` with 3 h; a 409 comes back as `HubError.conflict` with the conflicting block, commitment or blackout, and the picker offers Schedule anyway (`force`). Offline, the block is checked against local rules and patched locally. Renewed uses `/watches/:id/renewed` online and rolls `due` by `repeat` locally otherwise.
+- Activity check-in: `notify` events of kind `activity` on `/live` (and, on the Watch, a new entry on the running activity log's `checkins` found by the 60 s poll) show a banner "On <value> for <h> h" with Still on it and Stop (Stop writes the `end` log). Starting an activity also schedules a local notification 3 hours later (category `EA_ACTIVITY`, the same two actions), which the end log cancels, so the question is asked with no hub. `notify` kind `digest` becomes a local notification with the digest's first line that opens `everythingapp://today`.
+- Modules switched off (Settings, Modules) hide their screens on every device; with Health off the Watch shows no logging and Siri logs no health records.
+- Links: `everythingapp://today`, `week`, `renewals`, `now`, `reminders`, `capture?text=`, `section/<name>`, `item/<id>`, `wiki?id=`, and `setup?hub=&code=&name=` (and `&fp=`; the older `&token=` is traded at once). The launch argument `-EASection week` (any `Section` raw value) opens that screen first, for screenshots and UI tests.
+- The medium widget shows the next block today under the Now task when there is one (`SharedConfig.nextBlockTitle` and `nextBlockStart`, written with the Now snapshot).

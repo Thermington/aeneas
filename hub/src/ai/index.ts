@@ -46,6 +46,10 @@ export interface ChatInput {
   /** Hub-internal: no web tools and no web instructions this turn, whatever the Web lookups module says (capture
    * filing: a private diary line must never become a search query or a page fetch). */
   no_web?: boolean;
+  /** Hub-internal: capture filing. Besides no web, none of Homelab's tools (host commands, monitors, Ops): text in a
+   * capture (a shared page, a dictated line) must never make the hub reach an address or run a command. The offline
+   * reference's tools are left out too: they are for chats. */
+  filing?: boolean;
 }
 
 type Mode = "general" | "troubleshoot" | "draft" | "classify" | "plan";
@@ -123,6 +127,12 @@ const WARM_QUIET_MS = 3 * 60_000;
 /** The Watch's chats ("watch-<day>-...") are read aloud on the wrist: lists and long answers do not work there. */
 const WATCH_NOTE = "{{owner}} is asking from the Apple Watch and hears the answer read aloud: answer in one to three short spoken sentences, with no lists, headings, tables or formatting.";
 
+/**
+ * The owner asking what was done ("what did you add today?", "recap the week", "did you log my weight?"): a reply that
+ * says what was saved is the answer, and checking it as a claim cost a second answer.
+ */
+const ASKS_RECAP = /\b(recap|summar(y|ise|ize)|so far|what (did|have|has) (you|i|we)\b|what('s| was| were)? (changed|saved|logged|added|done)\b|did you (add|log|save|change|move|delete|remove|schedule|mark|update|create|snooze|cancel)|have you (added|logged|saved|changed|moved|deleted|removed|scheduled|marked|updated|created|snoozed|cancell?ed))/i;
+
 /** A reply line that opens by saying something was saved or changed. */
 const CLAIMS_CHANGE = /^\W*(?:done(?=[.!,:\s]|$)|(?:logged|saved|added|deleted|removed|moved|marked|snoozed|renamed|parked|scheduled|blocked|stopped|updated|changed|created|cancell?ed)\b)/im;
 
@@ -135,7 +145,22 @@ const SLEEP_ASKED = /\b(sleep|slept|bed|tired|rest|nap|late|insomnia|awake)\b/i;
 const UNASKED_BEDTIME = { name: "unasked-bedtime", pattern: /[^.!?\n]*\b(go to bed|get some sleep|get some rest|head to bed|go to sleep)\b[^.!?\n]*[.!?]?[ \t]*/gi, replacement: "" };
 
 const RECORD_QUESTION = /^\s*(how (often|many times|many)|when (did|was)|how long (did|was))\b/i;
-const TROUBLE = /\b(error|errors|failed|failing|fails|failure|exception|traceback|stack trace|not working|doesn'?t work|won'?t (start|boot|connect|load|mount)|can'?t (connect|reach|ssh|mount|log ?in|access)|refused|timed? ?out|denied|crash(ed|es|ing)?|broken|broke|hangs?|stuck|segfault|panic|degraded|offline|unreachable|fix|issue|issues|problem|problems|stopped \w+ing|not (responding|mounting|starting|booting|loading|connecting|syncing|running|showing)|keeps \w+ing|(wifi|wi-?fi|internet|connection|network|signal|bluetooth|vpn|tailscale|ssh|stream|audio|video)('s)?\s+(\w+\s+)?(drops|dropping|cuts out)|disconnects?|disconnecting|disconnected|buffering|lagging|didn'?t run|won'?t \w+)\b/i;
+/** Words that say something is failing on their own: an error, a crash, a timeout, a dropped connection. */
+const FAILING = /\b(error|errors|failed|failing|fails|failure|exception|traceback|stack trace|not working|doesn'?t work|won'?t (start|boot|connect|load|mount)|can'?t (connect|reach|ssh|mount|log ?in|access)|refused|timed? ?out|denied|crash(ed|es|ing)?|segfault|panic|degraded|offline|unreachable|not (responding|mounting|starting|booting|loading|connecting|syncing|running|showing)|(wifi|wi-?fi|internet|connection|network|signal|bluetooth|vpn|tailscale|ssh|stream|audio|video)('s)?\s+(\w+\s+)?(drops|dropping|cuts out)|disconnects?|disconnecting|disconnected|buffering|lagging|didn'?t run)\b/i;
+/**
+ * Everyday words that mean troubleshooting only about a machine or software: "stuck on what to cook", "a problem with
+ * my landlord" or "fix this sentence" turned a chat into troubleshooting for good.
+ */
+const TROUBLE_WORDS = /\b(broken|broke|hangs?|stuck|fix|issue|issues|problem|problems|stopped \w+ing|keeps \w+ing|won'?t \w+)\b/i;
+const TECH = /\b(computer|laptop|desktop|pc|mac|macbook|imac|phones?|iphone|ipad|android|tablet|server|nas|router|modem|wifi|wi-?fi|network|internet|printer|scanner|apps?|website|site|browser|chrome|safari|firefox|script|code|build|compile|install(er)?|update|upgrade|driver|disk|drive|ssd|hdd|usb|gpu|cpu|ram|docker|container|vm|proxmox|services?|daemon|port|dns|dhcp|ip|ssl|tls|cert(ificate)?|e-?mail|mail|gmail|login|password|account|bluetooth|tv|console|xbox|playstation|steam|monitor|display|screen|keyboard|mouse|speakers?|headphones|airpods|camera|backups?|sync(ing)?|share|mount|smb|nfs|vpn|tailscale|ssh|linux|windows|macos|ios|ubuntu|debian|kernel|hub|aeneas|ollama|database|sqlite|api|plugin|extension|files?|folder|permissions?|battery|charger|cable|wire|power|outlet|car|engine)\b/i;
+
+/** A failure, or an everyday trouble word about a machine, software or a host the hub knows. */
+function troubled(text: string, hosts: string[]): boolean {
+  if (FAILING.test(text)) return true;
+  return TROUBLE_WORDS.test(text) && (TECH.test(text) || hostsIn(text, hosts).length > 0);
+}
+
+const DAY_MS = 86_400_000;
 
 /** Classifier answer. `via` says who decided: the shared rules, the model, or nobody because the model was off or timed out. */
 export interface ClassifyResult {
@@ -217,7 +242,7 @@ export class Gateway {
       if (!r.tool_calls?.length) {
         // A reply that says it saved or changed something when no tool call did: once, have it do it or say otherwise.
         // ("Logged. Soldering marked as ended." with no call, so the activity never ended.)
-        if (!checked && CLAIMS_CHANGE.test(r.text) && !actions.some((a) => a.ok && a.writes)) {
+        if (!checked && CLAIMS_CHANGE.test(r.text) && !actions.some((a) => a.ok && a.writes) && !ASKS_RECAP.test(ctx.lastUser)) {
           checked = true;
           messages.push({ role: "assistant", content: r.text }, { role: "user", content: "[Check from Aeneas, not typed by {{owner}}] Your reply says something was saved or changed, but no tool call in this reply did it. If {{owner}} asked for a change, make the tool call now; otherwise answer again without saying anything changed." });
           continue;
@@ -390,11 +415,22 @@ export class Gateway {
    * ("what GPU is in the server?") or asking about the record ("how often has the backup failed?") is a plain question:
    * troubleshooting would open a ledger and write fix notes for it.
    */
-  private resolveMode(req: ChatInput, text: string): Mode {
+  private resolveMode(req: ChatInput, text: string, latest = text): Mode {
     const t = req.task_type ?? "auto";
     if (t !== "auto") return t;
-    if (this.store.list({ kind: "ledger", where: { session_id: req.session_id } }).some((l) => l.fields.open !== false)) return "troubleshoot";
-    if (TROUBLE.test(text) && !RECORD_QUESTION.test(text)) return "troubleshoot";
+    const hosts = knownHosts(this.store);
+    const ledgers = this.store.list({ kind: "ledger", where: { session_id: req.session_id } });
+    const open = ledgers.find((l) => l.fields.open !== false);
+    if (open) {
+      // A ledger left a day with no new trouble is closed: the chat has moved on, and its next numbered answer is no
+      // longer a step to rule out.
+      if (Date.now() - Date.parse(open.updated_at) > DAY_MS && !troubled(latest, hosts)) this.store.patch(open.id, { open: false });
+      else return "troubleshoot";
+    }
+    // Once a ledger of this chat has closed, only the newest message can open another: the ones before it were the
+    // trouble that was solved.
+    const said = ledgers.length ? latest : text;
+    if (troubled(said, hosts) && !RECORD_QUESTION.test(said)) return "troubleshoot";
     return "general";
   }
 
@@ -507,6 +543,15 @@ export class Gateway {
     }
   }
 
+  /**
+   * Whether a model server on the owner's side answers its version check (cached 20 s per server): no answer from a
+   * model that is up is the request's own fault (a mail whose reading times out every time), not the model's.
+   */
+  async localModelUp(): Promise<boolean> {
+    for (const b of this.route("general", false)) if (!b.cloud && (!b.probe || (await b.probe()))) return true;
+    return false;
+  }
+
   private gameCheck: { at: number; busy: string | null } | null = null;
   /**
    * A game (or another 3D program) on this machine's graphics card, asked at most every 30 seconds (on Windows the
@@ -564,7 +609,9 @@ export class Gateway {
 
   /** The system prompt as every chat in a mode starts it; `warm` must send exactly this to be of use. */
   private sharedSystem(memory: Memory, mode: Mode, tools: boolean, on: ModuleCheck = this.moduleOn): string {
-    return tools ? `${buildSystemPrompt(memory, mode)}\n\n${toolGuide(on)}` : buildSystemPrompt(memory, mode);
+    if (!tools) return buildSystemPrompt(memory, mode);
+    const offered = new Set(availableTools(this.cfg, undefined, on).map((t) => t.name));
+    return `${buildSystemPrompt(memory, mode)}\n\n${toolGuide(on, { voiceModel: !!this.cfg.adapterUrl, has: (n) => offered.has(n) })}`;
   }
 
   private async turn(req: ChatInput, onToken?: (t: string) => void, onEvent?: (e: ChatEvent) => void): Promise<ChatOutput> {
@@ -616,8 +663,8 @@ export class Gateway {
       const i = h.map((m) => m.role).lastIndexOf("user");
       return h.map((m, j) => (j === i ? { ...m, content: req.store_as! } : m));
     };
-    const mode = req.task_type === "classify" ? "classify" : this.resolveMode(req, history.filter((m) => m.role === "user").slice(-3).map((m) => m.content).join("\n"));
     const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
+    const mode = req.task_type === "classify" ? "classify" : this.resolveMode(req, history.filter((m) => m.role === "user").slice(-3).map((m) => m.content).join("\n"), lastUser);
     const topic = (history.find((m) => m.role === "user")?.content ?? "").split("\n")[0];
     const chain = await fastestFirst(this.route(mode, this.cloudAllowed(req)));
     if (!chain.length) throw new StoreError(500, "no AI backend is configured for this task type");
@@ -638,7 +685,9 @@ export class Gateway {
     const replyImages: string[] = [];
     const modelImages: { note: string; images: string[] }[] = [];
     let lastErr: Error | null = null;
-    const turnOn: ModuleCheck = req.no_web ? (id) => id !== "web" && this.moduleOn(id) : this.moduleOn;
+    // Filing a capture is background work: no web, no Homelab, and no offline reference (its tools are for chats).
+    const turnOn: ModuleCheck = req.filing ? (id) => id !== "web" && id !== "homelab" && id !== "reference" && this.moduleOn(id)
+      : req.no_web ? (id) => id !== "web" && this.moduleOn(id) : this.moduleOn;
     // A model shared with other people's hubs (the model gate) may be answering someone else right now: say so, so a
     // slower start is explained. Who it is stays private.
     const first = chain.find((b) => b.waiting);
@@ -692,6 +741,7 @@ export class Gateway {
         sessionId: req.session_id, lastUser, topic, store: this.store, cfg: this.cfg, owner: this.owner(), hosts: this.cfg.hostActions && this.moduleOn("homelab") ? this.hosts : null,
         turn: turnState,
         moduleOn: turnOn,
+        filing: req.filing === true,
         // Work items never reach a cloud model, through memory or through what a tool returns.
         cloud,
         draft: (request) => this.voiceDraft(req.session_id, request, this.cloudAllowed(req)),
@@ -731,6 +781,9 @@ export class Gateway {
         // The automatic "tried" line is for steps handed to the owner. Commands the hub ran itself, or one waiting for approval,
         // are not theirs to try; the model records those results with ledger_update.
         if (ledger && !pending && !actions.some((a) => a.tool === "run_command" || a.tool === "approve_command") && !req.approve_action_id && (/```/.test(reply) || countNumberedSteps(reply) >= 1)) ledger = appendPending(this.store, ledger, reply);
+        // The owner says it worked: the ledger closes and the chat is a plain one again (only the web had a Close
+        // button). A later failure in it opens a new ledger that starts from what this one ruled out.
+        if (ledger && !pending && saysWorked(lastUser)) ledger = this.store.patch(ledger.id, { open: false });
         if (mode !== "classify") {
           // Cancel tapped while this reply still streamed: the action says so, and the chat must too.
           const pendingStatus = pending ? (this.hosts.get(pending.id)?.status ?? "pending") : undefined;

@@ -9,6 +9,9 @@ import EACore
 ///   -EAWindowSize 1280x800     the main window's size with its title bar, in points
 ///   -EASample YES              a copy that is not set up starts in sample mode, as Try it with sample data does
 ///   -EADictationTest YES       presses the mic on the screen shown; with -EADictationSay "<words>" it hears them
+///   -EAReferenceTest YES       the Reference screen in a window of its own (its size from -EAWindowSize); prints the
+///                              window number. With -EAReferenceQuery <words> it searches for them; with
+///                              -EAReferenceOpen <book>/<path> (which also opens the window) that page is in the reader
 /// Screenshots are then taken from outside (screencapture -o -l <window id>), which needs Screen Recording.
 @MainActor
 enum DebugHooksMac {
@@ -19,6 +22,7 @@ enum DebugHooksMac {
         if let s = d.string(forKey: "EASection"), let section = Section(rawValue: s) { model.section = section }
         if d.bool(forKey: "EADictationTest") { let s = model.section; Task { await dictationSelfTest(section: s) } }
         if let id = d.string(forKey: "EAModuleTest") { Task { await moduleSelfTest(model, id: id) } }
+        if d.bool(forKey: "EAReferenceTest") || d.string(forKey: "EAReferenceOpen") != nil { Task { await referenceSelfTest(model) } }
         guard let size = d.string(forKey: "EAWindowSize").flatMap(parse) else { return }
         try? await Task.sleep(for: .seconds(1))
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else { return }
@@ -180,6 +184,39 @@ enum DebugHooksMac {
         say("flipping \(id)")
         NotificationCenter.default.post(name: .debugFlipModule, object: id)
         try? await Task.sleep(for: .seconds(3))
+        say("window \(w.windowNumber)")
+        try? await Task.sleep(for: .seconds(2))
+        say("done")
+    }
+
+    /// `-EAReferenceTest YES` or `-EAReferenceOpen <book>/<path>`: the Reference screen in a window of its own, with
+    /// its toolbar and search field, searching for `-EAReferenceQuery` and with the page open when asked. Prints the
+    /// window number once the page has had time to load.
+    static func referenceSelfTest(_ model: AppModel) async {
+        func say(_ s: String) { print("reference test: " + s); fflush(stdout) }
+        let d = UserDefaults.standard
+        try? await Task.sleep(for: .seconds(2))
+        let query = d.string(forKey: "EAReferenceQuery")
+        var page: ReferencePageLink?
+        if let s = d.string(forKey: "EAReferenceOpen") {
+            if let l = ReferenceLink.split(s) { page = ReferencePageLink(book: l.book, path: l.path) } else { say("not <book>/<path>: \(s)") }
+        }
+        let screen = NavigationStack { ReferenceView(startQuery: query, startPage: page) }
+            .themedRoot()
+            .environmentObject(model)
+            .environmentObject(model.engine)
+        let size = d.string(forKey: "EAWindowSize").flatMap(parse) ?? NSSize(width: 1100, height: 760)
+        let w = NSWindow(contentRect: NSRect(origin: NSPoint(x: 160, y: 120), size: size), styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                         backing: .buffered, defer: false)
+        w.title = "Reference"
+        w.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: screen)
+        // The screen's toolbar (search field, buttons) and title on this window, as in the app's own windows.
+        host.sceneBridgingOptions = .all
+        w.contentView = host
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .seconds(6))
         say("window \(w.windowNumber)")
         try? await Task.sleep(for: .seconds(2))
         say("done")

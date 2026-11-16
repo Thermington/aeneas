@@ -79,6 +79,23 @@ public enum ReminderPlanner {
     }
 }
 
+/// The plan last handed to the notification center. A replan runs after every sync and every edit (each minute on the
+/// Watch) and used to take off and schedule every alert again even when nothing about the reminders had changed.
+public struct ReplanGate: Sendable {
+    private var last: [PlannedNotification]?
+    public init() {}
+
+    /// True when `plan` differs from the last one let through, which it then becomes.
+    public mutating func admits(_ plan: [PlannedNotification]) -> Bool {
+        guard plan != last else { return false }
+        last = plan
+        return true
+    }
+
+    /// An alert of the last plan could not be scheduled (notifications not allowed yet): the same plan goes again.
+    public mutating func forget() { last = nil }
+}
+
 /// What a `notify` alert from `/live` shows, and the request id it goes under. Pure, so it is tested.
 public struct AlertNotice: Equatable, Sendable {
     /// `alert|monitor|<monitor id>` for a monitor, so a later alert for the same monitor (a re-notify, back up) takes
@@ -150,6 +167,7 @@ public final class ReminderScheduler: @unchecked Sendable {
     /// time does not alert a second time, even after the planned one was dismissed.
     private var planned: [String] = []
     private let plannedLock = NSLock()
+    private var gate = ReplanGate()
 
     public init() {}
 
@@ -192,10 +210,11 @@ public final class ReminderScheduler: @unchecked Sendable {
         await center.notificationSettings().authorizationStatus
     }
 
-    /// Replace all pending reminder notifications with the given plan.
+    /// Replace all pending reminder notifications with the given plan. The same plan as last time changes nothing.
     public func replan(reminders: [Entity], now: Date = Date()) async {
         let plan = ReminderPlanner.plan(reminders: reminders, now: now)
         remember(plan.map(\.id))
+        guard plannedLock.withLock({ gate.admits(plan) }) else { return }
         // Reminder ids are `<reminder id>|<time>`; activity check-ins, the digest and alerts keep their own prefixes.
         let pending = await center.pendingNotificationRequests().map(\.identifier).filter { $0.contains("|") && !$0.hasPrefix("activity|") && !$0.hasPrefix("digest|") && !$0.hasPrefix("alert|") }
         center.removePendingNotificationRequests(withIdentifiers: pending)
@@ -209,7 +228,8 @@ public final class ReminderScheduler: @unchecked Sendable {
             content.threadIdentifier = p.reminderId
             let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: p.fireAt)
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
-            try? await center.add(UNNotificationRequest(identifier: p.id, content: content, trigger: trigger))
+            do { try await center.add(UNNotificationRequest(identifier: p.id, content: content, trigger: trigger)) }
+            catch { plannedLock.withLock { gate.forget() } }
         }
     }
 

@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import { engine } from "../sync/engine";
 import { HubError, type ImageCapabilities, type ImageJob, type ImagePlan, type ImageRequest } from "../sync/api";
@@ -82,7 +83,7 @@ export function Images() {
     const c = engine.client;
     if (!c) return;
     setBusy(true); setErr("");
-    try { const made = await c.imageSubmit(request); setJobs((js) => [...made, ...js]); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    try { const made = await c.imageSubmit(request); setJobs((js) => [...made, ...js]); } catch (e) { setErr(plainError(e)); }
     setBusy(false);
   };
   const reuse = (j: ImageJob) => {

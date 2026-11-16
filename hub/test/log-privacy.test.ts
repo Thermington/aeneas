@@ -39,6 +39,8 @@ const ALLOW: { file: string; contains: string; why: string; pending?: true }[] =
   { file: "hub/src/hub.ts", contains: "e instanceof BackupKeyError ? e.message", why: "BackupKeyError text is the hub's own sentence about its key file; anything else is errCode()" },
   { file: "hub/src/routes/backup.ts", contains: "console.error(`[backup] ${e.message}`)", why: "only a BackupKeyError reaches it: the hub's own sentence about its key file" },
   { file: "hub/src/backup.ts", contains: "plain work items; left plain until they are sealed", why: "a dated backup file name and a count" },
+  { file: "hub/src/backup.ts", contains: "could not be encrypted: ${errCode(e)}; left as it is", why: "a dated backup file name and errCode()" },
+  { file: "hub/src/backup-copy.mjs", contains: "process.stdout.write(JSON.stringify(result))", why: "the child process's answer to backup.ts over a pipe, not a log line" },
   { file: "hub/src/backup.ts", contains: "dropped the chat tables of ${name}", why: "a dated backup file name" },
   { file: "hub/src/backup.ts", contains: "chat tables could not be dropped: ${errCode(e)}", why: "a dated backup file name and errCode()" },
   { file: "hub/src/backupkey.ts", contains: "was readable by others; now owner-only", why: "the path of the hub's own key file" },

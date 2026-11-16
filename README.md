@@ -53,7 +53,8 @@ About 15 minutes in all, plus the model download (about 1.5 GB on a computer wit
    code carries the hub's key, works at home and away), Tailscale, or your home Wi-Fi only. Each has a note on what
    it involves, and [docs/connections.md](docs/connections.md) compares them; Settings can change it later.
 
-2. Open the link it prints, in a browser on that computer or on another one on the same network. The first time,
+2. Open the link it prints, in a browser on that computer (with Home Wi-Fi only or Tailscale, another computer on the
+   same network works too; a Direct link hub's link opens only on its own computer). The first time,
    the browser says the connection is not private: the hub made its own certificate, so choose Advanced (or Show
    Details), then continue. The Welcome page asks your name and which modules you want, downloads the model that fits
    the machine in one click, shows the key that opens your backups (save it in your password manager), and makes a

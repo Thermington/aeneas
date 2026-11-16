@@ -98,3 +98,24 @@ test("P4b weekday words inside ordinary text", () => {
     const w = parseWhen(s.replace(/^remind me( to)?\s*/, ""), at);
   }
 });
+
+test("P30 with the model down, only a clear record is filed by the phrase rule; a reminder waits for the model, and the last try uses the rule", async () => {
+  const t = makeHub({ aiFake: false });
+  setBackendOverride(down);
+  try {
+    const say = async (text: string) => (await (await t.api("/capture", { method: "POST", json: { text, source: "iphone", auto: true } })).json() as any).capture.id as string;
+    const weight = await say("weight 181.2");
+    const milk = await say("remind me to buy milk at Costco");
+    await queueFiling(t.hub, "none");
+    assert.equal(t.hub.store.get(weight)!.fields.filing, "done");
+    assert.equal(t.hub.store.list({ kind: "log" }).length, 1);
+    const waiting = t.hub.store.get(milk)!;
+    assert.equal(waiting.fields.filing, "failed", "kept for the model's next try");
+    assert.equal(t.hub.store.list({ kind: "task" }).filter((x: any) => /milk/i.test(String(x.fields.title))).length, 0, "no reminder in an hour made by the rule");
+    // The 50th try is the last: the rule files what it can rather than leave it to be sorted by hand.
+    t.hub.store.patch(milk, { filing_attempts: 49 });
+    await fileCapture(t.hub, milk);
+    assert.equal(t.hub.store.get(milk)!.fields.filing, "done");
+    assert.equal(t.hub.store.list({ kind: "task" }).filter((x: any) => /milk/i.test(String(x.fields.title))).length, 1);
+  } finally { setBackendOverride(null); t.cleanup(); }
+});

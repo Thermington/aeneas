@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -193,7 +194,7 @@ export function Games({ q = "" }: { q?: string }) {
       setPick(await c.gamePick({ players, hours: hours ?? undefined, coop: coop || undefined, exclude }));
       setExcluded(exclude);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -208,7 +209,7 @@ export function Games({ q = "" }: { q?: string }) {
       await engine.absorb([await c.gamePlayed(p.id)]);
       setPlayed(String(p.fields.name));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }

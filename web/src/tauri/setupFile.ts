@@ -3,6 +3,7 @@
  * setup file at <appConfigDir>/config.json is applied as if the user had saved Setup. After the
  * hub answers /health the file is rewritten without the token.
  */
+import { plainError } from "../lib/errors";
 import { HubClient, normalizeHubUrl } from "../sync/api";
 import { META, setMeta } from "../sync/db";
 import { engine } from "../sync/engine";
@@ -24,7 +25,7 @@ export async function applySetupFile(): Promise<SetupFileResult> {
   try {
     path = await setupFilePath();
   } catch (e) {
-    return { path, state: "error", detail: e instanceof Error ? e.message : String(e), at };
+    return { path, state: "error", detail: plainError(e), at };
   }
   const done = async (r: Omit<SetupFileResult, "path" | "at">): Promise<SetupFileResult> => {
     const result = { path, at, ...r };
@@ -35,7 +36,7 @@ export async function applySetupFile(): Promise<SetupFileResult> {
   try {
     cfg = await readSetupFile();
   } catch (e) {
-    return done({ state: "error", detail: e instanceof Error ? e.message : String(e) });
+    return done({ state: "error", detail: plainError(e) });
   }
   if (!cfg) return done({ state: "missing" });
   const hubUrl = normalizeHubUrl(String(cfg.hub_url ?? ""));
@@ -53,6 +54,6 @@ export async function applySetupFile(): Promise<SetupFileResult> {
     await stripSetupToken();
     return done({ state: "applied", detail: `hub ${h.version}, token removed from the file` });
   } catch (e) {
-    return done({ state: "applied-unverified", detail: `hub not reachable yet, token left in the file: ${e instanceof Error ? e.message : String(e)}` });
+    return done({ state: "applied-unverified", detail: `hub not reachable yet, token left in the file: ${plainError(e)}` });
   }
 }

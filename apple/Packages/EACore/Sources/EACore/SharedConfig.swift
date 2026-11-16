@@ -89,6 +89,17 @@ public final class SharedConfig: @unchecked Sendable {
         get { defaults.string(forKey: "hubPin").flatMap(HubPin.normalize) }
         set { set("hubPin", HubPin.normalize(newValue)) }
     }
+    /// The hub's own id (`hid` in setup links, `hub_id` from `/link/routes`): one hub is told from another by it,
+    /// whatever address it was reached at. Nil for an older hub, or until the hub first says it.
+    public var hubId: String? {
+        get { HubID.normalize(defaults.string(forKey: "hubId")) }
+        set { set("hubId", HubID.normalize(newValue)) }
+    }
+    /// The hub's last answer to `/link/routes`: its home network addresses and certificate, used from the next start.
+    public var linkRoutes: LinkRoutes? {
+        get { defaults.data(forKey: "linkRoutes").flatMap { try? JSONCoding.decode(LinkRoutes.self, from: $0) } }
+        set { if let v = newValue, let d = try? JSONCoding.data(v) { defaults.set(d, forKey: "linkRoutes") } else { defaults.removeObject(forKey: "linkRoutes") } }
+    }
     /// The hub answered that this device was removed; Setup says so until it is paired again.
     public var deviceRemoved: Bool { get { defaults.bool(forKey: "deviceRemoved") } set { defaults.set(newValue, forKey: "deviceRemoved") } }
     /// iPhone: the Watch was removed on the hub, so its requests are not relayed until it is paired again.
@@ -127,7 +138,6 @@ public final class SharedConfig: @unchecked Sendable {
         get { defaults.integer(forKey: "workCalendar.lastCount") }
         set { defaults.set(newValue, forKey: "workCalendar.lastCount") }
     }
-    public var allowCloud: Bool { get { defaults.bool(forKey: "allowCloud") } set { defaults.set(newValue, forKey: "allowCloud") } }
     public var isConfigured: Bool { sampleMode || (!hubURL.isEmpty && !credential.isEmpty) }
     /// Sample mode (SampleHub.swift): the app shows a made-up month with no hub. Pairing a hub ends it.
     public var sampleMode: Bool { get { defaults.bool(forKey: "sampleMode") } set { defaults.set(newValue, forKey: "sampleMode") } }
@@ -156,10 +166,24 @@ public final class SharedConfig: @unchecked Sendable {
 
     // Snapshot for widgets and complications.
     public var nowTaskId: String? { get { defaults.string(forKey: "now.id") } set { set("now.id", newValue) } }
-    /// The widget's Done for a hub it cannot reach itself (a Direct link hub: widgets carry no iroh), as "<task id>|<time>":
-    /// the app sends it on its next start or return to the foreground.
-    public var pendingWidgetDone: String? { get { defaults.string(forKey: "now.donePending") } set { set("now.donePending", newValue) } }
+    /// Done taps on the Now widget that the hub has not taken: one it cannot reach itself (a Direct link hub: widgets
+    /// carry no iroh), one out of reach at the time, or a send cut short. One "<task id>|<time>" line each, oldest
+    /// first. The app's next sync makes each a queued edit, sent with the rest until the hub takes it.
+    public var pendingWidgetDones: [WidgetDone] {
+        (defaults.string(forKey: "now.donePending") ?? "").split(separator: "\n").compactMap { WidgetDone(line: String($0)) }
+    }
+    /// One per task: a second tap on the same task keeps the newer one.
+    public func addPendingWidgetDone(_ done: WidgetDone) {
+        let kept = pendingWidgetDones.filter { $0.taskId != done.taskId }
+        set("now.donePending", (kept + [done]).map(\.line).joined(separator: "\n"))
+    }
+    public func removePendingWidgetDones(_ taken: [WidgetDone]) {
+        set("now.donePending", pendingWidgetDones.filter { !taken.contains($0) }.map(\.line).joined(separator: "\n"))
+    }
     public var nowTaskTitle: String? { get { defaults.string(forKey: "now.title") } set { set("now.title", newValue) } }
+    /// The Now task's repeat, reminder time and deadline ("repeat|remind_at|due", empty parts when it has none), so the
+    /// widget's Done moves a repeating task to its next time as every other Done does, instead of ending it.
+    public var nowTaskTiming: String? { get { defaults.string(forKey: "now.timing") } set { set("now.timing", newValue) } }
     public var nowTaskStatus: String? { get { defaults.string(forKey: "now.status") } set { set("now.status", newValue) } }
     public var nowBlockEnd: Date? {
         get { defaults.object(forKey: "now.blockEnd") as? Date }
@@ -208,5 +232,42 @@ public final class SharedConfig: @unchecked Sendable {
         // Never ProcessInfo.hostName here: it does a blocking reverse DNS lookup on iOS.
         return UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
         #endif
+    }
+}
+
+/// A Done tap on the Now widget: the task, when it was tapped (the edit's stamp), and the task's repeat, reminder
+/// time and deadline as the snapshot had them (`SharedConfig.nowTaskTiming`).
+public struct WidgetDone: Equatable, Sendable {
+    public var taskId: String
+    public var at: String
+    public var timing: String
+    public init(taskId: String, at: String, timing: String = "") { self.taskId = taskId; self.at = at; self.timing = timing }
+
+    init?(line: String) {
+        let parts = line.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        taskId = parts[0]
+        at = parts[1]
+        timing = parts.count == 3 ? parts[2].replacingOccurrences(of: ";", with: "|") : ""
+    }
+    var line: String { "\(taskId)|\(at)|\(timing.replacingOccurrences(of: "|", with: ";"))" }
+
+    /// "repeat|remind_at|due" of a task, each part empty when it has none.
+    public static func timing(of task: Entity) -> String {
+        [task.str("repeat"), task.str("remind_at"), task.str("due")].joined(separator: "|")
+    }
+
+    /// The edit for the tap, made the way every Done is (`ReminderMath.completeTask`): a repeating task moves to its next
+    /// time and stays open; any other is done. With the task itself (the app holds it) its current values count;
+    /// otherwise the widget's snapshot of them.
+    public func patch(task: Entity? = nil) -> Patch {
+        let when = ISO.date(at) ?? Date()
+        let e = task ?? {
+            let p = timing.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            var f: [String: JSONValue] = [:]
+            for (i, k) in ["repeat", "remind_at", "due"].enumerated() where i < p.count && !p[i].isEmpty { f[k] = .string(p[i]) }
+            return Entity(id: taskId, kind: .task, fields: f)
+        }()
+        return Patch(id: taskId, kind: .task, ts: at, fields: ReminderMath.completeTask(e, now: when))
     }
 }

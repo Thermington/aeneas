@@ -139,6 +139,18 @@ function ollamaLike(name: BackendName, baseUrl: string, model: string, timeoutMs
   const headers = () => ({ "content-type": "application/json", "x-aeneas-priority": currentPriority() });
   /** Whether the base URL is a model gate (learned from /gate/status; plain Ollama answers 404). */
   let gateKnown: boolean | null = null;
+  /** One look at where the model is loaded (/api/ps) at a time. */
+  let placing: Promise<void> | null = null;
+  const place = (): Promise<void> => (placing ??= (async () => {
+    const { signal, done } = withTimeout(2000);
+    try {
+      const r = await fetch(`${baseUrl}/api/ps`, { signal });
+      if (!r.ok) { placed = "down"; return; }
+      const ps = (await r.json()) as { models?: { name?: string; model?: string; size?: number; size_vram?: number }[] };
+      const m = ps.models?.find((x) => x.name === model || x.model === model);
+      placed = !m ? "cold" : (m.size_vram ?? 0) >= (m.size ?? 0) * 0.98 ? "gpu" : "partial";
+    } catch { placed = "down"; } finally { done(); placedAt = Date.now(); placing = null; }
+  })());
   return {
     name, model, host: baseUrl,
     async waiting() {
@@ -154,16 +166,13 @@ function ollamaLike(name: BackendName, baseUrl: string, model: string, timeoutMs
       } catch { return 0; } finally { done(); }
     },
     async residency() {
-      // Cached for 15 s, like the probe: it is asked once per turn.
+      // Asked once per turn. An answer under 15 s old is used as is; an older one is used at once while a new one is
+      // fetched in the background, so no turn waits up to 2 s on a model server whose machine is asleep (a gaming PC
+      // that sleeps used to add those 2 s to every turn). Only the first ask waits.
       if (Date.now() - placedAt < 15_000) return placed;
-      const { signal, done } = withTimeout(2000);
-      try {
-        const r = await fetch(`${baseUrl}/api/ps`, { signal });
-        if (!r.ok) { placed = "down"; return placed; }
-        const ps = (await r.json()) as { models?: { name?: string; model?: string; size?: number; size_vram?: number }[] };
-        const m = ps.models?.find((x) => x.name === model || x.model === model);
-        placed = !m ? "cold" : (m.size_vram ?? 0) >= (m.size ?? 0) * 0.98 ? "gpu" : "partial";
-      } catch { placed = "down"; } finally { done(); placedAt = Date.now(); }
+      const fresh = place();
+      if (placedAt > 0) return placed;
+      await fresh;
       return placed;
     },
     async probe() {

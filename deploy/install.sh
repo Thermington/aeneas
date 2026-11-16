@@ -402,6 +402,10 @@ all_v4() {
 # Asked once (later runs keep the choice; Settings in the app can change it). Each option's note is the one the app
 # shows behind its info button.
 LINK_DOC="docs/connections.md in the app's folder, or https://github.com/gnomecannon/aeneas/blob/main/docs/connections.md"
+# Direct link's library (iroh, hub/src/link.ts directLinkRuns) has builds for Apple silicon Macs, Linux on x86_64 and
+# ARM, and Windows; none for an Intel Mac, where the hub could never start it and no device would find the hub.
+direct_runs=1
+case "$OS-$(uname -m)" in Darwin-x86_64) direct_runs=0 ;; esac
 link_info() {
   case "$1" in
     1) note "Direct link: your devices connect straight to this hub, encrypted end to end, using iroh, open source networking software from the company n0. If a direct path is blocked, traffic passes through a relay that can't read it or pretend to be your hub. Relays are run by n0, free, with no uptime promise. No account: the QR code is the only key, and only devices that scanned it can connect. It needs Aeneas 1.0.3 or newer on each phone and computer." ;;
@@ -412,8 +416,13 @@ link_info() {
 choose_link() {
   local a def=1
   case "$1" in tailscale) def=2 ;; home) def=3 ;; esac
+  [ "$direct_runs" = 1 ] || [ "$def" != 1 ] || def=3
   printf '\n    How will your phone and computers reach this hub? You can change this later in Settings.\n' >/dev/tty
-  printf '      1) Direct link (recommended, uses iroh): scan a QR code and you are done. No account. Works at home and away.\n' >/dev/tty
+  if [ "$direct_runs" = 1 ]; then
+    printf '      1) Direct link (recommended, uses iroh): scan a QR code and you are done. No account. Works at home and away.\n' >/dev/tty
+  else
+    printf '      1) Direct link: not on this Mac. Its library has no build for Intel Macs yet, so choose 2 or 3.\n' >/dev/tty
+  fi
   printf '      2) Tailscale: for people who already use Tailscale. Needs a free Tailscale account and a sign-in on each device.\n' >/dev/tty
   printf '      3) Home Wi-Fi only: nothing to sign in to. Your devices reach the hub only on your home network.\n' >/dev/tty
   while :; do
@@ -422,7 +431,8 @@ choose_link() {
     a="${a// /}"
     case "$a" in
       "") a="$def"; break ;;
-      1|2|3) break ;;
+      1) if [ "$direct_runs" = 1 ]; then break; fi; note "Direct link cannot run on an Intel Mac. Type 2 or 3." >/dev/tty ;;
+      2|3) break ;;
       "?1"|"?2"|"?3") link_info "${a#?}" >/dev/tty ;;
       "?") note "The full comparison: $LINK_DOC" >/dev/tty ;;
       *) note "Type 1, 2 or 3." >/dev/tty ;;
@@ -439,23 +449,35 @@ if [ -f "$ENV_FILE" ]; then
     case "$(get_env EA_BIND_HOST)" in ""|127.*|localhost|::1) [ "$tailscale_ok" = 1 ] && prev=tailscale ;; *) prev=home ;; esac
   fi
 fi
+if [ "$direct_runs" = 0 ] && { [ "$METHOD" = direct ] || [ "$prev" = direct ]; }; then
+  # A hub set up with Direct link on an Intel Mac never started it: no device could find the hub. Asked again.
+  say "Direct link cannot run on this Mac (its library has no build for Intel Macs), so this hub needs another way in"
+  METHOD=""; prev=""
+fi
 if [ -z "$METHOD" ]; then
   if [ -n "$prev" ]; then METHOD="$prev"
   elif can_ask; then METHOD="$(choose_link "${prev:-direct}")"
-  else METHOD=direct; fi
+  elif [ "$direct_runs" = 1 ]; then METHOD=direct
+  else METHOD=home; fi
 fi
 if [ "$METHOD" = tailscale ] && [ "$tailscale_ok" = 0 ]; then
   say "Tailscale is not running on this machine, so it cannot be how your devices reach the hub yet"
   note "Install it from tailscale.com/download and sign in, then run this again and choose Tailscale."
-  if ask "Use Direct link for now (no account; you can switch in Settings later)?" y; then METHOD=direct; else die "stopped: install Tailscale, sign in, then run this again"; fi
+  if [ "$direct_runs" = 0 ]; then
+    if ask "Use Home Wi-Fi only for now (nothing to sign in to; you can switch in Settings later)?" y; then METHOD=home; else die "stopped: install Tailscale, sign in, then run this again"; fi
+  elif ask "Use Direct link for now (no account; you can switch in Settings later)?" y; then METHOD=direct; else die "stopped: install Tailscale, sign in, then run this again"; fi
 fi
 if [ "$METHOD" = home ]; then
   open_ip=""
   for a in $(all_v4); do private_v4 "$a" || open_ip="$a"; done
   if [ -n "$open_ip" ] && [ "${EA_LAN:-}" != 1 ]; then
-    say "This machine has a public internet address ($open_ip): listening on the network would put the hub on the internet, so Direct link is used instead"
-    note "Set EA_LAN=1 and run this again if this really is a private network."
-    METHOD=direct
+    if [ "$direct_runs" = 1 ]; then
+      say "This machine has a public internet address ($open_ip): listening on the network would put the hub on the internet, so Direct link is used instead"
+      note "Set EA_LAN=1 and run this again if this really is a private network."
+      METHOD=direct
+    else
+      die "this machine has a public internet address ($open_ip), so the hub will not listen on the network, and Direct link cannot run on an Intel Mac: install Tailscale and choose it, or set EA_LAN=1 if this network is private"
+    fi
   fi
 fi
 case "$METHOD" in
@@ -1265,7 +1287,12 @@ link="$(pair_field web)"
 echo
 if [ "$METHOD" = direct ] && [ "$address" = "http://127.0.0.1:$PORT" ]; then say "The hub is running at $address on this machine; other devices reach it through Direct link"; else say "The hub is running at $address"; fi
 if [ -n "$link" ]; then
-  echo "    To finish, open this link in a browser on this computer, or on another computer on the same network"
+  # A Direct link hub listens only on this machine (127.0.0.1): its link opens nowhere else.
+  if [ "$address" = "http://127.0.0.1:$PORT" ]; then
+    echo "    To finish, open this link in a browser on this computer"
+  else
+    echo "    To finish, open this link in a browser on this computer, or on another computer on the same network"
+  fi
   echo "    (it works once, for 10 minutes). The page that opens walks you through the rest:"
   echo
   echo "    $link"

@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { LinkChoice } from "./settings/Link";
 import { useEffect, useState } from "react";
 import { RetentionSettings } from "./settings/HubPrivacy";
@@ -9,7 +10,7 @@ import { ModulePicker } from "./settings/Modules";
 import { PairDevice } from "./settings/Devices";
 
 type Msg = { ok: boolean; text: string } | null;
-const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const errorText = (e: unknown) => plainError(e);
 const gb = (mib: number) => `${Math.round(mib / 1024)} GB`;
 
 /**

@@ -262,3 +262,29 @@ test("a Watch traded with the main key names its iPhone, and goes with it", asyn
     assert.equal((await asDevice(t, watch.key, "/status")).status, 401);
   } finally { t.cleanup(); }
 });
+
+test("claim: a platform the hub does not take is refused before the code is spent; android is taken", async () => {
+  const t = makeHub();
+  try {
+    const links = (await (await t.api("/devices/pairing", { method: "POST", json: { name: "Phone" } })).json()) as { code: string };
+    const bad = await claim(t, { code: links.code, name: "Phone", platform: "toaster" });
+    assert.equal(bad.status, 422);
+    const ok = await claim(t, { code: links.code, name: "Pixel", platform: "android" });
+    assert.equal(ok.status, 200, "the same code still works");
+    const d = (await ok.json()) as { device_id: string };
+    assert.equal(t.hub.store.get(d.device_id)!.fields.platform, "android");
+  } finally { t.cleanup(); }
+});
+
+test("web app: a missing script under /app/assets is a 404, other app addresses get the app page", async (ctx) => {
+  const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist/index.html");
+  if (!fs.existsSync(dist)) { ctx.skip("the web app is not built here"); return; }
+  const t = makeHub();
+  try {
+    const gone = await t.app.request("/app/assets/Screen-gone123.js");
+    assert.equal(gone.status, 404);
+    const page = await t.app.request("/app/tasks");
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /<html/i);
+  } finally { t.cleanup(); }
+});

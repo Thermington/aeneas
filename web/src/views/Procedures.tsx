@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
@@ -100,7 +101,7 @@ function NewProcedure() {
       } else e = await createLocal(body, preview);
       go(`/procedures/${e.id}`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     } finally {
       setBusy(false);
     }
@@ -218,7 +219,7 @@ function Runner({ id }: { id: string }) {
       if (Object.keys(fields).length) await updateEntity(e, fields);
       if (action === "done") celebrate("complete");
     } catch (err) {
-      setErr(err instanceof Error ? err.message : String(err));
+      setErr(plainError(err));
     } finally {
       setBusy(false);
     }

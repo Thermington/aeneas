@@ -47,8 +47,10 @@ public enum HubPin {
     }
 }
 
-/// Accepts only the pinned certificate for every request of its session (data requests and the `/live` stream).
-final class PinnedSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+/// Accepts only the pinned certificate for every request of its session (data requests and the `/live` stream). The
+/// certificate is checked here, during the TLS handshake, so a request (and the key it carries) is sent only once the
+/// pinned certificate was shown.
+final class PinnedSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let pin: String
     init(pin: String) { self.pin = pin }
 
@@ -61,6 +63,12 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, @unchecked Send
         case .reject: return (.cancelAuthenticationChallenge, nil)
         case .standard: return (.performDefaultHandling, nil)
         }
+    }
+
+    /// A redirect is never followed: the key would go with the request to an address the pin does not cover, or
+    /// over plain http. The redirect itself comes back as the answer.
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        nil
     }
 }
 

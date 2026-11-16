@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEntities } from "../sync/hooks";
 import { dueReminders, hasReminder, type DueReminder } from "../lib/reminders";
@@ -53,7 +54,7 @@ export function ReminderBanner() {
     try {
       await snoozeReminder(first.entity, new Date(Date.now() + minutes * 60_000).toISOString(), reason);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
     }
   };
 

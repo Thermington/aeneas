@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import { scheduleDaily } from "./schedule.js";
 import { WorkKey } from "./workkey.js";
 import { BackupKey, BackupKeyError, decryptFile, encryptFile } from "./backupkey.js";
 import { errCode } from "./logsafe.js";
+import { fileURLToPath } from "node:url";
 
 const RETENTION_DAYS = 30;
 
@@ -92,6 +93,35 @@ export function copyBackup(file: string, copyDir: string, now: Date = new Date()
   return { copied: dst };
 }
 
+/** Run backup-copy.mjs for the second folder and read its JSON answer; null when it gave none within `ms`. */
+function outside<T>(args: string[], ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("./backup-copy.mjs", import.meta.url)), ...args], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(null); }, ms);
+    timer.unref();
+    child.on("close", () => { clearTimeout(timer); try { resolve(JSON.parse(out) as T); } catch { resolve(null); } });
+    child.on("error", () => { clearTimeout(timer); resolve(null); });
+  });
+}
+
+/**
+ * copyBackup in a child process, given up on after `ms` (15 minutes): a network share whose server went away blocked
+ * the hub's only thread with no end.
+ */
+export async function copyBackupOutside(file: string, copyDir: string, now: Date = new Date(), ms = 15 * 60_000): Promise<{ copied: string | null; error?: string }> {
+  if (!copyDir) return { copied: null };
+  const cutoff = now.getTime() - RETENTION_DAYS * 24 * 3600_000;
+  return (await outside<{ copied: string | null; error?: string }>(["copy", file, copyDir, String(cutoff)], ms))
+    ?? { copied: null, error: `${copyDir} did not answer within ${Math.round(ms / 60_000)} minutes (a network share whose server went away?)` };
+}
+
+/** listBackups of the second folder in a child process: null when it did not answer within `ms`. */
+export function listCopiesOutside(copyDir: string, ms = 15_000): Promise<BackupInfo[] | null> {
+  return outside<BackupInfo[]>(["list", copyDir], ms);
+}
+
 /** True when the newest encrypted backup is older than `hours` (or there is none). */
 export function backupOverdue(backupDir: string, hours = 26, now: Date = new Date()): boolean {
   const newest = listBackups(backupDir).find((b) => b.encrypted);
@@ -106,18 +136,20 @@ export function backupOverdue(backupDir: string, hours = 26, now: Date = new Dat
  */
 export function startNightlyBackup(db: DB, backupDir: string, key: BackupKey, workKey: WorkKey, hour = 3, copyDir = ""): () => void {
   const run = async () => {
+    // The night's own copy first: an older plain copy the hub could not read or encrypt (one left by another user, a
+    // disk filling up during the conversion) stopped every nightly backup after it.
+    const r = await runBackup(db, backupDir, key);
+    console.log(`[backup] wrote ${r.file}${r.pruned.length ? `, pruned ${r.pruned.length}` : ""}`);
+    const c = await copyBackupOutside(r.file, copyDir);
+    if (c.copied) console.log(`[backup] copied to ${c.copied}`);
+    else if (c.error) console.error(`[backup] second copy not made: ${c.error}`);
     // Older plain copies are on this machine's own disk, beside the live database, so keeping them costs nothing; they
     // are encrypted (and the plain files removed) only once the owner has saved the recovery key, so a lost disk before
     // then still leaves copies that open without it.
     if (key.recoverySaved()) {
-      const c = await encryptPlainBackups(backupDir, key, workKey);
-      if (c.converted.length) console.log(`[backup] encrypted ${c.converted.length} older plain backups`);
+      const p = await encryptPlainBackups(backupDir, key, workKey);
+      if (p.converted.length) console.log(`[backup] encrypted ${p.converted.length} older plain backups`);
     }
-    const r = await runBackup(db, backupDir, key);
-    console.log(`[backup] wrote ${r.file}${r.pruned.length ? `, pruned ${r.pruned.length}` : ""}`);
-    const c = copyBackup(r.file, copyDir);
-    if (c.copied) console.log(`[backup] copied to ${c.copied}`);
-    else if (c.error) console.error(`[backup] second copy not made: ${c.error}`);
   };
   const go = () => { run().catch((e) => console.error(`[backup] failed: ${e instanceof BackupKeyError ? e.message : errCode(e)}`)); };
   const stop = scheduleDaily("backup", hour, 0, go);
@@ -211,8 +243,16 @@ export async function encryptPlainBackups(backupDir: string, key: BackupKey, wor
       if (readable && dropChatTables(file)) console.log(`[backup] dropped the chat tables of ${name}`);
     } catch (e) { console.error(`[backup] ${name}: chat tables could not be dropped: ${errCode(e)}`); }
     const out = `${file}.age`;
-    await encryptFile(file, out, recipient);
-    fs.utimesSync(out, st.atime, st.mtime);
+    // One file that cannot be read or written is left as it is: the others are still encrypted.
+    try {
+      await encryptFile(file, out, recipient);
+      fs.utimesSync(out, st.atime, st.mtime);
+    } catch (e) {
+      fs.rmSync(out, { force: true });
+      skipped.push(name);
+      console.error(`[backup] ${name} could not be encrypted: ${errCode(e)}; left as it is`);
+      continue;
+    }
     for (const f of [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]) fs.rmSync(f, { force: true });
     converted.push(name);
   }
@@ -266,8 +306,9 @@ export async function hubBackupLines(cfg: { backupDir: string; backupCopyDir: st
   const newest = nightly[0]?.at ?? null;
   lines.push({ label: "Nightly copy", ok: fresh(newest), at: newest, text: nightly.length ? `${nightly.length} kept${nightly.every((b) => b.encrypted) ? ", encrypted" : ", one not encrypted yet"}` : "none made yet" });
   if (cfg.backupCopyDir) {
-    const copies = listBackups(cfg.backupCopyDir);
-    lines.push({ label: "Second copy", ok: fresh(copies[0]?.at), at: copies[0]?.at ?? null, text: copies.length ? cfg.backupCopyDir : `none in ${cfg.backupCopyDir} yet` });
+    const copies = await listCopiesOutside(cfg.backupCopyDir);
+    if (!copies) lines.push({ label: "Second copy", ok: false, at: null, text: `${cfg.backupCopyDir} did not answer (a network share whose server went away?)` });
+    else lines.push({ label: "Second copy", ok: fresh(copies[0]?.at), at: copies[0]?.at ?? null, text: copies.length ? cfg.backupCopyDir : `none in ${cfg.backupCopyDir} yet` });
   }
   const storage = await readUnit("everythingapp-backup.service");
   if (storage?.load === "loaded") {

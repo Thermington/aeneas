@@ -1,3 +1,4 @@
+import { plainError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { engine } from "../sync/engine";
 import { MEALS_STATES, locationNotice, stateNote } from "../lib/mealsTax";
@@ -49,7 +50,7 @@ function useCalc<T>(kind: "split" | "payoff" | "unit" | "takehome", body: unknow
       fb = local();
     } catch (e) {
       setOut(null);
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(plainError(e));
       return;
     }
     let cancelled = false;

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { PeoplePage, usePeopleSummary } from "./settings/People";
+import { ReferenceSettingsPage, useReferenceSummary } from "./settings/Reference";
 import { hubLabel, useHubIdentity } from "../lib/hubIdentity";
 import { HubClient, normalizeHubUrl } from "../sync/api";
 import { directState, isDirect, parseDirect, relayOwner } from "../sync/direct";
 import { db, META, setMeta, type RejectedEdit } from "../sync/db";
 import { engine } from "../sync/engine";
+import { ROUTE_LABEL } from "../sync/route";
 import { useHubReady, useMeta, useSyncState } from "../sync/hooks";
 import { CAPTURE_SHORTCUTS, autostartEnabled, getCaptureShortcut, getWidget, isAndroid, isTauri, isWindowsApp, notificationsAllowed, notify, onWidgetChanged, setAutostart, setCaptureShortcut, setWidget, setupFilePath } from "../tauri/bridge";
 import { applySetupFile, type SetupFileResult } from "../tauri/setupFile";
@@ -25,7 +27,12 @@ import { MachinesSettings, RetentionSettings } from "./settings/HubPrivacy";
 import { HubUpdateCard } from "./settings/HubUpdate";
 import { keyKind } from "./Setup";
 import { saveBlob } from "../lib/download";
+import { listedKeys } from "../lib/keys";
+import { refusedSentence, refusedValues } from "../lib/errors";
 import { localDate } from "../lib/planner";
+
+/** This app's own version, from the build (the hub's comes from the hub). */
+const APP_VERSION: string = import.meta.env.VITE_APP_VERSION ?? "unknown";
 
 const SETUP_STATE: Record<SetupFileResult["state"], string> = {
   "not-desktop": "only on the desktop app",
@@ -61,6 +68,7 @@ export function Settings({ parts, params }: { parts: string[]; params: URLSearch
   if (a === "windows" && isWindowsApp) return <WindowsApp />;
   if (a === "about") return <About />;
   if (a === "people") return <PeoplePage />;
+  if (a === "reference") return <ReferenceSettingsPage />;
   return <SettingsHome />;
 }
 
@@ -86,6 +94,7 @@ function SettingsHome() {
   const [links] = useConnections();
   const { list: modules } = useModules();
   const people = usePeopleSummary();
+  const reference = useReferenceSummary();
 
   const ready = useHubReady();
   useEffect(() => {
@@ -117,6 +126,7 @@ function SettingsHome() {
         {people && <NavRow href="/settings/people" title="People on this machine" summary={people} />}
         <NavRow href="/settings/import" title="Bring your data in" summary="ChatGPT, Google Takeout, Obsidian and other notes, text" />
         <NavRow href="/settings/connections" title="Connections" summary={connectionsSummary(links)} />
+        {reference !== null && <NavRow href="/settings/reference" title="Reference" summary={reference} />}
         <NavRow href="/settings/notifications" title="Notifications" summary={isWindowsApp ? "Windows notifications and banners" : "Banners while the app is open"} />
         <NavRow href="/settings/work" title="Work space" summary={work || (engine.client ? "Work calendar and tasks" : "Hub not configured")} />
         <NavRow href="/settings/planner" title="Planner" summary="Plan rules, week and renewals" />
@@ -189,8 +199,11 @@ function Connection() {
     await setMeta(META.deviceName, name.trim());
     if (changedHub) {
       // A different hub is a different dataset: drop the cached copy and the device id,
-      // keep the outbox so unsent edits still reach the new hub.
+      // keep the outbox so unsent edits still reach the new hub. A typed address carries no hub id, so the old one
+      // goes too (the hub there tells its own on the next connect), with the ways to the old hub.
       await db.meta.delete(META.deviceId);
+      await db.meta.delete(META.hubId);
+      await db.meta.delete(META.routes);
       await setMeta(META.seq, 0);
       await db.entities.clear();
     }
@@ -266,6 +279,12 @@ function Connection() {
           <dd>
             {sync.status}, live {sync.live ? "on" : "off"}
           </dd>
+          {sync.route && (
+            <>
+              <dt>route</dt>
+              <dd>{ROUTE_LABEL[sync.route]}</dd>
+            </>
+          )}
           <dt>position</dt>
           <dd>seq {sync.seq}</dd>
           <dt>waiting to send</dt>
@@ -304,8 +323,8 @@ function RejectedEdits() {
       <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
         {log.slice().reverse().map((r, i) => (
           <li key={`${r.id}-${r.at}-${i}`}>
-            <strong>{r.title || r.kind}</strong> {fmtDateTime(r.at)}: {r.reason}
-            <div className="muted"><code>{JSON.stringify(r.fields).slice(0, 200)}</code></div>
+            {refusedSentence(r, fmtDateTime(r.at))}
+            {refusedValues(r.fields).map((line, j) => <div key={j} className="muted" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{line}</div>)}
           </li>
         ))}
       </ul>
@@ -593,6 +612,8 @@ function About() {
         <div className="card col">
           <h2>App</h2>
           <dl className="facts">
+            <dt>version</dt>
+            <dd>{APP_VERSION}</dd>
             <dt>mode</dt>
             <dd>{pwa?.standalone ? "installed, standalone" : "browser tab"}</dd>
             <dt>service worker</dt>
@@ -627,17 +648,40 @@ function About() {
         <div className="card col">
           <h2>Versions</h2>
           <dl className="facts">
+            <dt>this app</dt>
+            <dd>{APP_VERSION}</dd>
             <dt>hub</dt>
             <dd>{engine.client ? `${hubName ? `${hubName}, ` : ""}${hubVersion || "checking"}` : "not configured"}</dd>
           </dl>
         </div>
       )}
-      <div className="card col">
-        <h2>Keyboard</h2>
-        <div className="muted small">
-          On desktop: <kbd>t</kbd> today, <kbd>a</kbd> assistant, <kbd>c</kbd> capture, <kbd>n</kbd> now, <kbd>w</kbd> week, <kbd>/</kbd> search, <kbd>Esc</kbd> closes banners and editors, <kbd>Alt</kbd>+arrows reorder tasks.
-        </div>
-      </div>
+      <Keyboard />
     </SubPage>
+  );
+}
+
+/** Every shortcut the app answers to, from the same list the keys use (letters of modules that are off are left out). */
+function Keyboard() {
+  const { on } = useModules();
+  const [capture, setCapture] = useState<string | null>(null);
+  useEffect(() => {
+    if (isWindowsApp) void getCaptureShortcut().then(setCapture).catch(() => undefined);
+  }, []);
+  const anywhere = capture && capture !== "off" ? CAPTURE_SHORTCUTS.find((o) => o.value === capture)?.label ?? capture : null;
+  return (
+    <div className="card col">
+      <h2>Keyboard</h2>
+      <ul className="muted small plain-list">
+        <li>
+          On desktop, outside a text field:{" "}
+          {listedKeys(on).map((k, i) => <span key={k.key}>{i ? ", " : ""}<kbd>{k.key}</kbd> {k.label}</span>)}.
+        </li>
+        <li><kbd>Esc</kbd> closes banners, editors and pictures.</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> sends a message to the assistant and saves a capture.</li>
+        <li><kbd>Alt</kbd>+arrows move a next task up or down in Tasks.</li>
+        {on("layouts") && <li>Layout sketches: <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redoes, arrows move the chosen part (with <kbd>Shift</kbd>, further), <kbd>Delete</kbd> removes it.</li>}
+        {anywhere && <li><kbd>{anywhere}</kbd> opens Capture from any app; <kbd>Esc</kbd> hides it again.</li>}
+      </ul>
+    </div>
   );
 }

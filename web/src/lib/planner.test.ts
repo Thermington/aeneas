@@ -3,19 +3,26 @@ import type { Entity } from "@everythingapp/shared";
 import {
   atMinutes,
   buildDigest,
+  byStart,
   commitmentsFor,
   daysLeft,
+  dueFromInput,
+  dueInputValue,
   findConflict,
   fmtDaysLeft,
+  fmtDue,
   freeSlots,
   gridPlacement,
   groupWatches,
   hhmmToMinutes,
   hourRows,
+  isOverdue,
   localDate,
+  localDayAt,
   minutesAtFraction,
   minutesToHhmm,
   mondayOf,
+  msToNextDay,
   overlaps,
   parseLocalDate,
   ruleAppliesOn,
@@ -23,6 +30,7 @@ import {
   weekdayOf,
   weeksFromAnchor,
 } from "./planner";
+import { fmtDate, fmtTime } from "./time";
 
 // A Thursday. Everything below is built with local-time constructors so the tests hold in any zone.
 const THU = new Date(2026, 9, 22);
@@ -206,5 +214,78 @@ describe("all-day events", () => {
     expect(over(s, day(new Date(2026, 9, 30, 12)))).toBe(false);
     const items = tl({ blocks: [], commitments: [], events: [e], reminders: [], free_slots: [] }, null);
     expect(items[0]).toMatchObject({ kind: "event", all_day: true });
+  });
+});
+
+describe("due dates", () => {
+  // Local-time constructors, so these hold in any zone; west of UTC the old reading failed every one of them.
+  const evening = new Date(2026, 10, 16, 19, 0);
+  it("a date alone is due all that local day, and overdue only once the day is over", () => {
+    expect(isOverdue("2026-11-17", evening)).toBe(false);
+    expect(isOverdue("2026-11-17", new Date(2026, 10, 17, 0, 0))).toBe(false);
+    expect(isOverdue("2026-11-17", new Date(2026, 10, 17, 23, 59))).toBe(false);
+    expect(isOverdue("2026-11-17", new Date(2026, 10, 18, 0, 0))).toBe(true);
+    // A date and time is overdue once that moment has passed.
+    expect(isOverdue("2026-11-17T15:00:00.000Z", new Date("2026-11-17T14:59:00.000Z"))).toBe(false);
+    expect(isOverdue("2026-11-17T15:00:00.000Z", new Date("2026-11-17T15:01:00.000Z"))).toBe(true);
+    expect(isOverdue("not a date")).toBe(false);
+  });
+
+  it("shows a date alone as its own day, never a time the evening before", () => {
+    const nov17 = fmtDate(new Date(2026, 10, 17, 12).toISOString());
+    expect(fmtDue("2026-11-17", { now: evening })).toBe(nov17);
+    expect(fmtDue("2026-11-17", { now: evening })).not.toMatch(/\d:\d\d/);
+    expect(fmtDue("2026-11-17", { now: new Date(2026, 10, 17, 8) })).toBe("today");
+    expect(fmtDue("2026-11-17", { now: new Date(2026, 10, 17, 8), day: true })).toBe(nov17);
+    // A moment: its time today, else its date and time; `day` leaves the time out.
+    const moment = new Date(2026, 10, 17, 15, 30).toISOString();
+    expect(fmtDue(moment, { now: new Date(2026, 10, 17, 8) })).toBe(fmtTime(moment));
+    expect(fmtDue(moment, { now: evening })).toBe(`${fmtDate(moment)} ${fmtTime(moment)}`);
+    expect(fmtDue(moment, { day: true })).toBe(nov17);
+  });
+
+  it("opens the Due box on the date's own day, and keeps a date alone when only its day changes", () => {
+    expect(dueInputValue("2026-11-17")).toBe("2026-11-17T00:00");
+    expect(dueInputValue(new Date(2026, 10, 17, 15, 30).toISOString())).toBe("2026-11-17T15:30");
+    expect(dueInputValue(undefined)).toBe("");
+    expect(dueFromInput("2026-11-18T00:00", "2026-11-17")).toBe("2026-11-18");
+    expect(dueFromInput("2026-11-18T09:30", "2026-11-17")).toBe(new Date(2026, 10, 18, 9, 30).toISOString());
+    expect(dueFromInput("2026-11-18T00:00", new Date(2026, 10, 17, 15, 30).toISOString())).toBe(new Date(2026, 10, 18).toISOString());
+    expect(dueFromInput("", "2026-11-17")).toBeNull();
+  });
+});
+
+describe("times with an offset", () => {
+  // The same moments in any zone: 19:00 at -05:00 is midnight UTC, five hours after a 19:00 UTC block.
+  const block = { task_id: "t1", title: "Fix the NAS", status: "scheduled", start: "2026-11-16T19:00:00.000Z", end: "2026-11-16T22:00:00.000Z" };
+  const dinner = ent("event", { title: "Dinner with Robin", start: "2026-11-16T19:00:00-05:00", end: "2026-11-16T21:00:00-05:00" }, "e1");
+
+  it("puts an evening event kept with its offset after an afternoon block on the timeline", () => {
+    const items = timeline({ blocks: [block], commitments: [], events: [dinner], reminders: [], free_slots: [] }, null);
+    expect(items.map((i) => i.kind)).toEqual(["block", "event"]);
+    expect([{ start: "2026-11-16T19:00:00-05:00", end: "x" }, { start: "2026-11-16T19:00:00.000Z", end: "x" }].sort(byStart)[0].start).toBe("2026-11-16T19:00:00.000Z");
+  });
+
+  it("finds a clash across offsets, and none where the moments do not meet", () => {
+    const late = { start: "2026-11-16T23:30:00.000Z", end: "2026-11-17T00:30:00.000Z" };
+    expect(overlaps(late, { start: String(dinner.fields.start), end: String(dinner.fields.end) })).toBe(true);
+    expect(overlaps(block, { start: String(dinner.fields.start), end: String(dinner.fields.end) })).toBe(false);
+    expect(findConflict(late, [{ title: "Dinner with Robin", start: String(dinner.fields.start), end: String(dinner.fields.end) }])?.title).toBe("Dinner with Robin");
+    expect(overlaps({ start: "soon", end: "later" }, late)).toBe(false);
+  });
+});
+
+describe("the day changing", () => {
+  it("knows which day it is, also for a day that starts at 4 AM", () => {
+    expect(localDayAt(new Date(2026, 10, 16, 23, 59))).toBe("2026-11-16");
+    expect(localDayAt(new Date(2026, 10, 17, 0, 0))).toBe("2026-11-17");
+    expect(localDayAt(new Date(2026, 10, 17, 3, 59), 4)).toBe("2026-11-16");
+    expect(localDayAt(new Date(2026, 10, 17, 4, 0), 4)).toBe("2026-11-17");
+  });
+  it("counts the time to the next start of a day, for the timer that moves a screen on", () => {
+    expect(msToNextDay(new Date(2026, 10, 16, 23, 59, 30))).toBe(30_000);
+    expect(msToNextDay(new Date(2026, 10, 17, 0, 0))).toBe(new Date(2026, 10, 18).getTime() - new Date(2026, 10, 17).getTime());
+    expect(msToNextDay(new Date(2026, 10, 17, 3, 0), 4)).toBe(3_600_000);
+    expect(msToNextDay(new Date(2026, 10, 17, 5, 0), 4)).toBe(new Date(2026, 10, 18, 4).getTime() - new Date(2026, 10, 17, 5).getTime());
   });
 });

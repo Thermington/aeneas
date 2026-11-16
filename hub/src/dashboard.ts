@@ -203,7 +203,7 @@ class Reader {
   }
 
   captureTimes(): string[] {
-    return this.hub.store.list({ kind: "capture", limit: 1_000_000 }).map((c) => c.created_at);
+    return this.hub.store.createdTimes("capture");
   }
 
   sensor(name: string): Entity | null {

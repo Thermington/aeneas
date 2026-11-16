@@ -1,3 +1,4 @@
+import type { Channel } from "@tauri-apps/api/core";
 import { isTauri } from "../tauri/bridge";
 
 /**
@@ -49,15 +50,16 @@ export function relayOwner(relay: string): string {
   return /\.iroh\.link\.?$/.test(host) ? "n0, the makers of iroh (free public relay)" : host;
 }
 
-type LinkEvent =
+/** What the app's own connections (Direct link, the home network) tell the page about one request, in order. */
+export type StreamEvent =
   | { kind: "head"; status: number; headers: [string, string][] }
   | { kind: "data"; b64: string }
   | { kind: "end" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; unsent?: boolean };
 
 let nextId = 1;
 
-function b64(bytes: Uint8Array): string {
+export function b64(bytes: Uint8Array): string {
   let s = "";
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
@@ -70,6 +72,55 @@ function unb64(s: string): Uint8Array {
   return out;
 }
 
+/**
+ * A Response fed by one of the app's own connections: `send` starts the request with a channel that hears its head,
+ * its body in pieces, then its end or an error; `cancel` drops it in the app. The answer streams (the live updates).
+ */
+export async function channelResponse(
+  method: string,
+  signal: AbortSignal | undefined,
+  send: (channel: Channel<StreamEvent>) => Promise<unknown>,
+  cancel: () => void,
+  failure: (ev: { message: string; unsent?: boolean }) => Error,
+  refused: (e: unknown) => Error,
+): Promise<Response> {
+  const { Channel } = await import("@tauri-apps/api/core");
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  return new Promise<Response>((resolve, reject) => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let settled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) { controller = c; },
+      cancel() { cancel(); },
+    });
+    const fail = (e: Error) => {
+      if (!settled) { settled = true; reject(e); }
+      else { try { controller?.error(e); } catch { /* closed */ } }
+    };
+    signal?.addEventListener("abort", () => {
+      cancel();
+      fail(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+    const channel = new Channel<StreamEvent>();
+    channel.onmessage = (ev) => {
+      if (ev.kind === "head") {
+        settled = true;
+        // A response to a HEAD, or a 204/304, has no body.
+        const empty = method === "HEAD" || ev.status === 204 || ev.status === 304;
+        resolve(new Response(empty ? null : stream, { status: ev.status, headers: ev.headers }));
+      } else if (ev.kind === "data") {
+        try { controller?.enqueue(unb64(ev.b64)); } catch { /* the page stopped reading */ }
+      } else if (ev.kind === "end") {
+        try { controller?.close(); } catch { /* closed */ }
+      } else {
+        fail(failure(ev));
+      }
+    };
+    send(channel).catch((e) => fail(refused(e)));
+  });
+}
+
 /** `fetch` for a Direct link hub, through the app's own connection. The answer streams (the live updates). */
 export async function directFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -79,47 +130,19 @@ export async function directFetch(input: RequestInfo | URL, init: RequestInit = 
   const relay = relays.get(node);
   if (!KEY_RE.test(node) || !relay) throw new TypeError("This Direct link hub is not known to this page");
   if (!isTauri) throw new TypeError("Direct link works in the Aeneas app (Windows, Android, iPhone, Mac), not in a browser");
-  const { invoke, Channel } = await import("@tauri-apps/api/core");
+  const { invoke } = await import("@tauri-apps/api/core");
   const body = req.body ? new Uint8Array(await req.arrayBuffer()) : null;
   const headers: [string, string][] = [];
   req.headers.forEach((v, k) => headers.push([k, v]));
   const id = nextId++;
-  const signal = init.signal ?? undefined;
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-
-  return new Promise<Response>((resolve, reject) => {
-    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-    let settled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) { controller = c; },
-      cancel() { void invoke("link_cancel", { id }); },
-    });
-    const fail = (e: Error) => {
-      if (!settled) { settled = true; reject(e); }
-      else { try { controller?.error(e); } catch { /* closed */ } }
-    };
-    signal?.addEventListener("abort", () => {
-      void invoke("link_cancel", { id });
-      fail(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
-    const channel = new Channel<LinkEvent>();
-    channel.onmessage = (ev) => {
-      if (ev.kind === "head") {
-        settled = true;
-        // A response to a HEAD, or a 204/304, has no body.
-        const empty = req.method === "HEAD" || ev.status === 204 || ev.status === 304;
-        resolve(new Response(empty ? null : stream, { status: ev.status, headers: ev.headers }));
-      } else if (ev.kind === "data") {
-        try { controller?.enqueue(unb64(ev.b64)); } catch { /* the page stopped reading */ }
-      } else if (ev.kind === "end") {
-        try { controller?.close(); } catch { /* closed */ }
-      } else {
-        fail(new TypeError(`Could not reach the hub over Direct link: ${ev.message}`));
-      }
-    };
-    invoke("link_fetch", { id, node, relay, method: req.method, path: url.pathname + url.search, headers, body: body ? b64(body) : null, onEvent: channel })
-      .catch((e) => fail(new TypeError(String(e))));
-  });
+  return channelResponse(
+    req.method,
+    init.signal ?? undefined,
+    (onEvent) => invoke("link_fetch", { id, node, relay, method: req.method, path: url.pathname + url.search, headers, body: body ? b64(body) : null, onEvent }),
+    () => void invoke("link_cancel", { id }),
+    (ev) => new TypeError(`Could not reach the hub over Direct link: ${ev.message}`),
+    (e) => new TypeError(String(e)),
+  );
 }
 
 /** The connection right now, for Settings: null outside the app. */
@@ -129,8 +152,22 @@ export async function directState(node: string): Promise<{ connected: boolean; d
   return invoke("link_state", { node });
 }
 
-/** `fetch`, or the Direct link for `iroh://` addresses. */
-export function hubFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+/** `fetch`, or the Direct link for `iroh://` addresses: the address as it is, never the home network route. */
+export function rawHubFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const u = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   return /^iroh:\/\//i.test(u) ? directFetch(input, init) : fetch(input, init);
+}
+
+/** Takes the requests to the app's own hub and sends them the way chosen (home.ts); null leaves a request alone. */
+export type HubRouterHook = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | null;
+let routerHook: HubRouterHook | null = null;
+
+/** Set by the Windows and Android apps while they choose between the home network and the remote route. */
+export function setHubRouter(hook: HubRouterHook | null): void {
+  routerHook = hook;
+}
+
+/** Every request to a hub: the app's own hub the way chosen for it, any other address as it is. */
+export function hubFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return routerHook?.(input, init) ?? rawHubFetch(input, init);
 }

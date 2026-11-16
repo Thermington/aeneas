@@ -3,6 +3,7 @@ import { withPriority } from "./ai/backends.js";
 import { recordImage } from "./gallery.js";
 import type { Entity } from "@everythingapp/shared";
 import { classifyCapture } from "@everythingapp/shared";
+import { parseWhen } from "./when.js";
 import type { Hub } from "./hub.js";
 import type { Store } from "./store.js";
 import { convertCapture, filedLabel, filedTitle, KIND_LABEL } from "./capture.js";
@@ -83,10 +84,10 @@ export function filingPrompt(text: string, at: Date, hint?: string, events: stri
     T("something about another person goes to them: look them up with people, then remember with person= for likes, habits and history, or save_person for contact details (address, phone, email, birthday, anniversary or another date);"),
     T("something to do becomes a task, with a reminder time only when one is stated, and a deadline {{owner}} names (by Friday, before March) as its due date exactly (before March means the last day of February), never earlier, and no advice in its notes; a day or part of a day for it (tomorrow, Friday morning) is its due date (YYYY-MM-DD) with no reminder time;"),
     T("something to buy goes on a shopping list among {{owner}}'s Reminders lists (create_task with list=, {{owner}}'s own unless someone else's is named), keeping where to get it in the title (\"HDMI cable from Micro Center\");"),
-    T("a measurement or something done (ate, took, slept, walked) becomes a log;"),
+    T("a measurement or something done (ate, took, slept, walked) becomes a log at the time the note was written, or the time it names (at);"),
     on("food") && T("a restaurant or meal place goes on the food list (create_item kind=food_option) when it clearly fits, and its notes always name who recommended it or who {{owner}} went with (\"Rafael recommended it\");"),
     T("an idea for something to make (a story, film, book, sketch or skit, game, app, invention, business) becomes a note with save_note: a title of 2 to 8 words naming what happens or what it is (\"The lighthouse that knocks back\"), never the whole sentence and never its kind (idea, story, skit), the whole capture as its body, tags idea plus its form (story, film, book, sketch, game, app, invention, business), in the one of {{owner}}'s note folders whose subject it clearly has (a comedy skit in a comedy sketches folder), the broader folder above it when its genre is not clear (Writing, not a guessed Writing/Horror), never Inbox when one fits;"),
-    on("music") && T("a riff, chord progression, lyric or song idea goes to music (create_item kind=music_idea with type riff, progression, lyric or song and status idea);"),
+    on("music") && T("a riff, chord progression, lyric or song idea goes to music with the music_idea tool, given the line as said, so its key, tempo and tuning are read;"),
     on("films") && T("a film {{owner}} wants to watch goes on the film watchlist (create_item kind=film with watchlist true and watched false)."),
     folders.length ? `${T("{{owner}}'s note folders:")} ${folders.join("; ")}.` : "",
     events.length ? `Already on the calendar around then: ${events.join("; ")}. When the note is about one of these (the same plan or outing), change only that event's title with update_item (the whole outing and who came; keep its times) and add no other event for it.` : "",
@@ -175,10 +176,17 @@ export async function fileCapture(hub: Hub, captureId: string): Promise<Entity |
     // Only pictures the image store can read go on (a format it does not take must not stop the filing).
     const seen: string[] = [];
     for (const ph of photos) {
-      try { recordImage(hub, hub.ai.images.save(ph.bytes_b64!), "attached", { session_id: thread, title: captureTitle(text) || ph.name || "Photo from a capture" }); seen.push(ph.bytes_b64!); }
+      try {
+        const id = hub.ai.images.save(ph.bytes_b64!);
+        // Into Saved pictures only while Images is on: nothing is filed into a module that is switched off.
+        if (hub.modules.on("images")) recordImage(hub, id, "attached", { session_id: thread, title: captureTitle(text) || ph.name || "Photo from a capture" });
+        seen.push(ph.bytes_b64!);
+      }
       catch (e) { console.error(`[filer] photo of ${captureId} not kept: ${errCode(e)}`); }
     }
-    const out = await withPriority("filing", () => hub.ai.chat({ session_id: thread, messages: [{ role: "user", content: filingPrompt(text, new Date(cap.created_at), hint, nearbyEvents(hub.store, new Date(cap.created_at)), similarTasks(hub.store, text), noteFolders(hub.store), { owner: hub.profile.get().name, pet: hub.profile.get().pet }, hub.modules.check) }], ...(seen.length ? { images: seen } : {}), store_as: text.trim(), task_type: "general", no_web: true }));
+    // A chat in progress goes first (up to 2 minutes): filing beside it slowed the reply the owner was waiting for.
+    for (const until = Date.now() + 120_000; !hub.ai.quiet(0) && Date.now() < until;) await new Promise((r) => setTimeout(r, 2_000));
+    const out = await withPriority("filing", () => hub.ai.chat({ session_id: thread, messages: [{ role: "user", content: filingPrompt(text, new Date(cap.created_at), hint, nearbyEvents(hub.store, new Date(cap.created_at)), similarTasks(hub.store, text), noteFolders(hub.store), { owner: hub.profile.get().name, pet: hub.profile.get().pet }, hub.modules.check) }], ...(seen.length ? { images: seen } : {}), store_as: text.trim(), task_type: "general", no_web: true, filing: true }));
     hub.ai.sessions.rename(thread, captureTitle(text));
     const wrote = (out.actions ?? []).filter((a) => a.ok && a.writes);
     // The store has each item's true kind (a tool result may carry an item's own "kind" field, e.g. a restaurant).
@@ -205,7 +213,13 @@ export async function fileCapture(hub: Hub, captureId: string): Promise<Entity |
     const suggested = ["task", "note", "log", "fact"].includes(String(first)) ? first : "none";
     return hub.store.patch(captureId, { filing: "done", filed, processed: true, sorted_by: "auto", suggested_kind: suggested, converted_to: [...new Set([...prior, ...ids])], thread });
   } catch (e) {
-    if (rule.kind !== "none") return byRule("the assistant was unavailable");
+    // What the phrase rule reads exactly is filed by it at once: a record (a weight, a dose, a blood pressure) and a
+    // reminder with its time ("in 20 minutes", "at 5"). Anything else waits for the model, which the filing job tries
+    // again: the rule knows no lists and puts a reminder without a time an hour out, so "remind me to buy milk" fired in
+    // an hour and "buy dog food" went to Inbox instead of the shopping list. The last try files what the rule can, so
+    // nothing is left to sort by hand.
+    const timed = rule.kind === "reminder" && !!parseWhen(String(rule.fields.title ?? text), new Date(cap.created_at)).at;
+    if (rule.kind === "log" || timed || (rule.kind !== "none" && attempts >= LATE_ATTEMPTS)) return byRule("the assistant was unavailable");
     const last = attempts >= MAX_ATTEMPTS;
     console.error(`[filer] capture ${captureId} attempt ${attempts} failed: ${errCode(e)}`);
     // Still in the diary either way; after the third try it shows in Unsorted Info while the job keeps trying.
@@ -231,7 +245,13 @@ export function linkCaptureThreads(hub: Hub): number {
 export function startFilingJob(hub: Hub, everyMs = 120_000): () => void {
   const t = setInterval(() => {
     const now = Date.now();
-    for (const c of hub.store.list({ kind: "capture", limit: 100000 })) {
+    // Only captures waiting to be sorted or filed are read: every capture ever made, photos included, used to be
+    // parsed every two minutes.
+    const waiting = new Map<string, Entity>();
+    for (const c of hub.store.listWhere("capture", [{ key: "sort", is: true }])) waiting.set(c.id, c);
+    // One equality each, so SQLite finds them through the capture_filing index (a list of two values it did not).
+    for (const state of ["pending", "failed"]) for (const c of hub.store.listWhere("capture", [{ key: "filing", is: state }])) waiting.set(c.id, c);
+    for (const c of waiting.values()) {
       const f = c.fields;
       if (f.sort === true && !f.processed && !f.filing && !c.deleted_at) { sortCapture(hub, c); continue; }
       const stuck = f.filing === "pending" && now - new Date(c.updated_at).getTime() > 10 * 60_000;

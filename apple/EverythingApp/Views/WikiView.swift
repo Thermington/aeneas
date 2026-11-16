@@ -168,6 +168,11 @@ enum WikiCache {
         UserDefaults.standard.set(i.pages.count, forKey: "wiki.pageCount")
     }
     static var pageCount: Int { UserDefaults.standard.integer(forKey: "wiki.pageCount") }
+    /// This device was removed from the hub: the page list goes with the rest of the hub's data.
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: "wiki.pageCount")
+    }
     /// A linked page's title from the last index, so the bar is titled before the page arrives.
     static func title(of id: String) -> String? { load()?.pages.first { $0.id == id }?.title }
 }

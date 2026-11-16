@@ -157,6 +157,8 @@ test("tenets: chats and command output are kept forever unless a number of days 
     const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
     const add = (id: string, at: string) => t.hub.chatDb.prepare("INSERT INTO sessions (session_id, task_type, created_at, last_at, messages) VALUES (?, 'general', ?, ?, '[]')").run(id, at, at);
     add("old", old); add("recent", recent);
+    const call = (session: string | null, at: string) => t.hub.chatDb.prepare("INSERT INTO ai_calls (at, session_id, task_type, backend, model, ms) VALUES (?, ?, 'general', 'ollama', 'm', 5)").run(at, session);
+    call(null, old); call(null, recent); call("recent", old);
     t.hub.chatDb.prepare("INSERT INTO ai_actions (id, session_id, host, command, kind, status, created_at, ran_at, output) VALUES ('a1', 'recent', 'pve1', 'df -h', 'read', 'done', ?, ?, 'Filesystem ...')").run(old, old);
     assert.deepEqual(readRetention(t.hub), { chat_keep_days: 0, command_output_keep_days: 0 });
     assert.deepEqual(applyRetention(t.hub), { chats: 0, outputs: 0 }, "no setting: nothing is deleted");
@@ -168,6 +170,8 @@ test("tenets: chats and command output are kept forever unless a number of days 
     assert.deepEqual((t.hub.chatDb.prepare("SELECT session_id FROM sessions").all() as { session_id: string }[]).map((r) => r.session_id), ["recent"]);
     const a = t.hub.chatDb.prepare("SELECT command, status, output FROM ai_actions WHERE id = 'a1'").get() as { command: string; status: string; output: string | null };
     assert.deepEqual(a, { command: "df -h", status: "done", output: null }, "the command and its result stay, its output goes");
+    const calls = t.hub.chatDb.prepare("SELECT session_id, at FROM ai_calls ORDER BY id").all() as { session_id: string | null; at: string }[];
+    assert.deepEqual(calls, [{ session_id: null, at: recent }, { session_id: "recent", at: old }], "an old call made for no chat goes; a kept chat's calls stay");
     await t.api("/settings/retention", { method: "PUT", json: { chat_keep_days: 0 } });
     assert.equal(readRetention(t.hub).chat_keep_days, 0, "0 is forever again");
   } finally { t.cleanup(); }

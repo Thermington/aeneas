@@ -1,4 +1,5 @@
-import { normalizeHubUrl } from "../sync/api";
+import { HubClient, normalizeHubUrl } from "../sync/api";
+import { hubFetch } from "../sync/direct";
 import { relative } from "./time";
 import { safeUrl } from "./markdown";
 
@@ -125,16 +126,21 @@ export function wikiPath(id?: string | null): string {
   return id ? `/wiki?id=${encodeURIComponent(id)}` : "/wiki";
 }
 
-/** A hub path such as `/wiki/media/<page>/<file>` as a full address. It carries no key: the key goes in a header. */
+/**
+ * A hub path such as `/wiki/media/<page>/<file>` as a full address, made as the hub client makes every request's: a
+ * Direct link hub's is `iroh://<key>/wiki/media/...` (the relay is kept for the request, not put in the address).
+ * It carries no key: the key goes in a header.
+ */
 export function hubFileUrl(hubUrl: string, path: string): string {
-  return `${normalizeHubUrl(hubUrl)}${path}`;
+  return new HubClient({ hubUrl, token: "" }).url(path);
 }
 
 /**
  * A hub file fetched with the device key in the Authorization header, as a blob: address for <img> and new tabs. A
- * key in the address would end up in history, logs and the Referer of anything the page opened.
+ * key in the address would end up in history, logs and the Referer of anything the page opened. Through hubFetch, as
+ * every request to the hub goes, so a Direct link hub's files come over the app's own connection.
  */
-export async function hubFileBlob(url: string, token: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function hubFileBlob(url: string, token: string, fetchImpl: typeof fetch = hubFetch): Promise<string> {
   const r = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error(`hub answered ${r.status}`);
   return URL.createObjectURL(await r.blob());
@@ -143,13 +149,13 @@ export async function hubFileBlob(url: string, token: string, fetchImpl: typeof 
 /** The wiki's own pictures with their address moved to `data-hub-src`, so nothing loads before the key is attached. */
 export function deferHubImages(html: string, hubUrl: string): string {
   if (!hubUrl) return html;
-  const own = `${normalizeHubUrl(hubUrl)}/wiki/media/`;
+  const own = hubFileUrl(hubUrl, "/wiki/media/");
   return html.split(`<img src="${own}`).join(`<img data-hub-src="${own}`);
 }
 
 /** Whether an image address is one of the wiki's own pictures on the hub: only those load in a page (privacy-network.md). */
 export function wikiOwnImage(hubUrl: string): (url: string) => boolean {
-  const own = `${normalizeHubUrl(hubUrl)}/wiki/media/`;
+  const own = hubFileUrl(hubUrl, "/wiki/media/");
   return (url) => !!hubUrl && url.startsWith(own);
 }
 

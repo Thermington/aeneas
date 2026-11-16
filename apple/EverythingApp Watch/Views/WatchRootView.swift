@@ -9,9 +9,10 @@ struct WatchRootView: View {
             NavigationStack { WatchVoiceView(ask: model.ask, hum: model.hum) }.tag(WatchPage.voice)
             NavigationStack { WatchNowView() }.tag(WatchPage.now)
             NavigationStack { WatchTodayView() }.tag(WatchPage.today)
-            NavigationStack { WatchLogView() }.tag(WatchPage.log)
-            NavigationStack { ActivityView() }.tag(WatchPage.activity)
-            NavigationStack { WeightView() }.tag(WatchPage.weight)
+            // Health off: no health logging here (`AppModel.shows`).
+            if model.shows(.log) { NavigationStack { WatchLogView() }.tag(WatchPage.log) }
+            if model.shows(.activity) { NavigationStack { ActivityView() }.tag(WatchPage.activity) }
+            if model.shows(.weight) { NavigationStack { WeightView() }.tag(WatchPage.weight) }
         }
         .tabViewStyle(.verticalPage)
         .overlay(alignment: .top) {

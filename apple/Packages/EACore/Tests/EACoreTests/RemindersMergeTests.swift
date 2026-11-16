@@ -133,4 +133,184 @@ final class RemindersMergeTests: XCTestCase {
         XCTAssertTrue(p.taskPatches.isEmpty, "finished, so gone from what Apple returns, not deleted")
     }
 
+    // MARK: first matches
+
+    /// The person's own Apple reminder shares its title with a task made in the app today. Its deadline, alarm and
+    /// notes were cleared (the newer task's empty values won); now the task takes them and nothing of it is cleared.
+    func testATitleMatchFillsTheTaskAndNeverClearsTheAppleReminder() throws {
+        var t = task("T1", ["title": "Call the dentist", "status": "inbox", "order": 1], updated: "2026-10-28T11:50:00.000Z")
+        t.created_at = "2026-10-28T11:50:00.000Z"
+        var i = item(title: "Call the dentist", due: "2026-11-02T17:00:00.000Z", remind: "2026-11-02T14:00:00.000Z", modified: "2026-10-21T10:00:00.000Z")
+        i.notes = "ask about the crown"
+        let p = RemindersMerge.plan(items: [i], tasks: [t], state: [:], presentLists: ["P"], createsInApple: true, workOff: false, now: now)
+        XCTAssertTrue(p.appleWrites.isEmpty, "nothing written over the person's reminder")
+        let patch = try XCTUnwrap(p.taskPatches.first { $0.id == "T1" })
+        XCTAssertEqual(patch.fields["due"]?.stringValue, "2026-11-02T17:00:00.000Z")
+        XCTAssertEqual(patch.fields["remind_at"]?.stringValue, "2026-11-02T14:00:00.000Z")
+        XCTAssertEqual(patch.fields["notes"]?.stringValue, "ask about the crown")
+        XCTAssertEqual(p.state["X1"]?.taskId, "T1")
+        // What the task has and the reminder lacks fills it in; two values that differ stay as the reminder has them.
+        var mine = t
+        mine.fields["notes"] = "front desk"
+        mine.fields["due"] = "2026-11-03T17:00:00.000Z"
+        let bare = item(title: "Call the dentist", due: "2026-11-02T17:00:00.000Z", modified: "2026-10-21T10:00:00.000Z")
+        let q = RemindersMerge.plan(items: [bare], tasks: [mine], state: [:], presentLists: ["P"], createsInApple: true, workOff: false, now: now)
+        XCTAssertEqual(q.appleWrites.first?.fields, ["notes": "front desk"])
+        XCTAssertEqual(q.taskPatches.first?.fields["due"]?.stringValue, "2026-11-02T17:00:00.000Z")
+    }
+
+    /// A finished Apple reminder with an open task's title is another reminder: it was reopened. It comes in as a
+    /// done task of its own, and the open task gets an Apple item of its own.
+    func testAFinishedAppleReminderNeverTakesATaskByTitle() {
+        var t = task("T1", ["title": "Buy milk", "status": "inbox", "order": 1])
+        t.created_at = "2026-10-28T11:50:00.000Z"
+        var done = item(title: "Buy milk", done: true, modified: "2026-10-26T10:00:00.000Z")
+        done.doneAt = "2026-10-26T10:00:00.000Z"
+        let p = RemindersMerge.plan(items: [done], tasks: [t], state: [:], presentLists: ["P"], createsInApple: true, workOff: false, now: now)
+        XCTAssertTrue(p.appleWrites.isEmpty, "not reopened")
+        let own = RemindersMerge.taskId(forExternal: "X1")
+        XCTAssertEqual(p.state["X1"]?.taskId, own)
+        XCTAssertEqual(p.taskPatches.first { $0.id == own }?.fields["status"]?.stringValue, "done")
+        XCTAssertNil(p.taskPatches.first { $0.id == "T1" })
+        XCTAssertEqual(p.appleCreates.map(\.taskId), ["T1"])
+    }
+
+    /// Two Apple reminders with one title (one in each list) and one task: both took it, and its link changed on every
+    /// run, a hub write each time. One takes it now, the other comes in as its own, and from the next run nothing moves.
+    func testTwoRemindersWithOneTitleTakeOneTaskAndSettle() {
+        var t = task("T1", ["title": "Milk", "status": "inbox", "order": 1], updated: "2026-10-28T11:50:00.000Z")
+        t.created_at = "2026-10-28T11:50:00.000Z"
+        let a1 = item("X1", title: "Milk", modified: "2026-10-28T11:55:00.000Z")
+        var a2 = item("X2", title: "Milk", modified: "2026-10-28T11:55:00.000Z")
+        a2.listId = "G"; a2.listTitle = "Groceries"
+        var tasks = [t]
+        var state: [String: SyncedReminder] = [:]
+        var changes: [Int] = []
+        for run in 0..<4 {
+            let p = RemindersMerge.plan(items: [a2, a1], tasks: tasks, state: state, presentLists: ["P", "G"], createsInApple: true, workOff: false,
+                                        now: now.addingTimeInterval(Double(run) * 10))
+            for patch in p.taskPatches {
+                if let i = tasks.firstIndex(where: { $0.id == patch.id }) { tasks[i].apply(patch) }
+                else { var e = Entity(id: patch.id, kind: .task, space: patch.space ?? .personal, created_at: patch.ts); e.apply(patch); tasks.append(e) }
+            }
+            state = p.state
+            changes.append(p.taskPatches.count + p.appleWrites.count + p.appleMoves.count + p.appleCreates.count)
+        }
+        XCTAssertEqual(state["X1"]?.taskId, "T1")
+        XCTAssertEqual(state["X2"]?.taskId, RemindersMerge.taskId(forExternal: "X2"))
+        XCTAssertEqual(tasks.first { $0.id == "T1" }?.fields["apple"]?.objectValue?["id"]?.stringValue, "X1")
+        XCTAssertEqual(Array(changes.dropFirst()), [0, 0, 0], "settled after the first run")
+    }
+
+    /// Records left by that: two items whose records both name one task. The item its link names keeps it; the
+    /// other's record goes, and it comes in as its own task on the next run.
+    func testTwoRecordsNamingOneTaskSettle() {
+        let link: JSONValue = .object(["id": "X1", "list": "P", "list_title": "Personal"])
+        let t = task("T1", ["title": "Milk", "status": "inbox", "order": 1, "apple": link])
+        let a1 = item("X1", title: "Milk"), a2 = item("X2", title: "Milk")
+        let state = ["X1": SyncedReminder(taskId: "T1", localId: "L-X1", fields: RemindersMerge.fields(of: a1)),
+                     "X2": SyncedReminder(taskId: "T1", localId: "L-X2", fields: RemindersMerge.fields(of: a2))]
+        let p = RemindersMerge.plan(items: [a1, a2], tasks: [t], state: state, presentLists: ["P"], createsInApple: false, workOff: false, now: now)
+        XCTAssertTrue(p.taskPatches.isEmpty, "the link stays on X1")
+        XCTAssertTrue(p.appleDeletes.isEmpty)
+        XCTAssertEqual(p.state["X1"]?.taskId, "T1")
+        XCTAssertNil(p.state["X2"])
+        let q = RemindersMerge.plan(items: [a1, a2], tasks: [t], state: p.state, presentLists: ["P"], createsInApple: false, workOff: false, now: now)
+        XCTAssertEqual(q.taskPatches.map(\.id), [RemindersMerge.taskId(forExternal: "X2")])
+        XCTAssertEqual(q.taskPatches.first?.create, true)
+    }
+
+    /// Linked by the other device, no record here yet: an empty value is filled from the other side, whichever side is
+    /// newer. The newer Apple side cleared the task's notes.
+    func testAFirstMatchByLinkFillsEmptyValuesAndClearsNone() {
+        let link: JSONValue = .object(["id": "X1", "list": "P", "list_title": "Personal"])
+        let t = task("T1", ["title": "Buy filament", "status": "scheduled", "order": 1, "notes": "PLA, black", "apple": link], updated: "2026-10-28T11:30:00.000Z")
+        let i = item(title: "Buy filament", remind: "2026-10-29T15:00:00.000Z", modified: "2026-10-28T11:45:00.000Z")
+        let p = RemindersMerge.plan(items: [i], tasks: [t], state: [:], presentLists: ["P"], createsInApple: false, workOff: false, now: now)
+        XCTAssertEqual(p.appleWrites.first?.fields, ["notes": "PLA, black"])
+        XCTAssertEqual(p.taskPatches.first?.fields["remind_at"]?.stringValue, "2026-10-29T15:00:00.000Z")
+        XCTAssertNil(p.taskPatches.first?.fields["notes"])
+    }
+
+    // MARK: a day alone
+
+    private func calendar(_ zone: String) -> Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: zone)!
+        return c
+    }
+
+    /// "Pay rent" on Nov 20 with no time was read as local midnight, another moment in each time zone: the iPhone in
+    /// Los Angeles stored its midnight and the Mac in New York wrote it back as 3:00 AM. It is the day alone now.
+    func testADayAloneIsTheSameDayInEveryTimeZone() {
+        let rent = DateComponents(year: 2026, month: 11, day: 20)
+        for zone in ["America/New_York", "America/Los_Angeles", "Asia/Tokyo"] {
+            XCTAssertEqual(ReminderDates.read(due: rent, alarms: [], calendar: calendar(zone)).due, "2026-11-20", zone)
+            let back = ReminderDates.components("2026-11-20", calendar: calendar(zone))
+            XCTAssertNil(back?.hour, "written back with no time in \(zone)")
+            XCTAssertEqual([back?.year, back?.month, back?.day], [2026, 11, 20])
+        }
+        // With an alarm at 9 AM that day: the day, and the reminder at 9.
+        let ny = calendar("America/New_York")
+        let nine = ISO.date("2026-11-20T14:00:00.000Z")!
+        let r = ReminderDates.read(due: rent, alarms: [ReminderAlarm(absolute: nine)], calendar: ny)
+        XCTAssertEqual(r.due, "2026-11-20")
+        XCTAssertEqual(r.remindAt, ISO.string(nine))
+        // The iPhone in Los Angeles and the Mac in New York read the item alike: nothing to write on either side.
+        let link: JSONValue = .object(["id": "X1", "list": "P", "list_title": "Personal"])
+        let t = task("T1", ["title": "Pay rent", "status": "scheduled", "order": 1, "due": "2026-11-20", "apple": link])
+        let i = item(title: "Pay rent", due: ReminderDates.read(due: rent, alarms: [], calendar: calendar("America/Los_Angeles")).due)
+        let agreed = SyncedReminder(taskId: "T1", localId: "L-X1", fields: RemindersMerge.fields(of: i))
+        let p = RemindersMerge.plan(items: [i], tasks: [t], state: ["X1": agreed], presentLists: ["P"], createsInApple: true, workOff: false, now: now)
+        XCTAssertTrue(p.taskPatches.isEmpty)
+        XCTAssertTrue(p.appleWrites.isEmpty)
+        // A task an older build kept as New York midnight takes the day alone once; no hour goes to Apple.
+        let midnight = "2026-11-20T05:00:00.000Z"
+        let old = task("T1", ["title": "Pay rent", "status": "scheduled", "order": 1, "due": .string(midnight), "apple": link])
+        var before = agreed
+        before.fields["due"] = midnight
+        let q = RemindersMerge.plan(items: [i], tasks: [old], state: ["X1": before], presentLists: ["P"], createsInApple: true, workOff: false, now: now)
+        XCTAssertEqual(q.taskPatches.first?.fields["due"]?.stringValue, "2026-11-20")
+        XCTAssertTrue(q.appleWrites.isEmpty)
+    }
+
+    // MARK: repeats
+
+    /// Done in the app on "Water the plants" (every week, with an end in Apple Reminders, an alarm at 9 AM and one on
+    /// arriving home). The rule was made again from the app's repeat (end gone) and every alarm replaced. Now the
+    /// dates move a week, the rule stays, the 9 AM alarm moves with them and the place alarm stays.
+    func testDoneOnARepeatMovesTheDatesAndKeepsApplesRuleAndAlarms() {
+        let ny = calendar("America/New_York")
+        let at = ISO.date("2026-11-20T14:00:00.000Z")!
+        let next = at.addingTimeInterval(7 * 86400)
+        let due = DateComponents(calendar: ny, timeZone: ny.timeZone, year: 2026, month: 11, day: 20, hour: 9, minute: 0)
+        let alarms = [ReminderAlarm(absolute: at), ReminderAlarm(place: true)]
+        let full = ["title": "Water the plants", "notes": "", "due": "", "remind_at": ISO.string(next), "repeat": "every 1 weeks", "done": "0"]
+        let w = ReminderDates.write(full: full, repeatChanged: false, due: due, alarms: alarms, calendar: ny)
+        XCTAssertTrue(w.keepsRepeat, "Apple's rule stays, with its end")
+        XCTAssertEqual(w.alarms, [.init(from: 0, at: next), .init(from: 1, at: nil)])
+        XCTAssertEqual(w.due?.day, 27)
+        XCTAssertEqual(w.due?.hour, 9)
+        // An alarm counted from the due date moves with it as it is.
+        let relative = ReminderDates.write(full: full, repeatChanged: false, due: due, alarms: [ReminderAlarm(offset: 0)], calendar: ny)
+        XCTAssertEqual(relative.alarms, [.init(from: 0, at: nil)])
+        // No alarm to move: one at the new time, as before; the rule still stays.
+        let none = ReminderDates.write(full: full, repeatChanged: false, due: due, alarms: [], calendar: ny)
+        XCTAssertEqual(none.alarms, [.init(from: nil, at: next)])
+        XCTAssertTrue(none.keepsRepeat)
+        // The repeat itself changed in the app: the rule and the alarm are made again from the app's, as before.
+        let changed = ReminderDates.write(full: full, repeatChanged: true, due: due, alarms: alarms, calendar: ny)
+        XCTAssertFalse(changed.keepsRepeat)
+        XCTAssertEqual(changed.alarms, [.init(from: nil, at: next)])
+        // Alarms that would not read back as the task's dates are made again as before. Here the reminder time was
+        // taken off and only a place alarm would be left, which reads as an alarm at the due date.
+        var cleared = full
+        cleared["remind_at"] = ""
+        cleared["due"] = "2026-11-27"
+        let off = ReminderDates.write(full: cleared, repeatChanged: false, due: due, alarms: alarms, calendar: ny)
+        XCTAssertEqual(off.alarms, [])
+        XCTAssertNil(off.due?.hour, "a day alone")
+        XCTAssertTrue(off.keepsRepeat)
+    }
+
 }

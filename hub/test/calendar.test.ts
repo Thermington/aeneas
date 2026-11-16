@@ -75,3 +75,15 @@ test("calendar: an assistant event from midnight to midnight is all day even whe
     assert.equal(t.hub.store.get(day.id)!.fields.all_day, true);
   } finally { t.cleanup(); }
 });
+
+test("calendar feed: a folded line never splits an emoji", async () => {
+  const { fold } = await import("../src/calendar.js");
+  for (let pad = 60; pad < 80; pad++) {
+    const line = `SUMMARY:${"x".repeat(pad)}🎂 Birthday 🎂 cake 🎉${"y".repeat(40)}`;
+    const out = fold(line);
+    const back = Buffer.from(out, "utf8").toString("utf8");
+    assert.ok(!back.includes("�"), `pad ${pad}: an emoji was cut in two`);
+    assert.equal(out.replace(/\r\n /g, ""), line, `pad ${pad}: unfolds to the same line`);
+    for (const l of out.split("\r\n")) assert.ok(Buffer.byteLength(l) <= 75, `pad ${pad}: a line over 75 octets`);
+  }
+});

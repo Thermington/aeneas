@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { plainError } from "../lib/errors";
 
 /**
  * One screen that throws while rendering shows what broke, with the rest of the app still there. Without it
@@ -25,7 +26,7 @@ export class ScreenBoundary extends Component<{ resetKey: string; children: Reac
     return (
       <div className="card" role="alert">
         <h2>This screen could not be shown</h2>
-        <p className="muted small">{this.state.error.message}</p>
+        <p className="muted small">{plainError(this.state.error)}</p>
         <button type="button" onClick={() => this.setState({ error: null })}>Try again</button>
       </div>
     );

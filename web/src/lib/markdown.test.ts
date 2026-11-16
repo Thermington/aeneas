@@ -128,3 +128,15 @@ describe("pictures in text a model wrote", () => {
     expect(renderMarkdown("![a](https://hub.example/wiki/media/1/a.png)", { loadImage: (u) => u.startsWith("https://hub.example/wiki/media/") })).toContain('<img src="https://hub.example/wiki/media/1/a.png"');
   });
 });
+
+describe("a NUL character in note text", () => {
+  it("shows as U+FFFD and cannot pull another piece's markup into a link's address", () => {
+    // The renderer's own marks for held pieces, typed into an address: the second link took the first one's markup,
+    // and its href then ended early and left a style that covered the whole window.
+    const attack = "[x](https://e.test/style=position:fixed;inset:0;) [y](https://e.test/\u00000\u0000)";
+    const html = renderMarkdown(attack);
+    expect(html).toBe('<p><a href="https://e.test/style=position:fixed;inset:0;" target="_blank" rel="noreferrer">x</a> <a href="https://e.test/�0�" target="_blank" rel="noreferrer">y</a></p>');
+    expect(html).not.toMatch(/href="[^"]*</);
+    expect(renderMarkdown("a\u0000b")).toBe("<p>a�b</p>");
+  });
+});

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { engine } from "../sync/engine";
+import { isWindowsApp } from "../tauri/bridge";
 import { onCelebrate, type Celebration } from "./events";
 import { ShapeLayer, type BurstStyle } from "./shapes";
 import { activeVoices, audioClock, bendNote, inspectVoice, filterNote, playNote, releaseAll, releaseNote, setVolume, sounding, startNote, synthStats, unlockAudio, type NoteHandle } from "./synth";
@@ -42,9 +43,21 @@ interface Gesture {
 let gesture: Gesture | null = null;
 const TRAIL_PX = 40;
 
-export function motionOn(f: FeelView): boolean {
-  // The Shapes switch alone decides: Windows' web view reports reduced motion even with animations on.
-  return f.motion;
+/** Whether the system asks for less motion (Reduce motion, Remove animations). */
+function reducedMotion(): boolean {
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shapes show when the Shapes switch is on and the system does not ask for less motion. The Windows app goes by the
+ * switch alone: Windows' web view reports reduced motion even with animations on, which hid every burst there.
+ */
+export function motionOn(f: Pick<FeelView, "motion">, reduced = reducedMotion(), windowsApp = isWindowsApp): boolean {
+  return f.motion && (windowsApp || !reduced);
 }
 
 function accent(): string {

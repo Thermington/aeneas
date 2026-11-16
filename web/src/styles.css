@@ -104,6 +104,8 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible, [role="link"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
+/* A screen's title takes the focus on arrival so a screen reader says where you are (ScreenStart); it is not a control, so no ring. */
+h1[tabindex="-1"]:focus, h1[tabindex="-1"]:focus-visible { outline: none; }
 kbd { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
 textarea { resize: vertical; line-height: 1.45; }
 input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; }
@@ -995,3 +997,179 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
 .fold-head:disabled { cursor: default; }
 .fold-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
 .renewal-totals { margin: 2px 0 6px; }
+
+/* ---------- Offline reference: search, the reader and Settings, Reference ---------- */
+.ref h1 { margin: 0; }
+.ref-searchbar { position: relative; }
+.ref-q { font-size: 18px; min-height: 48px; padding: 10px 40px 10px 14px; border-radius: 10px; }
+.ref-q-spin { position: absolute; right: 14px; top: 50%; margin-top: -6px; color: var(--muted); }
+.ref-keys { margin-top: -4px; }
+.ref-keys kbd { font-size: 11px; }
+.ref-chips { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ref-chips .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.ref-chips .chips::-webkit-scrollbar { display: none; }
+.ref-chips .chip { flex: none; border: 1px solid var(--border); white-space: nowrap; }
+.ref-found { display: flex; flex-direction: column; gap: 8px; }
+.ref-found-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; }
+.ref-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; transition: opacity 120ms ease; }
+.ref-results.stale { opacity: 0.55; }
+.ref-hit { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; min-width: 0; }
+.ref-hit:hover { border-color: var(--muted); }
+.ref-hit.active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.ref-hit-title { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.ref-hit-snippet { font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; line-height: 1.45; }
+.ref-hit-snippet b { color: var(--text); font-weight: 700; }
+.ref-hit-meta, .ref-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); }
+.ref-meta { font-size: 13px; }
+.ref-badge { display: inline-block; padding: 0 8px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--text); font-weight: 600; font-size: 12px; line-height: 20px; }
+.ref-h { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+.ref-home { gap: 18px; }
+.ref-recent { color: var(--text); }
+.ref-recent:hover { text-decoration: none; border-color: var(--muted); }
+.ref-empty-t { font-weight: 600; }
+.ref-dl-mini progress, .ref-progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.ref-inline { align-self: flex-start; }
+
+/* The reader: about 70 characters a line, the app's colors, a contents column from 1100 px. */
+.main:has(.ref-reader.with-toc) { max-width: 1240px; }
+.ref-reader { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ref-back { align-self: flex-start; font-size: 14px; }
+.ref-head { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ref-title { font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif; font-weight: 500; font-size: 30px; line-height: 1.2; margin: 0; overflow-wrap: anywhere; }
+.ref-meta .ref-ext::after { content: "\2197"; content: "\2197" / ""; margin-left: 2px; }
+.ref-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ref-size { display: inline-flex; }
+.ref-size button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ref-size button:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; }
+.ref-a-small { font-size: 12px; }
+.ref-a-large { font-size: 17px; font-weight: 600; line-height: 1; }
+.ref-find { position: sticky; top: 8px; z-index: 30; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); }
+.ref-find input { flex: 1; min-width: 0; }
+.ref-find-count { white-space: nowrap; min-width: 4.5em; text-align: right; }
+.ref-body { min-width: 0; }
+.ref-reader.with-toc .ref-body { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 32px; align-items: start; }
+.ref-side { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; padding-bottom: 12px; }
+.ref-toc ol { display: flex; flex-direction: column; gap: 1px; }
+.ref-toc li.sub { padding-left: 14px; }
+.ref-toc-link { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-left: 2px solid transparent; border-radius: 0; padding: 4px 8px; min-height: 0; font-size: 13px; line-height: 1.35; color: var(--text-2); }
+.ref-toc-link:hover { color: var(--text); background: var(--surface-2); }
+.ref-toc-link.on { color: var(--text); font-weight: 600; border-left-color: var(--accent); }
+.ref-foot { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; max-width: 70ch; }
+
+.ref-doc { --ref-size: 17px; --ref-img-bg: transparent; --ref-math: none; font-size: var(--ref-size); line-height: 1.6; max-width: 70ch; min-width: 0; overflow-wrap: break-word; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ref-doc { --ref-img-bg: #f2f2f2; --ref-math: invert(0.88) hue-rotate(180deg); }
+}
+:root[data-theme="dark"] .ref-doc { --ref-img-bg: #f2f2f2; --ref-math: invert(0.88) hue-rotate(180deg); }
+.ref-doc:empty { min-height: 40vh; }
+.ref-doc :focus:not(:focus-visible) { outline: none; }
+.ref-doc p, .ref-doc ul, .ref-doc ol, .ref-doc dl, .ref-doc blockquote, .ref-doc pre, .ref-doc figure { margin: 0 0 0.9em; }
+.ref-doc ul, .ref-doc ol { padding-left: 1.4em; }
+.ref-doc li { margin: 0.2em 0; }
+.ref-doc h2, .ref-doc h3, .ref-doc h4, .ref-doc h5, .ref-doc h6 { color: var(--text); text-transform: none; letter-spacing: 0; line-height: 1.3; margin: 1.4em 0 0.5em; scroll-margin-top: 64px; }
+.ref-doc h2 { font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif; font-weight: 500; font-size: 1.5em; padding-bottom: 0.15em; border-bottom: 1px solid var(--border); overflow: hidden; }
+.ref-doc h3 { font-size: 1.2em; }
+.ref-doc h4 { font-size: 1.05em; }
+.ref-doc h5, .ref-doc h6 { font-size: 1em; }
+.ref-doc > :first-child { margin-top: 0; }
+.ref-doc a:not([href]) { color: inherit; }
+.ref-doc a[data-book] { -webkit-touch-callout: none; }
+.ref-doc a[data-external]::after { content: "\2197"; content: "\2197" / ""; font-size: 0.8em; margin-left: 1px; }
+.ref-doc blockquote { padding: 0.1em 0 0.1em 1em; border-left: 3px solid var(--border); color: var(--text-2); }
+.ref-doc pre { white-space: pre; overflow-x: auto; font-size: 0.82em; }
+.ref-doc code { font-size: 0.88em; }
+.ref-doc pre code { font-size: inherit; }
+.ref-doc sup, .ref-doc sub { line-height: 0; }
+.ref-doc dt { font-weight: 600; }
+.ref-doc dd { margin: 0 0 0.4em 1.2em; }
+.ref-doc details > summary { color: var(--text); font-size: inherit; padding: 0; cursor: default; }
+.ref-doc details > summary::before { content: none; }
+.ref-doc details > summary::-webkit-details-marker { display: none; }
+.ref-doc details > summary > h2, .ref-doc details > summary > h3 { display: block; }
+.ref-doc img { max-width: 100%; height: auto; vertical-align: middle; border-radius: 3px; }
+.ref-doc img[src] { background: var(--ref-img-bg); }
+.ref-doc img[data-media] { cursor: zoom-in; }
+.ref-doc img[data-media]:not([src]) { background: var(--surface-2); color: transparent; min-width: 24px; min-height: 24px; }
+.ref-doc img.rx-failed { color: var(--muted); font-size: 0.8em; }
+.ref-doc img.rx-math { filter: var(--ref-math); background: transparent; vertical-align: -0.35em; border-radius: 0; }
+.ref-doc img.rx-math-block { display: block; margin: 0.5em auto; }
+.ref-doc figure { max-width: 100%; }
+.ref-doc figcaption, .ref-doc .rx-caption { font-size: 0.82em; color: var(--text-2); line-height: 1.4; margin-top: 0.3em; }
+.ref-doc .rx-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 1em; }
+.ref-doc table { border-collapse: collapse; font-size: 0.88em; line-height: 1.4; }
+.ref-doc th, .ref-doc td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; vertical-align: top; }
+.ref-doc th { background: var(--surface-2); font-weight: 600; }
+.ref-doc caption { font-weight: 600; padding: 0.3em 0; text-align: left; }
+.ref-doc table.rx-infobox { width: 100%; background: var(--surface); border: 1px solid var(--border); font-size: 0.82em; }
+.ref-doc table.rx-infobox th, .ref-doc table.rx-infobox td { border: 0; border-top: 1px solid var(--border); }
+.ref-doc table.rx-infobox caption { font-size: 1.15em; text-align: center; }
+.ref-doc table.rx-infobox img { display: block; margin: 0 auto; }
+.ref-doc .rx-hatnote { font-style: italic; color: var(--text-2); padding-left: 1.2em; margin-bottom: 0.6em; }
+.ref-doc .rx-note { border-left: 3px solid var(--warn); background: var(--surface-2); font-size: 0.85em; }
+.ref-doc .rx-quote { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5em 0.8em; font-size: 0.9em; }
+.ref-doc .rx-refs { font-size: 0.85em; }
+.ref-doc .rx-navbox { font-size: 0.8em; }
+.ref-doc .rx-gallery { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; list-style: none; }
+.ref-doc .rx-gallerybox { max-width: 220px; margin: 0; }
+.ref-doc .rx-hidden { display: none; }
+.ref-doc .rx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.ref-doc mark.ref-find { background: color-mix(in srgb, var(--warn) 40%, transparent); color: inherit; border-radius: 2px; }
+.ref-doc mark.ref-find-current { background: var(--warn); color: #111; box-shadow: 0 0 0 2px var(--warn); }
+@media (min-width: 640px) {
+  .ref-doc .rx-right { float: right; clear: right; margin: 0.3em 0 0.8em 1.2em; max-width: 45%; }
+  .ref-doc .rx-left { float: left; clear: left; margin: 0.3em 1.2em 0.8em 0; max-width: 45%; }
+  .ref-doc .rx-infobox-box { float: right; clear: right; width: min(320px, 45%); margin: 0 0 1em 1.4em; }
+}
+@media (max-width: 767px) {
+  .ref-title { font-size: 26px; }
+  .ref-doc .rx-navbox { display: none; }
+}
+
+.ref-preview { position: fixed; z-index: 70; margin: 0; padding: 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22); max-height: min(60vh, 420px); overflow: hidden; }
+.ref-preview-img { float: right; width: 84px; height: 84px; object-fit: cover; border-radius: var(--radius); margin: 0 0 6px 10px; background: #fff; }
+.ref-preview-t { font-weight: 600; font-size: 15px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.ref-preview-text { color: var(--text-2); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
+.ref-preview .row { clear: both; margin-top: 10px; }
+.ref-sheet-back { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.35); display: flex; align-items: flex-end; justify-content: center; }
+.ref-sheet { width: 100%; max-width: 560px; max-height: 75vh; overflow-y: auto; background: var(--surface); border-radius: 14px 14px 0 0; padding: 12px var(--gutter) calc(16px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.2); }
+.ref-sheet-head { position: sticky; top: -12px; background: var(--surface); padding: 4px 0 8px; z-index: 1; flex-wrap: nowrap; }
+.ref-sheet .ref-toc-link { font-size: 15px; padding: 8px 10px; }
+.ref-lightbox .lightbox-stage { cursor: zoom-out; }
+.ref-lightbox-cap { color: #eee; overflow-wrap: anywhere; }
+
+/* Settings, Reference */
+.ref-plan { gap: 6px; }
+.ref-bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.ref-bar > span { display: block; height: 100%; background: var(--accent); }
+.ref-bar.over > span { background: var(--danger); }
+.ref-dls { gap: 14px; }
+.ref-dl { gap: 4px; }
+.ref-book-row { align-items: flex-start; flex-wrap: nowrap; padding: 6px 0; border-top: 1px solid var(--border); }
+.ref-book-row:first-child { border-top: 0; }
+.ref-book-meta { display: block; }
+.ref-source + .ref-source { border-top: 1px solid var(--border); padding-top: 8px; }
+.ref-size-note { color: var(--text); }
+.ref-override { padding-left: 28px; margin-top: 4px; flex-wrap: nowrap; }
+.ref-override label { margin: 0; white-space: nowrap; }
+.ref-override select { width: auto; max-width: 100%; min-width: 0; }
+.ref-langs { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.ref-lang { font-size: 14px; }
+.ref-cap { max-width: 140px; }
+@media (pointer: coarse) {
+  .ref-toc-link, .ref-lang { min-height: 44px; }
+  .ref-hit { min-height: 48px; }
+}
+
+/* A new screen's heading takes the keyboard focus (ScreenStart): a ring only when it came from the keyboard, none on
+   the main area itself (a screen without a heading). */
+#main:focus, #main h1:focus:not(:focus-visible) { outline: none; }
+
+/* Touch screens: what you tap is at least 44 px tall, as Apple and WCAG ask. A mouse keeps the compact sizes above. */
+@media (pointer: coarse) {
+  button, button.small, select, .chip, .toggle-row, .toggle-row.small-toggle, .seg button, .list-chip,
+  .theme-actions button, .palette-actions button, .swatch-tools button { min-height: 44px; }
+  .gear { width: 44px; height: 44px; }
+  .info-btn { min-width: 44px; min-height: 44px; }
+  .tabs a { min-height: 44px; display: flex; align-items: center; justify-content: center; }
+  .topbar .back { display: inline-flex; align-items: center; min-height: 44px; }
+}

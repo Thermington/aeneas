@@ -5,6 +5,7 @@ import type { Hub } from "./hub.js";
 import { StoreError } from "./store.js";
 import { dayKey } from "./metrics.js";
 import { scheduleDaily } from "./schedule.js";
+import { diskSpace, spaceLeft } from "./diskspace.js";
 
 /**
  * Module 1: days and tasks. The week model is built in local time (the process TZ is EA_TZ):
@@ -386,7 +387,7 @@ export function todayView(hub: Hub, now: Date = new Date(), minHours = 3): Today
   const endOfDay = addDays(day, 1).toISOString();
   const reminders_due = pendingReminders(hub.store).filter(({ eff }) => eff < endOfDay).map(({ t }) => t);
   const watches_due_soon = watchesDueSoon(hub, now);
-  const captures_unprocessed = hub.store.list({ kind: "capture", limit: 100000 }).filter((c) => c.fields.processed !== true).length;
+  const captures_unprocessed = hub.store.countWhere("capture", [{ key: "processed", is: false }]);
 
   // Only the part of today that is still ahead can take a block.
   const minMs = minHours * HOUR_MS;
@@ -415,6 +416,10 @@ export function todayView(hub: Hub, now: Date = new Date(), minHours = 3): Today
   // What went wrong while no app was open to hear it: a down monitor or an out of range sensor notifies once, over
   // the live stream only, so the morning digest says it again.
   const ops = opsLine(hub, now);
+  // The disk with the hub's data almost full: its alert reaches only the apps open at that moment, and on every hub,
+  // whatever modules are on, a full disk stops the hub saving anything.
+  const disk = diskSpace(hub.cfg.dataDir);
+  if (disk?.low) lines.push(`Hub disk: ${spaceLeft(disk.free_bytes)} left; when it is full the hub cannot save edits or make backups`);
   if (ops) lines.push(ops);
   if (charges.length) lines.push(`Charges: ${charges.slice(0, 4).map((w) => `${String(w.fields.title ?? "")}${typeof w.fields.cost === "number" ? ` $${w.fields.cost.toFixed(2)}` : ""} on ${dayKey(localDateOf(w.fields.due))}`).join(", ")}${charges.length > 4 ? ", ..." : ""}`);
   const everyone = hub.store.list({ kind: "person", limit: 100000 });

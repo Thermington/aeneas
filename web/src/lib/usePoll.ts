@@ -1,3 +1,4 @@
+import { plainError } from "./errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { engine } from "../sync/engine";
 import { HubClient, HubError } from "../sync/api";
@@ -11,7 +12,7 @@ export type Loaded<T> = { data: T | null; error: string | null; unavailable: boo
 
 export function describeError(e: unknown): { error: string; unavailable: boolean } {
   if (e instanceof HubError && e.status === 404) return { error: "not available on this hub", unavailable: true };
-  return { error: e instanceof Error ? e.message : String(e), unavailable: false };
+  return { error: plainError(e), unavailable: false };
 }
 
 /** Synced changes come in bursts (a sensor reading moves the position too): at most one reload for them this often. */

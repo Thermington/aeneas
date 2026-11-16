@@ -94,6 +94,17 @@ CREATE TABLE IF NOT EXISTS note_analysis (
   tried_hash TEXT,
   attempts INTEGER NOT NULL DEFAULT 0
 );
+-- Captures waiting to be sorted or filed, and the unsorted count, found without reading every capture's JSON (photos
+-- included): partial indexes on the fields the filing job and Today ask about (Store.listWhere writes the same
+-- expressions).
+CREATE INDEX IF NOT EXISTS capture_filing ON entities(json_extract(fields, '$.filing')) WHERE kind = 'capture' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS capture_sort ON entities(json_type(fields, '$.sort')) WHERE kind = 'capture' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS capture_processed ON entities(json_type(fields, '$.processed')) WHERE kind = 'capture' AND deleted_at IS NULL;
+-- When each nightly job last ran (schedule.ts), so a run missed while the hub was off or asleep is made up.
+CREATE TABLE IF NOT EXISTS jobs (
+  label TEXT PRIMARY KEY,
+  last_run TEXT NOT NULL
+);
 
 ${FTS_TABLE}
 `;

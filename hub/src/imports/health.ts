@@ -62,14 +62,14 @@ export function importHealth(hub: Hub, body: Record<string, unknown>) {
     }
   }
   // The first importer (weight and sleep only, note "healthkit") wrote copies of what this one sends; they go.
+  // Both looks are made by SQLite: every log was parsed twice per batch, so a first import of years of Health data
+  // (many batches of 5000) grew with the square of the logs.
   let legacy = 0;
-  for (const e of hub.store.list({ kind: "log", limit: 1_000_000 })) {
-    if (e.fields.note === "healthkit") {
-      hub.store.patch(e.id, { deleted_at: new Date().toISOString() });
-      legacy++;
-    }
+  for (const e of hub.store.listWhere("log", [{ key: "note", is: "healthkit" }])) {
+    hub.store.patch(e.id, { deleted_at: new Date().toISOString() });
+    legacy++;
   }
-  const total = hub.store.list({ kind: "log", limit: 1_000_000 }).filter((e) => e.fields.note === "Apple Health").length;
+  const total = hub.store.countWhere("log", [{ key: "note", is: "Apple Health" }]);
   hub.connections.update((c) => { c.health = { last_import: new Date().toISOString(), samples: samples.length, total }; });
   return { received: samples.length, created, updated, deleted, legacy_removed: legacy, rejected: bad.length, ...(bad.length ? { rejected_keys: bad.slice(0, 20) } : {}) };
 }

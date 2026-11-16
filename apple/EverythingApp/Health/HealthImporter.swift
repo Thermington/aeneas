@@ -81,7 +81,7 @@ final class HealthImporter {
     /// The permission screen's Health: asks, then turns the Health sync on and sends what is there. True when Health
     /// answered (it never says which types were allowed).
     func requestFromPermissionScreen(engine: SyncEngine) async -> Bool {
-        guard HKHealthStore.isHealthDataAvailable() else { return false }
+        guard HKHealthStore.isHealthDataAvailable(), !engine.config.sampleMode else { return false }
         do { try await store.requestAuthorization(toShare: shareTypes, read: readTypes) } catch { return false }
         resetAnchors()
         engine.config.healthImportEnabled = true
@@ -98,7 +98,12 @@ final class HealthImporter {
 
     private func anchorKey(_ id: String) -> String { "health.anchor.\(id)" }
 
+    /// Said in sample mode, where Health stays off as Contacts, Calendar and Reminders do.
+    static let sampleOff = "Apple Health works with your own hub. In sample mode it stays off, so no sample data goes into your Health."
+
     private func importNow(into engine: SyncEngine) async -> String {
+        // Sample mode: nothing goes either way, so no made-up reading reaches the person's own Health.
+        guard !engine.config.sampleMode else { return Self.sampleOff }
         // Health switched off in Settings, Modules: the hub refuses /imports/health, and background wakes stop here too.
         guard engine.config.moduleOn(.health) else { return "Health is off. Turn it on in Settings, Modules." }
         guard !running else { return "Already sending" }
@@ -161,7 +166,7 @@ final class HealthImporter {
     /// Ask iOS to wake the app when Health gets new readings (weight, blood pressure, caffeine, workouts, mood, steps,
     /// sleep), so they reach the hub without opening the app. Set up at every launch while sync is on.
     func startObserving(_ engine: SyncEngine) {
-        guard HKHealthStore.isHealthDataAvailable(), engine.config.healthImportEnabled, engine.config.moduleOn(.health), !observing else { return }
+        guard HKHealthStore.isHealthDataAvailable(), engine.config.healthImportEnabled, engine.config.moduleOn(.health), !engine.config.sampleMode, !observing else { return }
         observing = true
         var types: [HKSampleType] = discrete.map(\.type)
         types.append(HKQuantityType(.stepCount))
@@ -193,22 +198,26 @@ final class HealthImporter {
 
     /// Write the app's own logs to Health: new ones added, changed ones replaced, deleted ones removed. Returns how many
     /// samples were written. Runs after each read, and right after something is logged on this phone.
+    /// Only while paired with the person's own hub (`pairedWithHub`): never in sample mode, whose readings are made up,
+    /// and never on a removed device, whose emptied copy is not the person deleting their logs.
     @discardableResult
     func exportNow(_ engine: SyncEngine) async -> Int {
-        guard HKHealthStore.isHealthDataAvailable(), engine.config.healthImportEnabled, engine.config.moduleOn(.health), !exporting else { return 0 }
+        guard HKHealthStore.isHealthDataAvailable(), engine.config.healthImportEnabled, engine.config.moduleOn(.health), engine.pairedWithHub, !exporting else { return 0 }
         exporting = true
         defer { exporting = false }
         var done = (defaults.dictionary(forKey: exportedKey) as? [String: String]) ?? [:]
         let all = engine.list(.log)
         let byId = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // Deleted logs too: only a log this device holds as deleted or changed takes its sample out of Health.
+        let plan = HealthExport.plan(exported: done, logs: engine.entities.values.filter { $0.kind == .log }) { signature($0, all) }
         var wrote = 0
         // Removed or changed in the app: take the old sample out of Health.
-        for (id, sig) in done where byId[id].map({ signature($0, all) }) != sig {
+        for id in plan.removals {
             await deleteSamples(for: id)
             done[id] = nil
         }
-        for e in all where e.str("note") != "Apple Health" && e.str("note") != "end" && done[e.id] == nil {
-            guard let sig = signature(e, all), let samples = makeSamples(e, all) else { continue }
+        for id in plan.writes {
+            guard let e = byId[id], let sig = signature(e, all), let samples = makeSamples(e, all) else { continue }
             do {
                 try await store.save(samples)
                 done[e.id] = sig

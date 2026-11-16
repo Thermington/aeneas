@@ -113,7 +113,7 @@ targets:
         NSLocationUsageDescription: With Calculators on, the bill splitter can fill in your state's meals tax. Only an approximate position is used, and it goes to your own hub and nowhere else.
         NSContactsUsageDescription: With Sync Apple Contacts on, People and Apple Contacts are kept the same both ways, so the assistant can look people up and save details you give it, such as an address.
         NSMicrophoneUsageDescription: The microphone is used while you dictate or record a hum, from pressing the button until you stop it.
-        NSLocalNetworkUsageDescription: Aeneas looks for your hub on the network you are on. With Direct link, the two then talk directly and your data stays on your own network when they share one. With Home Wi-Fi only, this is how Aeneas finds your hub again when your router gives it a new address.
+        NSLocalNetworkUsageDescription: Aeneas reaches your hub over your home network, so your devices keep syncing with it while the internet is down, and finds it again when your router gives it a new address. Your data stays on your own network when they share one.
         NSBonjourServices: [_aeneas._tcp]
         NSHealthShareUsageDescription: Reads weight, blood pressure, sleep, steps, workouts, caffeine and mood so they are logged in Aeneas without typing them twice.
         NSHealthUpdateUsageDescription: Writes what you log in Aeneas (weight, blood pressure, caffeine, mood and timed activities) to Health, so it is in both places.
