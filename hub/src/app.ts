@@ -35,6 +35,7 @@ import { layoutRoutes } from "./routes/layouts.js";
 import { backupRoutes } from "./routes/backup.js";
 import { hubsRoutes } from "./routes/hubs.js";
 import { referenceRoutes } from "./routes/reference.js";
+import { BEFORE_YOU_INSTALL } from "./disclosure.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
 import { hubAddress, pairingLinks } from "./setup.js";
@@ -226,6 +227,7 @@ export function createApp(hub: Hub): App {
     return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Install Aeneas</title>
 <style>body{font:17px -apple-system,system-ui,sans-serif;margin:0;padding:24px;background:#111;color:#eee}a.b{display:block;text-align:center;background:#2f5fbf;color:#fff;padding:16px;border-radius:12px;text-decoration:none;font-weight:600;margin:24px 0}p{color:#aaa;line-height:1.4}</style></head><body>
 <h1>Aeneas</h1>
+${BEFORE_YOU_INSTALL.map((p) => `<p>${esc(p)}</p>`).join("\n")}
 ${ready ? `<p>Build ${esc(info.build ?? "?")}${info.built_at ? ` from ${esc(info.built_at)}` : ""}${info.commit ? ` (commit ${esc(info.commit)})` : ""}.</p>
 <a class="b" href="itms-services://?action=download-manifest&amp;url=${encodeURIComponent(manifest)}">Install on this iPhone</a>
 <p>Tap Install in the box that appears, then go to the Home Screen and wait for the icon to finish. The Watch app updates with it. Keep Tailscale on until it is done.</p>` : "<p>No build has been published yet.</p>"}

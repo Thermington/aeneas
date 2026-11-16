@@ -43,5 +43,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --title "Aeneas ${GITHUB_REF_NAME#v}" \
-            --notes "Checksums in SHA256SUMS. Check with sha256sum -c SHA256SUMS, and gh attestation verify <file> --repo ${{ github.repository }}."
+          # Every release page starts with how Aeneas was made (docs/before-you-install.md), then the checksums.
+          { cat docs/before-you-install.md; printf '\nChecksums in SHA256SUMS. Check with sha256sum -c SHA256SUMS, and gh attestation verify <file> --repo %s.\n' "${{ github.repository }}"; } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Aeneas ${GITHUB_REF_NAME#v}" --notes-file release-notes.md
