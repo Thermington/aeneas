@@ -107,6 +107,9 @@ struct CaptureView: View {
             hum.finished = nil
             Task { await sendHum(take) }
         }
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .debugPressMic)) { _ in if !hum.recording { tapTalk() } }
+        #endif
         .onDisappear {
             // Leaving while dictating used to stop without placing the words, and the next start cleared them.
             if dictation.listening { dictation.stop(); placeTranscript() }
@@ -117,15 +120,7 @@ struct CaptureView: View {
     /// Tap to start, tap to stop: no holding and no time limit, so a long thought is not cut off.
     private var talk: some View {
         VStack(spacing: 6) {
-            Button {
-                if dictation.listening {
-                    dictation.stop()
-                    placeTranscript()
-                } else {
-                    focused = false
-                    Task { await dictation.startAsking() }
-                }
-            } label: {
+            Button { tapTalk() } label: {
                 VStack(spacing: 4) {
                     Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.fill").font(.system(size: 34))
                     Text(dictation.listening ? "Listening. Tap when done." : "Tap to dictate").font(.subheadline)
@@ -230,10 +225,21 @@ struct CaptureView: View {
         }
     }
 
+    /// Tap to dictate, tap again to stop and place the words.
+    private func tapTalk() {
+        if dictation.listening {
+            dictation.stop()
+            placeTranscript()
+        } else {
+            focused = false
+            Task { await dictation.startAsking() }
+        }
+    }
+
     private func placeTranscript() {
-        // The recognizer may deliver its last partial after release; read it shortly after.
+        // The last words arrive just after stopping: they are placed once they are in.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            await dictation.finished()
             let t = dictation.transcript.trimmingCharacters(in: .whitespaces)
             guard !t.isEmpty else { return }
             text = text.isEmpty ? t : text + (text.hasSuffix(" ") || text.hasSuffix("\n") ? "" : " ") + t

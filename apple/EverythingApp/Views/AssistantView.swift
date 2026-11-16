@@ -227,6 +227,9 @@ struct AssistantView: View {
         // Leaving the tab while listening kept the microphone on and the words where the next start cleared them:
         // it stops, and the words go in the box.
         .onDisappear { if dictation.listening { dictation.stop(); placeTranscript() } }
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .debugPressMic)) { _ in if model.isOn(.voice) { tapMic() } }
+        #endif
     }
 
     private func openRequestedChat() {
@@ -339,14 +342,7 @@ struct AssistantView: View {
                 TextField("Message", text: $input, axis: .vertical).textFieldStyle(.roundedBorder).font(.title3).lineLimit(1...6)
                 // Voice off (Settings, Modules): no microphone button.
                 if model.isOn(.voice) {
-                    Button {
-                        // The microphone would hear the reply being read.
-                        if dictation.listening { dictation.stop() } else {
-                            speaker.stop()
-                            dictation.pauseToStop = sendOnPause ? Self.pauseToSend : nil
-                            Task { await dictation.startAsking() }
-                        }
-                    } label: {
+                    Button { tapMic() } label: {
                         Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.circle").font(.system(size: 30))
                             .foregroundStyle(dictation.listening ? Color.red : Color.accentColor)
                     }
@@ -395,10 +391,19 @@ struct AssistantView: View {
         }
     }
 
-    /// The recognizer may deliver its last words just after stopping; place them shortly after.
+    /// The mic button: listen, or stop listening.
+    private func tapMic() {
+        if dictation.listening { dictation.stop(); return }
+        // The microphone would hear the reply being read.
+        speaker.stop()
+        dictation.pauseToStop = sendOnPause ? Self.pauseToSend : nil
+        Task { await dictation.startAsking() }
+    }
+
+    /// The last words arrive just after stopping: they are placed once they are in.
     private func placeTranscript() {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            await dictation.finished()
             let t = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !t.isEmpty else { return }
             input = input.isEmpty ? t : input + (input.hasSuffix(" ") ? "" : " ") + t

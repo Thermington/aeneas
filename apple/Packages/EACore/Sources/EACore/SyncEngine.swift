@@ -34,8 +34,9 @@ public final class SyncEngine: ObservableObject {
     public let platform: Platform
     public private(set) var client: HubClient?
 
-    /// Called for `notify` events of kind `reminder` from `/live`.
-    public var onNotify: ((_ reminderId: String, _ title: String, _ friction: Friction) -> Void)?
+    /// Called for `notify` events of kind `reminder` from `/live`: the reminder the hub says is due, and the time it
+    /// fired for.
+    public var onNotify: ((_ reminderId: String, _ title: String, _ friction: Friction, _ at: Date?) -> Void)?
     /// Called for other `notify` events (a monitor down, a sensor out of range, the recall quiz): plain alerts with
     /// no reminder buttons, since Done and Snooze mean nothing for them. The whole event, so a monitor's alert can
     /// name the monitor, its state and error, and offer Acknowledge for its incident.
@@ -750,7 +751,7 @@ public final class SyncEngine: ObservableObject {
         case "digest":
             onDigest?(n.title)
         case "reminder":
-            if let id = n.id { onNotify?(id, n.title, n.friction ?? .none) }
+            if let id = n.id { onNotify?(id, n.title, n.friction ?? .none, ISO.date(n.at)) }
         default:
             onAlert?(n)
         }

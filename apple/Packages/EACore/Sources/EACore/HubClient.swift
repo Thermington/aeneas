@@ -14,7 +14,9 @@ public enum HubError: Error, LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .notConfigured: return "Hub not configured"
-        case .http(let status, let message): return "HTTP \(status): \(message)"
+        case .http(let status, let message):
+            // Sample mode words its own answers for people (SampleHub.swift): a code there only puzzles.
+            return SampleTransport.speaksPlainly(message) ? message : "HTTP \(status): \(message)"
         case .transport(let m): return m
         case .decoding(let m): return "Bad response: \(m)"
         case .phoneUnreachable: return "iPhone not reachable"

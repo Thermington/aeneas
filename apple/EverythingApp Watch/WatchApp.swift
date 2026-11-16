@@ -60,8 +60,8 @@ final class AppModel: ObservableObject {
         engine = SyncEngine(config: .shared, platform: .watch)
         engine.makeClient = { HubClient(transport: WatchRelayTransport()) }
         engine.pollInterval = 60
-        engine.onNotify = { id, title, friction in
-            Task { await ReminderScheduler.shared.notifyNow(reminderId: id, title: title, friction: friction) }
+        engine.onNotify = { id, title, friction, at in
+            Task { await ReminderScheduler.shared.notifyNow(reminderId: id, title: title, friction: friction, at: at) }
         }
         engine.onActivityCheckin = { [weak self] c in self?.activityCheckin = c }
         engine.onDeviceRemoved = { [weak self] in self?.removed = true }

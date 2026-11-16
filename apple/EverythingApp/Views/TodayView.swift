@@ -491,7 +491,7 @@ struct TimelineList: View {
             }
         case .reminder(let r, let d):
             timelineRow(time: d.shortTime, title: r.str("title"), subtitle: "Reminder", color: .orange, dim: d < now) {
-                Button("Got it") { Task { await engine.ack(r.id) } }
+                Button("Done") { Task { await engine.ack(r.id) } }
             }
         case .free(let f):
             HStack(spacing: 12) {

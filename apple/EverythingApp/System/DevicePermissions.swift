@@ -19,6 +19,13 @@ struct PermissionOffer: Identifiable, Equatable {
 /// asks after Continue, and a feature's own screen asks when the person taps something that needs it.
 @MainActor
 enum DevicePermissions {
+    /// Whether this device asks for `p` at all. iOS 26 and macOS 26 dictate with SpeechAnalyzer, which needs only the
+    /// microphone: speech recognition is never asked there.
+    static func asksFor(_ p: DevicePermission) -> Bool {
+        if p == .speech, #available(iOS 26, macOS 26, *) { return false }
+        return true
+    }
+
     /// True when the person was never asked on this device. Allowed or turned down is decided: not asked again here.
     static func undecided(_ p: DevicePermission) async -> Bool {
         switch p {
@@ -31,6 +38,7 @@ enum DevicePermissions {
             return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
             #endif
         case .speech:
+            guard asksFor(.speech) else { return false }
             return SFSpeechRecognizer.authorizationStatus() == .notDetermined
         case .reminders:
             return EKEventStore.authorizationStatus(for: .reminder) == .notDetermined

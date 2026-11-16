@@ -52,12 +52,30 @@ public enum ReminderPlanner {
                 }
             }
             for f in fires.sorted() {
-                out.append(PlannedNotification(id: "\(e.id)|\(Int(f.timeIntervalSince1970))", reminderId: e.id, title: r.title, fireAt: f, friction: r.friction, repeat: r.repeat))
+                out.append(PlannedNotification(id: requestId(reminderId: e.id, fireAt: f), reminderId: e.id, title: r.title, fireAt: f, friction: r.friction, repeat: r.repeat))
             }
         }
         out.sort { $0.fireAt < $1.fireAt }
         if out.count > limit { out = Array(out.prefix(limit)) }
         return out
+    }
+
+    /// The request id of a reminder's alert at one time. The hub's announcement of a due reminder uses the same id as
+    /// the alert this device planned for that time, so the two are one alert.
+    public static func requestId(reminderId: String, fireAt: Date) -> String { "\(reminderId)|\(Int(fireAt.timeIntervalSince1970))" }
+
+    /// Whether the hub's announcement of a due reminder (`/live`) needs an alert on this device. Not when this device
+    /// planned its own alert for that time (it shows by itself), and not when an alert for the reminder is already on
+    /// screen: the same time, or any time in the last 10 minutes (a snooze made elsewhere can move it). One reminder
+    /// used to alert twice, on the always connected Mac every time.
+    public static func announcementNeedsAlert(reminderId: String, at: Date?, now: Date, planned: Set<String>,
+                                              delivered: [(id: String, date: Date)]) -> Bool {
+        if let at {
+            let id = requestId(reminderId: reminderId, fireAt: at)
+            if planned.contains(id) || delivered.contains(where: { $0.id == id }) { return false }
+        }
+        let mine = reminderId + "|", older = "live|" + mine
+        return !delivered.contains { ($0.id.hasPrefix(mine) || $0.id.hasPrefix(older)) && abs(now.timeIntervalSince($0.date)) < 600 }
     }
 }
 
@@ -128,14 +146,29 @@ public struct AlertNotice: Equatable, Sendable {
 public final class ReminderScheduler: @unchecked Sendable {
     public static let shared = ReminderScheduler()
     private let center = UNUserNotificationCenter.current()
+    /// Every reminder alert this device planned while running (the newest 500), so the hub's announcement of the same
+    /// time does not alert a second time, even after the planned one was dismissed.
+    private var planned: [String] = []
+    private let plannedLock = NSLock()
 
     public init() {}
+
+    private func remember(_ ids: [String]) {
+        plannedLock.withLock {
+            let have = Set(planned)
+            planned.append(contentsOf: ids.filter { !have.contains($0) })
+            if planned.count > 500 { planned.removeFirst(planned.count - 500) }
+        }
+    }
+
+    private var plannedIds: Set<String> { plannedLock.withLock { Set(planned) } }
 
     /// Reminder alerts (Settings, Modules) on: off, this device schedules and shows no local notifications.
     private var alertsOn: Bool { SharedConfig.shared.moduleOn(.notifications) }
 
     public func registerCategories() {
-        let ack = UNNotificationAction(identifier: ReminderPlanner.ackAction, title: "Got it", options: [])
+        // Done, as on the web and the Watch: it completes the task (a repeating one moves on). It said "Got it".
+        let ack = UNNotificationAction(identifier: ReminderPlanner.ackAction, title: "Done", options: [])
         let snooze = UNNotificationAction(identifier: ReminderPlanner.snoozeAction, title: "Snooze 10 min", options: [.foreground])
         let cat = UNNotificationCategory(identifier: ReminderPlanner.categoryId, actions: [ack, snooze], intentIdentifiers: [], options: [])
         let snoozeWhy = UNTextInputNotificationAction(identifier: ReminderPlanner.snoozeReasonAction, title: "Snooze 10 min", options: [],
@@ -162,6 +195,7 @@ public final class ReminderScheduler: @unchecked Sendable {
     /// Replace all pending reminder notifications with the given plan.
     public func replan(reminders: [Entity], now: Date = Date()) async {
         let plan = ReminderPlanner.plan(reminders: reminders, now: now)
+        remember(plan.map(\.id))
         // Reminder ids are `<reminder id>|<time>`; activity check-ins, the digest and alerts keep their own prefixes.
         let pending = await center.pendingNotificationRequests().map(\.identifier).filter { $0.contains("|") && !$0.hasPrefix("activity|") && !$0.hasPrefix("digest|") && !$0.hasPrefix("alert|") }
         center.removePendingNotificationRequests(withIdentifiers: pending)
@@ -248,8 +282,14 @@ public final class ReminderScheduler: @unchecked Sendable {
         try? await center.add(UNNotificationRequest(identifier: "alert|ack|\(incidentId)", content: content, trigger: nil))
     }
 
-    public func notifyNow(reminderId: String, title: String, friction: Friction) async {
+    /// The hub's announcement of a due reminder (`/live`), for a time this device may not have planned (made elsewhere
+    /// moments ago, or past the plan's cap). It goes under the planned alert's id and is skipped when that alert showed
+    /// or will (`ReminderPlanner.announcementNeedsAlert`).
+    public func notifyNow(reminderId: String, title: String, friction: Friction, at: Date? = nil) async {
         guard alertsOn else { return }
+        let now = Date()
+        let delivered = await center.deliveredNotifications().map { (id: $0.request.identifier, date: $0.date) }
+        guard ReminderPlanner.announcementNeedsAlert(reminderId: reminderId, at: at, now: now, planned: plannedIds, delivered: delivered) else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = friction == .none ? "Reminder" : "Snoozing needs a reason"
@@ -257,7 +297,7 @@ public final class ReminderScheduler: @unchecked Sendable {
         content.categoryIdentifier = ReminderPlanner.category(for: friction)
         content.userInfo = ["reminder_id": reminderId, "friction": friction.rawValue]
         content.threadIdentifier = reminderId
-        try? await center.add(UNNotificationRequest(identifier: "live|\(reminderId)|\(Int(Date().timeIntervalSince1970))", content: content, trigger: nil))
+        try? await center.add(UNNotificationRequest(identifier: ReminderPlanner.requestId(reminderId: reminderId, fireAt: at ?? now), content: content, trigger: nil))
     }
 }
 #endif

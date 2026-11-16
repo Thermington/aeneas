@@ -208,8 +208,8 @@ final class AppModel: ObservableObject {
         }
         // Launch argument `-EASection week` opens that screen first (simulator screenshots, UI tests).
         if let s = UserDefaults.standard.string(forKey: "EASection"), let sec = Section(rawValue: s) { section = sec }
-        engine.onNotify = { id, title, friction in
-            Task { await ReminderScheduler.shared.notifyNow(reminderId: id, title: title, friction: friction) }
+        engine.onNotify = { id, title, friction, at in
+            Task { await ReminderScheduler.shared.notifyNow(reminderId: id, title: title, friction: friction, at: at) }
         }
         engine.onAlert = { alert in
             Task { await ReminderScheduler.shared.notifyAlert(alert) }
@@ -435,11 +435,15 @@ final class AppModel: ObservableObject {
 
     // MARK: sample mode
 
-    /// The demo hub's recorded month (SampleHub.json in the app), loaded once, only when sample mode is used.
+    /// The demo hub's recorded month (SampleHub.json in the app), loaded once, only when sample mode is used. With it,
+    /// the hub's meals tax table (SampleMealsTax.json), so the bill splitter's "Use my location" works with no hub.
     static func loadSample() {
         guard SampleTransport.shared == nil, let url = Bundle.main.url(forResource: "SampleHub", withExtension: "json"),
               let data = try? Data(contentsOf: url) else { return }
-        SampleTransport.shared = SampleTransport(data: data)
+        let mealsTax = Bundle.main.url(forResource: "SampleMealsTax", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? JSONDecoder().decode(MealsTaxTable.self, from: $0) }
+        SampleTransport.shared = SampleTransport(data: data, mealsTax: mealsTax)
     }
 
     /// Setup's Try it with sample data: the app runs on a made-up month, with no hub and no network.

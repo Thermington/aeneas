@@ -45,3 +45,30 @@ public struct TranscriptJoiner: Sendable {
         return x.isEmpty ? y : y.isEmpty ? x : "\(x) \(y)"
     }
 }
+
+/// Joins what Apple's SpeechAnalyzer reports while the owner talks: stretches of speech that are final, and the
+/// stretch being heard now, which each report revises until it is final too. The transcript is the final stretches,
+/// then the current one.
+public struct SpeechSegments: Sendable {
+    /// Text no later report changes.
+    public private(set) var settled = ""
+    /// The stretch being heard now, as last reported.
+    private var current = ""
+
+    public init() {}
+
+    /// Everything said so far.
+    public var text: String { TranscriptJoiner.join(settled, current) }
+
+    /// A report: a revision of the current stretch, or (`final`) its last form. Returns the whole transcript.
+    @discardableResult
+    public mutating func update(_ report: String, final: Bool) -> String {
+        if final {
+            settled = TranscriptJoiner.join(settled, report)
+            current = ""
+        } else {
+            current = report
+        }
+        return text
+    }
+}

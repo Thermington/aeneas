@@ -16,6 +16,19 @@ final class TranscriptJoinerTests: XCTestCase {
         XCTAssertEqual(j.text, "So I'm going to the stores")
     }
 
+    /// SpeechAnalyzer: revisions of the stretch being heard replace each other; final stretches are kept in order.
+    func testSpeechSegmentsKeepFinalStretchesAndReviseTheCurrentOne() {
+        var s = SpeechSegments()
+        XCTAssertEqual(s.update("remind", final: false), "remind")
+        XCTAssertEqual(s.update("remind me to water", final: false), "remind me to water")
+        XCTAssertEqual(s.update("Remind me to water the plants.", final: true), "Remind me to water the plants.")
+        XCTAssertEqual(s.update(" at", final: false), "Remind me to water the plants. at")
+        XCTAssertEqual(s.update(" At five tomorrow.", final: true), "Remind me to water the plants. At five tomorrow.")
+        // A final report with nothing in it (silence) changes nothing.
+        XCTAssertEqual(s.update("", final: true), "Remind me to water the plants. At five tomorrow.")
+        XCTAssertEqual(s.settled, s.text)
+    }
+
     func testARestartKeepsWhatWasHeard() {
         var j = TranscriptJoiner()
         j.update("First part.")

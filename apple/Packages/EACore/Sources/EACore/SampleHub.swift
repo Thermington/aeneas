@@ -25,18 +25,30 @@ public final class SampleTransport: HubTransport, @unchecked Sendable {
     private var chats: [String: AISession] = [:]
 
     static let chatReply = "This is sample data, so there is no assistant to answer. With your own hub, the assistant runs on a model on your own computer: it answers questions about your plans, notes and logs, files what you capture, and remembers what you tell it. To set one up, tap Set up my own hub on Today."
+    /// A read the recording has no answer for (a search typed on the device, an item made here). Shown as it is, with
+    /// no status code (`HubError.errorDescription`).
+    public static let noSampleData = "This has no sample data. Connect your own hub to see it."
+    /// A write the sample cannot keep anywhere but on this device.
+    public static let needsOwnHub = "This is sample data: connect your own hub to save this."
 
-    public init(recording: Recording, today: Date = Date()) {
+    /// Sample mode's own refusals are sentences for people, so screens show them without an HTTP code.
+    public static func speaksPlainly(_ message: String) -> Bool { message == noSampleData || message == needsOwnHub }
+
+    /// The hub's meals tax table (SampleMealsTax.json in the app), for the bill splitter's "Use my location".
+    private let mealsTax: MealsTaxTable?
+
+    public init(recording: Recording, today: Date = Date(), mealsTax: MealsTaxTable? = nil) {
         self.recording = recording
+        self.mealsTax = mealsTax
         self.todayDay = ISO.localDay(today)
         let rec = SampleTransport.dayDate(recording.day) ?? today
         self.shiftDays = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: rec), to: Calendar.current.startOfDay(for: today)).day ?? 0
         self.seq = 1_000_000
     }
 
-    public convenience init?(data: Data, today: Date = Date()) {
+    public convenience init?(data: Data, today: Date = Date(), mealsTax: MealsTaxTable? = nil) {
         guard let r = try? JSONDecoder().decode(Recording.self, from: data) else { return nil }
-        self.init(recording: r, today: today)
+        self.init(recording: r, today: today, mealsTax: mealsTax)
     }
 
     public func send(method: String, path: String, query: [String: String], body: Data?) async throws -> (status: Int, data: Data) {
@@ -86,14 +98,26 @@ public final class SampleTransport: HubTransport, @unchecked Sendable {
             let id = String(path.dropFirst("ai/sessions/".count))
             if let sess = lock.withLock({ chats[id] }), let d = try? JSONEncoder().encode(sess) { return (200, d) }
             return (404, Data(#"{"error":"not found"}"#.utf8))
+        case ("POST", "calc/meals-tax"):
+            // Worked out here as the hub would (hub/src/mealstax.ts): the position never leaves the device.
+            struct Place: Decodable { var lat: Double; var lon: Double }
+            guard let place = body.flatMap({ try? JSONDecoder().decode(Place.self, from: $0) }) else { return (422, Self.errorBody("lat and lon must be numbers")) }
+            guard let table = mealsTax else { return (503, Self.errorBody(Self.needsOwnHub)) }
+            guard let m = table.answer(latitude: place.lat, longitude: place.lon) else { return (404, Self.errorBody("not in a US state")) }
+            let out: [String: Any] = ["state": m.state, "name": m.name, "pct": m.pct, "note": m.note]
+            return (200, (try? JSONSerialization.data(withJSONObject: out)) ?? Data("{}".utf8))
         case ("DELETE", _) where path.hasPrefix("ai/sessions"):
             lock.withLock { if path == "ai/sessions" { chats = [:] } else { chats[String(path.dropFirst("ai/sessions/".count))] = nil } }
             return (200, Data("{}".utf8))
         case ("GET", _):
-            return (404, Data(#"{"error":"not in the sample data"}"#.utf8))
+            return (404, Self.errorBody(Self.noSampleData))
         default:
-            return (503, Data(#"{"error":"This is sample data: connect your own hub to save this."}"#.utf8))
+            return (503, Self.errorBody(Self.needsOwnHub))
         }
+    }
+
+    private static func errorBody(_ message: String) -> Data {
+        (try? JSONSerialization.data(withJSONObject: ["error": message])) ?? Data()
     }
 
     // MARK: keys and dates
@@ -181,19 +205,25 @@ private extension String {
 }
 
 #if DEBUG
-/// Debug builds: every answer of the real hub saved, to make SampleHub.json from the demo hub (launch argument
-/// `-EARecordSample YES`, then copy `sample-record.json` out of the app's Documents folder).
+/// Debug builds: every answer of the real hub saved, to make SampleHub.json from the demo hub. SampleHub.json itself
+/// is made by the recorder test, which asks every screen's reads (SampleRecorderTests.swift in EACoreTests says how to
+/// run it). The app can record too, for a look at one screen: launch argument `-EARecordSample YES`, then copy
+/// `sample-record.json` out of the app's Documents folder.
 public final class RecordingTransport: HubTransport, @unchecked Sendable {
     private let inner: HubTransport
-    private let file: URL
+    /// Written after every answer; nil keeps the recording in memory only (`recording`).
+    private let file: URL?
     private let lock = NSLock()
-    private var recording: SampleTransport.Recording
+    private var kept: SampleTransport.Recording
 
-    public init(inner: HubTransport, file: URL, day: String = ISO.localDay()) {
+    public init(inner: HubTransport, file: URL?, day: String = ISO.localDay()) {
         self.inner = inner
         self.file = file
-        self.recording = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(SampleTransport.Recording.self, from: $0) } ?? .init(day: day)
+        self.kept = file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SampleTransport.Recording.self, from: $0) } ?? .init(day: day)
     }
+
+    /// What has been recorded so far.
+    public var recording: SampleTransport.Recording { lock.withLock { kept } }
 
     public func send(method: String, path: String, query: [String: String], body: Data?) async throws -> (status: Int, data: Data) {
         let r = try await inner.send(method: method, path: path, query: query, body: body)
@@ -202,9 +232,11 @@ public final class RecordingTransport: HubTransport, @unchecked Sendable {
         // Pages of the first full sync are kept; later polls that brought nothing new are not (sample mode answers
         // those itself).
         if p == "sync/changes", query["since"] != "0", text.contains(#""changes":[]"#) { return r }
+        // Chats are kept on the device in sample mode: a recorded list would hide the ones made there.
+        if p == "ai/sessions" || p.hasPrefix("ai/sessions/") { return r }
         lock.withLock {
-            recording.entries[SampleTransport.key(method: method, path: p, query: query, recordedDay: recording.day)] = .init(status: r.status, body: text)
-            if let data = try? JSONEncoder().encode(recording) { try? data.write(to: file, options: .atomic) }
+            kept.entries[SampleTransport.key(method: method, path: p, query: query, recordedDay: kept.day)] = .init(status: r.status, body: text)
+            if let file, let data = try? JSONEncoder().encode(kept) { try? data.write(to: file, options: .atomic) }
         }
         return r
     }

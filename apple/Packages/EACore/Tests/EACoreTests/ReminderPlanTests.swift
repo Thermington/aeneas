@@ -78,4 +78,33 @@ final class TaskReminderTests: XCTestCase {
         let once = Entity(kind: .task, fields: ["title": "Vet", "status": "scheduled", "order": 1, "remind_at": "2026-10-20T13:00:00.000Z"])
         XCTAssertEqual(ReminderMath.completeTask(once, now: now)["status"]?.stringValue, "done")
     }
+
+    /// The hub announces a due reminder at the time it fired for; the device planned its own alert for that time.
+    /// One reminder is one alert: the announcement only alerts when this device has nothing for it.
+    func testHubAnnouncementOfAPlannedReminderDoesNotAlertAgain() {
+        let due = ISO.date("2026-11-14T15:00:00.000Z")!
+        let now = due.addingTimeInterval(20) // the hub's loop runs every 30 s
+        let task = Entity(kind: .task, fields: ["title": "Water the plants", "status": "scheduled", "order": 1, "remind_at": .string(ISO.string(due))])
+        let planned = ReminderPlanner.plan(reminders: [task], now: due.addingTimeInterval(-3600))
+        XCTAssertEqual(planned.map(\.id), [ReminderPlanner.requestId(reminderId: task.id, fireAt: due)])
+        let id = planned[0].id
+
+        // Planned here: it showed by itself, on screen or already swiped away.
+        XCTAssertFalse(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [id], delivered: [(id: id, date: due)]))
+        XCTAssertFalse(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [id], delivered: []))
+        // Not planned in this run (the app started after it fired) but on screen.
+        XCTAssertFalse(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [], delivered: [(id: id, date: due)]))
+        // A snooze made on another device moved the time; the alert for the old time showed 5 minutes ago.
+        XCTAssertFalse(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [],
+                                                              delivered: [(id: ReminderPlanner.requestId(reminderId: task.id, fireAt: due.addingTimeInterval(-300)), date: now.addingTimeInterval(-300))]))
+        // An announcement shown by the app before this change.
+        XCTAssertFalse(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [], delivered: [(id: "live|\(task.id)|123", date: now.addingTimeInterval(-60))]))
+
+        // Nothing here for it: made on another device moments ago, or past the plan's cap. It alerts.
+        XCTAssertTrue(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: [], delivered: []))
+        XCTAssertTrue(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: nil, now: now, planned: [], delivered: []))
+        // Another reminder's alert, or this one's from an hour ago, does not stop it.
+        XCTAssertTrue(ReminderPlanner.announcementNeedsAlert(reminderId: task.id, at: due, now: now, planned: ["other|1"],
+                                                             delivered: [(id: "other|1", date: now), (id: ReminderPlanner.requestId(reminderId: task.id, fireAt: due.addingTimeInterval(-3600)), date: now.addingTimeInterval(-3600))]))
+    }
 }
