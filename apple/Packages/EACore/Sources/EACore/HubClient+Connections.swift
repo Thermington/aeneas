@@ -85,6 +85,13 @@ public struct Connections: Decodable, Equatable, Sendable {
     public var atlassian: Atlassian?
     /// Nil from a hub older than the Gmail link.
     public var google: Google?
+    /// iCloud Mail, read-only, one entry per mailbox linked with an app-specific password (never sent back). Its mail is
+    /// read at Gmail's times (`google.reading`, `google.times`). Nil from a hub older than the iCloud Mail link.
+    public var icloud: ICloud?
+    public struct ICloud: Decodable, Equatable, Sendable {
+        public var accounts: [Google.Account]
+        public var waiting: Int { accounts.reduce(0) { $0 + ($1.to_read ?? 0) } }
+    }
     /// LastPass or 1Password through its CLI, for secrets in the assistant's commands. Nil on older hubs.
     public var password_manager: PasswordManager?
 
@@ -225,6 +232,19 @@ extension HubClient {
 
     /// Unlink one mailbox: Google drops the sign-in; what was filed from its mail stays.
     public func disconnectGoogle(email: String) async throws { _ = try await send("DELETE", "connections/google/\(email)") }
+
+    /// iCloud Mail, Read now: lists every linked mailbox at once (also one whose password iCloud refused, once) and
+    /// reads the waiting mail. The number is how many new messages were queued.
+    public func icloudReadNow() async throws -> Int {
+        try await post("connections/icloud/sync", Empty(), as: [String: MailListed].self).values.reduce(0) { $0 + ($1.queued ?? 0) }
+    }
+
+    /// Unlink an iCloud mailbox: the hub deletes its app-specific password. The answer says to revoke it at Apple.
+    public func disconnectICloud(email: String) async throws -> String {
+        struct Answer: Decodable { var message: String? }
+        let data = try await send("DELETE", "connections/icloud/\(email)")
+        return (try? JSONCoding.decode(Answer.self, from: data))?.message ?? "Unlinked \(email)."
+    }
 
     /// `GET /ai/hosts`: the machines the hub runs commands on.
     public func commandHosts() async throws -> [CommandHost] {
@@ -414,7 +434,7 @@ extension HubClient {
 
     /// The guide's last step: its fields to the route the hub named, which may only be its own setup routes.
     public func ownKeySave(path: String, values: [String: String]) async throws {
-        guard ["/connections/google/app", "/connections/atlassian/app", "/connections/steam/key"].contains(path) else { throw HubError.http(status: 422, message: "not a setup route") }
+        guard ["/connections/google/app", "/connections/atlassian/app", "/connections/steam/key", "/connections/icloud"].contains(path) else { throw HubError.http(status: 422, message: "not a setup route") }
         _ = try await post(String(path.dropFirst()), values, as: JSONValue.self, method: "PUT")
     }
 
