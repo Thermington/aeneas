@@ -17,7 +17,7 @@
 .PARAMETER Branch
   Branch to check out. Default main.
 .PARAMETER SkipPull
-  Do not git pull; build what is on disk.
+  Do not git pull; build what is on disk. Needed to build a copied folder (one without .git), which cannot be updated.
 #>
 [CmdletBinding()]
 param(
@@ -116,7 +116,11 @@ if (Test-Path (Join-Path $RepoDir '.git')) {
   }
   Write-Host ("at " + (& git -C $RepoDir rev-parse --short HEAD))
 } elseif (Test-Path (Join-Path $RepoDir 'package.json')) {
-  Write-Host 'repo folder exists without .git (copied); building what is there'
+  # A copy cannot be brought up to date, and building it quietly made an app from old code (2026-11-16: a fix "did
+  # not work" because the copy was three days old). Only with -SkipPull, which says the copy is meant.
+  if (-not $SkipPull) { Fail "$RepoDir is a copy, not a git checkout, so it cannot be updated and may hold old code. Rename it and run this again to clone the repository there, or pass -SkipPull to build the copy as it is." }
+  $copied = (Get-Item (Join-Path $RepoDir 'web\src-tauri\src\lib.rs')).LastWriteTime
+  Write-Host "repo folder is a copy (no .git): building it as it is, files from $copied"
 } else {
   if (-not $RepoUrl) { Fail "$RepoDir does not exist. Pass -RepoUrl <git url> to clone it, or copy the repo there." }
   New-Item -ItemType Directory -Force -Path (Split-Path $RepoDir) | Out-Null

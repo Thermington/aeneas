@@ -118,8 +118,18 @@ fn close_widget<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("widget-changed", false);
 }
 
+/// Every command that makes a window is `async`, and event handlers hand window making to a task of its own
+/// (`in_background`): on Windows, building a window in a synchronous command or an event handler deadlocks the main
+/// thread (Tauri's own note on WebviewWindowBuilder::new, wry issue 583). The window then stayed blank, could not be
+/// closed, and closing the app from the taskbar hung it until Windows ended it.
+#[cfg(desktop)]
+fn in_background<R: Runtime>(app: &AppHandle<R>, f: impl FnOnce(&AppHandle<R>) + Send + 'static) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { f(&app) });
+}
+
 #[tauri::command]
-fn set_widget(app: AppHandle, open: bool) {
+async fn set_widget(app: AppHandle, open: bool) {
     #[cfg(desktop)]
     if open {
         open_widget(&app);
@@ -193,7 +203,7 @@ fn show_main_window(app: AppHandle, path: Option<String>) {
 }
 
 #[tauri::command]
-fn open_capture_window(app: AppHandle) {
+async fn open_capture_window(app: AppHandle) {
     #[cfg(desktop)]
     open_capture(&app);
     #[cfg(mobile)]
@@ -202,7 +212,7 @@ fn open_capture_window(app: AppHandle) {
 
 /// A screen in a window of its own, for a second monitor: `path` is the app route, shown without the sidebar.
 #[tauri::command]
-fn open_window(app: AppHandle, path: String, title: String) -> Result<(), String> {
+async fn open_window(app: AppHandle, path: String, title: String) -> Result<(), String> {
     if !path.starts_with('/') {
         return Err("path must start with /".into());
     }
@@ -289,7 +299,7 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        open_capture(app);
+                        in_background(app, open_capture);
                     }
                 })
                 .build(),
@@ -337,10 +347,10 @@ fn desktop_setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
                 .tooltip("Aeneas")
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => show_main(app),
-                    "capture" => open_capture(app),
+                    "capture" => in_background(app, open_capture),
                     "widget" => {
                         let checked = widget_for_event.is_checked().unwrap_or(false);
-                        set_widget(app.clone(), checked);
+                        in_background(app, move |app| if checked { open_widget(app) } else { close_widget(app) });
                     }
                     "quit" => app.exit(0),
                     _ => {}
