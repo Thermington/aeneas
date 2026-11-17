@@ -6,7 +6,7 @@ import { useMediaQuery } from "../lib/useMediaQuery";
 import { plainError } from "../lib/errors";
 import { fmtDate, fmtDateTime, fmtTime } from "../lib/time";
 import {
-  cleanedNote,
+  cleanedLabel,
   dayHeading,
   keepLabel,
   mailLink,
@@ -182,6 +182,7 @@ function Bubble({ m }: { m: MailMessage }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const warning = replyToWarning(m);
+  const kind = cleanedLabel(m);
   const link = mailLink(m.link);
   const toggle = async () => {
     if (open) { setOpen(false); return; }
@@ -219,8 +220,6 @@ function Bubble({ m }: { m: MailMessage }) {
             </Fragment>
           ))}
         </div>
-        {/* What the text is (key lines, a summary): after the message, beside Show original, which it points to. */}
-        {cleanedNote(m) && <div className="muted small mail-note">{cleanedNote(m)}</div>}
         {open && (
           <div className="mail-original">
             {busy && <div className="muted small">Fetching the whole message from iCloud</div>}
@@ -230,7 +229,8 @@ function Bubble({ m }: { m: MailMessage }) {
         )}
         <div className="meta row" style={{ gap: 10 }}>
           <span>{fmtTime(m.at)}</span>
-          {m.cleaned_by === "model" && <span title="Your hub's model shortened this message">shortened by your model</span>}
+          {/* What the text is (key lines, a summary): a word beside Show original, the explanation on hover. */}
+          {kind && <span className="mail-kind" title={kind.title}>{kind.label}</span>}
           <button type="button" className="ghost small" onClick={() => void toggle()} aria-expanded={open}>{open ? "Hide original" : "Show original"}</button>
           {link && <a href={link} className="small">Open in Apple Mail</a>}
         </div>

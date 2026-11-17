@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { cleanedNote, dayHeading, httpsLink, keepLabel, messageLines, mailLink, mailPath, nameHidesAddress, peopleLine, previewLine, replyToWarning, toLine, withLabel } from "./mail";
+import { cleanedLabel, dayHeading, httpsLink, keepLabel, messageLines, mailLink, mailPath, nameHidesAddress, peopleLine, previewLine, replyToWarning, toLine, withLabel } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -27,11 +27,11 @@ describe("mail screen rules", () => {
   });
 
   it("says when the text is a summary or a system's mail, and nothing for a person's mail", () => {
-    expect(cleanedNote({ cleaned_by: "summary", automated: true })).toMatch(/^Summary of an automated email/);
-    expect(cleanedNote({ cleaned_by: "code", automated: true })).toMatch(/^Automated email/);
-    expect(cleanedNote({ cleaned_by: "key-lines", automated: true })).toMatch(/^Key lines of an automated email/);
-    expect(cleanedNote({ cleaned_by: "code", automated: false })).toBeNull();
-    expect(cleanedNote({ cleaned_by: "model" })).toBeNull();
+    expect(cleanedLabel({ cleaned_by: "summary", automated: true })?.label).toBe("Summary");
+    expect(cleanedLabel({ cleaned_by: "key-lines", automated: true })).toEqual({ label: "Key lines", title: "Lines the hub picked from an automated email, as the sender wrote them." });
+    expect(cleanedLabel({ cleaned_by: "code", automated: true })?.label).toBe("Automated");
+    expect(cleanedLabel({ cleaned_by: "model" })?.label).toBe("Shortened");
+    expect(cleanedLabel({ cleaned_by: "code", automated: false })).toBeNull();
   });
 
   it("shows a button line as a link to its https host, and only then", () => {

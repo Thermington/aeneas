@@ -32,13 +32,14 @@ export function withLabel(c: Pick<MailConversationSummary, "with">): string {
 }
 
 /**
- * What a message's text is, said above it when it is not simply the sender's message: a summary the model picked,
- * or a system's mail with its links and footer taken off. Null for a person's mail.
+ * What a message's text is, when it is not simply the sender's message cleaned: a short label for the line under it
+ * (beside Show original) and the longer explanation for its tooltip. Null for a person's mail cleaned by the rules.
  */
-export function cleanedNote(m: Pick<MailMessage, "cleaned_by" | "automated">): string | null {
-  if (m.cleaned_by === "summary") return "Summary of an automated email: the lines your model picked, as written. Show original for all of it.";
-  if (m.cleaned_by === "key-lines") return "Key lines of an automated email, picked by the hub. Show original for all of it.";
-  if (m.automated) return "Automated email, links and footer left out.";
+export function cleanedLabel(m: Pick<MailMessage, "cleaned_by" | "automated">): { label: string; title: string } | null {
+  if (m.cleaned_by === "summary") return { label: "Summary", title: "Lines your model picked from an automated email, as the sender wrote them." };
+  if (m.cleaned_by === "key-lines") return { label: "Key lines", title: "Lines the hub picked from an automated email, as the sender wrote them." };
+  if (m.cleaned_by === "model") return { label: "Shortened", title: "Your model cut a signature off the end." };
+  if (m.automated) return { label: "Automated", title: "An automated email, its links and footer left out." };
   return null;
 }
 
