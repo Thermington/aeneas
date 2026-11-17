@@ -204,7 +204,6 @@ function Bubble({ m }: { m: MailMessage }) {
         )}
         {nameHidesAddress(m.from) && <div className="warn small">The sender's name shows a different address than the one it came from.</div>}
         {warning && <div className="warn small" role="note">{warning}</div>}
-        {cleanedNote(m) && <div className="muted small mail-note">{cleanedNote(m)}</div>}
         {/* Plain text in text nodes: React escapes it, and nothing in a mail is ever read as HTML. A button line is a link
             with its real host beside it, opened in the browser. */}
         <div className="mail-text">
@@ -220,6 +219,8 @@ function Bubble({ m }: { m: MailMessage }) {
             </Fragment>
           ))}
         </div>
+        {/* What the text is (key lines, a summary): after the message, beside Show original, which it points to. */}
+        {cleanedNote(m) && <div className="muted small mail-note">{cleanedNote(m)}</div>}
         {open && (
           <div className="mail-original">
             {busy && <div className="muted small">Fetching the whole message from iCloud</div>}
