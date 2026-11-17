@@ -175,7 +175,7 @@ export function threadOf(db: DB, account: string, m: ChatMail): string {
  * Keep fetched messages: oldest first (so a reply finds the message it answers), each threaded and cleaned, only
  * what is inside the kept window and not kept already. Returns how many were kept. The original text is dropped here.
  */
-export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date = new Date()): number {
+export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date = new Date(), ownerNames: string[] = []): number {
   const since = keptSince(db, now).getTime();
   const has = db.prepare("SELECT 1 FROM messages WHERE account = ? AND id = ?");
   const insert = db.prepare(`INSERT OR IGNORE INTO messages (account, id, key, message_id, thread, at, from_name, from_address, reply_to, subject, subject_key, text, mine, cleaned_by, unsure, recipients, automated, pending_text)
@@ -185,7 +185,10 @@ export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date 
     for (const m of [...mails].sort((a, b) => a.at.getTime() - b.at.getTime())) {
       if (m.at.getTime() < since || has.get(account, m.id)) continue;
       const automated = !m.mine && !!m.automated;
-      const c = cleanMail(m.text, { names: [m.from.name], automated });
+      // The owner's own mail often carries no display name in From: the profile's name is the owner's signature too, so
+      // their greeting and sign-off go as anyone's do (the send feature will add them back, chosen for the conversation).
+      const names = m.mine ? [m.from.name, ...ownerNames].filter((n) => n.trim()) : [m.from.name];
+      const c = cleanMail(m.text, { names, automated });
       // An automated message shows its key lines at once, picked by the rules; the whole cleaned text waits for the model.
       const key = automated ? keyLines(c.text) : null;
       kept += insert.run(account, m.id, messageKey(account, m.id), m.message_id, threadOf(db, account, m), m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
@@ -321,7 +324,7 @@ export function refreshMail(hub: Hub, opts: { owner?: boolean } = {}): Promise<R
       const email = account.slice("icloud:".length);
       try {
         const r = await listChatICloud(hub, account, keptSince(db), isKept(db, account), opts);
-        const kept = keepMails(db, account, r.mails);
+        const kept = keepMails(db, account, r.mails, new Date(), [hub.profile.get().name]);
         save.run(account, new Date().toISOString(), null);
         if (kept || r.more) console.log(`[mail-chat] ${mailboxLabel(hub, account)}: ${kept} kept${r.more ? ", more next time" : ""}`);
         out.mailboxes.push({ email, listed: r.mails.length, kept });

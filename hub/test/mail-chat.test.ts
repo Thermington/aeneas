@@ -114,6 +114,22 @@ test("mail-chat: recipients are kept only for the owner's own messages, even whe
   } finally { done(); }
 });
 
+test("mail-chat: the owner's own greeting and sign-off go too, with the profile's name when From has none", () => {
+  const { db, done } = tmpDb();
+  try {
+    const own = (text: string) => mail({ at: hoursAgo(1), mine: true, from: { name: "", address: "robin@icloud.example" }, text });
+    keepMails(db, ACCOUNT, [
+      own("Hi Alex,\n\nSaturday works for me.\n\nRobin"),
+      own("Hey Sam!\n\nSee you at 5.\n\n- Robin"),
+      own("Hello Jordan,\n\nThe keys are under the mat.\n\nThanks,\nRobin Lee"),
+    ], NOW, ["Robin Lee"]);
+    assert.deepEqual(rows(db).map((r) => r.text), ["Saturday works for me.", "See you at 5.", "The keys are under the mat."]);
+    // Someone else's mail never has the owner's name taken for theirs.
+    keepMails(db, ACCOUNT, [mail({ at: hoursAgo(0.5), text: "Who's coming?\n\nRobin" })], NOW, ["Robin Lee"]);
+    assert.equal(rows(db).at(-1)!.text, "Who's coming?\n\nRobin");
+  } finally { done(); }
+});
+
 test("mail-chat: a message already kept is not kept twice or fetched again", () => {
   const { db, done } = tmpDb();
   try {
