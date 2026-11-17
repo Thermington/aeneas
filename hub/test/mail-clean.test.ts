@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanMail, footerStart, isGreeting, isNameSignOff, isPieceOf, isSignOff, pickLines, summaryLines } from "../src/mail-clean.js";
+import { cleanMail, footerStart, isGreeting, isNameSignOff, isPieceOf, isSignOff, keyLines, pickLines, summaryLines } from "../src/mail-clean.js";
 
 const body = (s: string) => cleanMail(s).text;
 
@@ -172,6 +172,18 @@ test("mail-clean (rules 2): an automated mail keeps only its own lines: no navig
   // The greeting after a headline or two goes.
   assert.equal(cleanMail("Apply for aid for next year.\n\nYour form is open\n\nRobin,\n\nYou can now send your form.", { automated: true }).text, "Apply for aid for next year.\n\nYour form is open\n\nYou can now send your form.");
   assert.equal(cleanMail("Click here to view this email as a web page.\nYour bill is ready.\nHow helpful was this email?\n1\n2\n3", { automated: true }).text, "Your bill is ready.");
+});
+
+test("mail-clean (rules 3): the key lines of an automated mail, picked by rules, every word the sender's", () => {
+  const cleaned = cleanMail(SHIPPED, { automated: true }).text;
+  assert.equal(keyLines(cleaned), "Robin, your package was shipped!\nArriving today\nOrder # 112-0000000-0000000\nTotal 26.74 USD");
+  const aid = [
+    "Apply for aid for next school year.", "Your 2027 form is open today", "You can now send your 2027 form. If you are in school next fall, send it early.",
+    "Send your form", "Remember: you must send a form every year.", "If you have questions, visit our help pages.", "Need help with your form? Call us.", "Sign up for text alerts about your form.",
+  ].join("\n\n");
+  assert.equal(keyLines(aid), "Apply for aid for next school year.\nYour 2027 form is open today\nYou can now send your 2027 form. If you are in school next fall, send it early.", "help text and offers left out");
+  assert.equal(keyLines("Your code is 123456.\nIt expires in 10 minutes."), null, "short enough to show whole");
+  for (const l of (keyLines(cleaned) ?? "").split("\n")) for (const w of l.split(/\s+/)) assert.ok(cleaned.includes(w), `"${w}" is the sender's`);
 });
 
 test("mail-clean (rules 2): a summary is only lines the model picked by number, as the sender wrote them", () => {

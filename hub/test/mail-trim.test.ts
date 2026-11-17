@@ -85,6 +85,8 @@ test("mail trim: an answer that adds, rewrites or drops a middle line is not use
 });
 
 const NOTICE = "Robin, your package was shipped!\nOrdered\n\nShipped\n\nArriving today\n\nOrder #\n112-0000000-0000000\n\n* Garden hose, 50 ft\nTotal\n26.74 USD";
+/** The hub's own key lines of NOTICE, shown until the model picks. */
+const KEY = "Robin, your package was shipped!\nArriving today\nOrder # 112-0000000-0000000\nTotal 26.74 USD";
 
 test("mail trim: a system's mail is summed up by the lines the model picks, as the sender wrote them", async () => {
   const t = makeHub();
@@ -92,8 +94,11 @@ test("mail trim: a system's mail is summed up by the lines the model picks, as t
     keepMails(t.hub.mailDb, ACCOUNT, [mail(NOTICE, { automated: true, from: { name: "Shop", address: "shipment-tracking@shop.example" } })]);
     const m = model([() => JSON.stringify({ lines: [1, 4, 8, 9] })]);
     setBackendOverride(m);
+    // Before the model: the hub's own key lines show, and the whole text waits for the model.
+    assert.deepEqual(row(t, "Robin"), { text: KEY, cleaned_by: "key-lines", unsure: 1 });
     assert.deepEqual(await trimUnsure(t.hub), { asked: 1, shortened: 1 });
     assert.deepEqual(row(t, "Robin"), { text: "Robin, your package was shipped!\nArriving today\nTotal\n26.74 USD", cleaned_by: "summary", unsure: 0 });
+    assert.equal((t.hub.mailDb.prepare("SELECT pending_text FROM messages").get() as { pending_text: string | null }).pending_text, null, "the whole text is not kept once the model has picked");
     const [system, user] = m.sent[0];
     assert.equal(system.content, SUMMARY_SYSTEM);
     assert.equal(user.content.split("\n")[0], "1: Robin, your package was shipped!", "numbered lines, no blank ones");
@@ -112,7 +117,8 @@ test("mail trim: a summary answer with words, or numbers out of place, is not us
       keepMails(t.hub.mailDb, ACCOUNT, [mail(NOTICE, { automated: true })]);
       setBackendOverride(model([() => JSON.stringify(answer)]));
       assert.deepEqual(await trimUnsure(t.hub), { asked: 1, shortened: 0 }, JSON.stringify(answer));
-      assert.deepEqual(row(t, "Robin"), { text: NOTICE, cleaned_by: "code", unsure: 0 }, JSON.stringify(answer));
+      assert.deepEqual(row(t, "Robin"), { text: KEY, cleaned_by: "key-lines", unsure: 0 }, JSON.stringify(answer));
+      assert.equal((t.hub.mailDb.prepare("SELECT pending_text FROM messages").get() as { pending_text: string | null }).pending_text, null);
     } finally { done(t); }
   }
 });

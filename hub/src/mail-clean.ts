@@ -25,7 +25,7 @@ const SHORT = 200;
  * The rules' version. Kept with each hub's mail: when it changes, kept mail is fetched again and cleaned by the new
  * rules (the original is not kept, so it cannot be cleaned again in place).
  */
-export const CLEAN_VERSION = 2;
+export const CLEAN_VERSION = 3;
 
 /** `On Tue, 4 Nov 2026 at 09:12, Alex <alex@example.com> wrote:` (Apple Mail, Gmail and most others). */
 const ON_WROTE = /^on\b.{0,240}\bwrote:$/i;
@@ -336,6 +336,62 @@ export function pickLines(picked: unknown, text: string): string | null {
   const ns = [...new Set(picked as number[])].sort((a, b) => a - b);
   if (ns.length !== picked.length) return null;
   return ns.map((n) => ls[n - 1]).join("\n");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Key lines of an automated message, picked by code (no model needed)
+
+const MONEY = /([$€£]\s?\d|\b\d[\d,]*\.\d{2}\b|\b\d+(\.\d+)?\s?(usd|eur|gbp|cad|aud)\b)/i;
+const WHEN = /\b(today|tonight|tomorrow|yesterday|(mon|tues|wednes|thurs|fri|satur|sun)day|(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}|\d{1,2}\/\d{1,2}(\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}(:\d{2})?\s?(am|pm))\b/i;
+const STATUS = /\b(shipped|delivered|arriving|arrives?|out for delivery|delayed|cancel{1,2}ed|refund(ed)?|due|overdue|expir(es|ed|ing)|renew(s|ed|al)?|confirm(ed|ation)?|approved|declined|failed|payment|paid|receipt|order|deadline|reminder|appointment|booked|reservation|password|sign[- ]?in|verification|security|balance|statement|invoice|bill|(is|are|can) now|now (open|available)|ready)\b/i;
+const ACTION = /\b(you (must|need to|have to)|please (confirm|complete|submit|pay|review|verify|update|reply)|action required)\b/i;
+/** Help text, offers and asides that automated mail adds: never key. */
+const BOILER = /^(if you('ve| have| did| are| need| wish)?\b|for (your|everyone'?s?)\b|please (note|do not)|note:|we (may|will never|recommend)|learn more|to learn|this (e-?mail|message)|you can (also|always)|questions\??|need help|sign up|download|follow us|view related|see (more|all|details)|shop|recommended)/i;
+/** A label whose value is on the next line: "Total" / "26.74 USD", "Order #" / "112-…". */
+const AMOUNT_LABEL = /^(total|order total|grand total|amount( due)?|balance( due)?|subtotal|you paid|charged)\b.{0,20}$/i;
+const VALUE_LABEL = /^(order|order number|confirmation|confirmation (number|code)|tracking( number)?|reference|account|invoice)\s*(#|no\.?|number)?:?$/i;
+const LONE_AMOUNT = /^[$€£]?\s?\d[\d,]*(\.\d{1,2})?\s?(usd|eur|gbp|cad|aud)?$/i;
+
+/**
+ * The few lines of an automated message that matter, picked by rules: the headline, lines with a status, a date or
+ * time, an amount or something to do; a label and its value on the next line joined ("Total 26.74 USD"); of a status
+ * tracker ("Ordered / Shipped / Out for delivery / Arriving today") only its step with a date; help text and offers
+ * left out. At most SUMMARY_MAX lines, in the message's order, every word the sender's. Null when the message is short
+ * enough to show whole, or nothing stands out.
+ */
+export function keyLines(text: string): string | null {
+  const ls = summaryLines(text);
+  if (ls.length <= SUMMARY_MAX) return null;
+  const items: string[] = [];
+  for (let i = 0; i < ls.length; i++) {
+    const l = ls[i];
+    const n = ls[i + 1];
+    if (n !== undefined && ((AMOUNT_LABEL.test(l) && LONE_AMOUNT.test(n)) || (VALUE_LABEL.test(l) && n.length <= 40))) { items.push(`${l} ${n}`); i++; continue; }
+    items.push(l);
+  }
+  // A tracker: three or more short lines in a row (a few words, no digits, no sentence).
+  const step = (l: string) => l.split(/\s+/).length <= 3 && !/\d/.test(l) && !/[.!?:,]$/.test(l);
+  const tracker = new Set<number>();
+  for (let i = 0; i < items.length;) {
+    let j = i;
+    while (j < items.length && step(items[j])) j++;
+    if (j - i >= 3) for (let k = i; k < j; k++) tracker.add(k);
+    i = Math.max(j, i + 1);
+  }
+  const scored = items.map((l, i) => {
+    if (tracker.has(i)) return { l, i, s: WHEN.test(l) ? 3 : -9 };
+    if (LONE_AMOUNT.test(l) || l.length > 600) return { l, i, s: -9 };
+    let s = i === 0 ? 3 : 0;
+    if (MONEY.test(l)) s += 2;
+    if (WHEN.test(l)) s += 2;
+    if (STATUS.test(l)) s += 2;
+    if (ACTION.test(l)) s += 1;
+    if (BOILER.test(l)) s -= 3;
+    if (l.length > 300) s -= 2;
+    return { l, i, s };
+  });
+  const keep = scored.filter((x) => x.s >= 2).sort((a, b) => b.s - a.s || a.i - b.i).slice(0, SUMMARY_MAX).sort((a, b) => a.i - b.i);
+  return keep.length >= 2 ? keep.map((x) => x.l).join("\n") : null;
 }
 
 /** Text with every run of whitespace made one space, for comparing pieces. */

@@ -29,6 +29,7 @@ describe("mail screen rules", () => {
   it("says when the text is a summary or a system's mail, and nothing for a person's mail", () => {
     expect(cleanedNote({ cleaned_by: "summary", automated: true })).toMatch(/^Summary of an automated email/);
     expect(cleanedNote({ cleaned_by: "code", automated: true })).toMatch(/^Automated email/);
+    expect(cleanedNote({ cleaned_by: "key-lines", automated: true })).toMatch(/^Key lines of an automated email/);
     expect(cleanedNote({ cleaned_by: "code", automated: false })).toBeNull();
     expect(cleanedNote({ cleaned_by: "model" })).toBeNull();
   });

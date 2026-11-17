@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
 import { icloudLink, icloudSource, listChatICloud, type ChatAddress, type ChatMail } from "./imports/icloud.js";
-import { CLEAN_VERSION, cleanMail, pickLines, startOf, summaryLines } from "./mail-clean.js";
+import { CLEAN_VERSION, cleanMail, keyLines, pickLines, startOf, summaryLines } from "./mail-clean.js";
 import { mailboxLabel, mailTimeReached } from "./mail-filer.js";
 import { errCode } from "./logsafe.js";
 import { dbJobClock, scheduleDaily } from "./schedule.js";
@@ -64,6 +64,8 @@ export function openMailDb(dbPath: string): DB {
   if (!cols.includes("recipients")) db.exec("ALTER TABLE messages ADD COLUMN recipients TEXT");
   // Added 2026-11-18: sent by a system (a notice, a newsletter): cleaned as such, and summed up by the model's picks.
   if (!cols.includes("automated")) db.exec("ALTER TABLE messages ADD COLUMN automated INTEGER NOT NULL DEFAULT 0");
+  // The whole cleaned text of an automated message shown as its key lines, for the model to pick from; cleared once it has.
+  if (!cols.includes("pending_text")) db.exec("ALTER TABLE messages ADD COLUMN pending_text TEXT");
   return db;
 }
 
@@ -176,18 +178,20 @@ export function threadOf(db: DB, account: string, m: ChatMail): string {
 export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date = new Date()): number {
   const since = keptSince(db, now).getTime();
   const has = db.prepare("SELECT 1 FROM messages WHERE account = ? AND id = ?");
-  const insert = db.prepare(`INSERT OR IGNORE INTO messages (account, id, key, message_id, thread, at, from_name, from_address, reply_to, subject, subject_key, text, mine, cleaned_by, unsure, recipients, automated)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'code', ?, ?, ?)`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO messages (account, id, key, message_id, thread, at, from_name, from_address, reply_to, subject, subject_key, text, mine, cleaned_by, unsure, recipients, automated, pending_text)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   let kept = 0;
   db.transaction(() => {
     for (const m of [...mails].sort((a, b) => a.at.getTime() - b.at.getTime())) {
       if (m.at.getTime() < since || has.get(account, m.id)) continue;
       const automated = !m.mine && !!m.automated;
       const c = cleanMail(m.text, { names: [m.from.name], automated });
+      // An automated message shows its key lines at once, picked by the rules; the whole cleaned text waits for the model.
+      const key = automated ? keyLines(c.text) : null;
       kept += insert.run(account, m.id, messageKey(account, m.id), m.message_id, threadOf(db, account, m), m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
-        m.subject, subjectKey(m.subject), c.text, m.mine ? 1 : 0, c.unsure ? 1 : 0,
+        m.subject, subjectKey(m.subject), key ?? c.text, m.mine ? 1 : 0, key ? "key-lines" : "code", c.unsure ? 1 : 0,
         // Recipients only of the owner's own messages: who they wrote to. Others' recipients are not kept.
-        m.mine && m.to?.length ? JSON.stringify(m.to.slice(0, 5)) : null, automated ? 1 : 0).changes;
+        m.mine && m.to?.length ? JSON.stringify(m.to.slice(0, 5)) : null, automated ? 1 : 0, key ? c.text : null).changes;
     }
   }).immediate();
   return kept;
@@ -384,9 +388,10 @@ function field(raw: string, name: string): unknown {
  */
 export async function trimUnsure(hub: Hub, max = TRIM_MAX): Promise<{ asked: number; shortened: number }> {
   const db = hub.mailDb;
-  const rows = db.prepare("SELECT key, text, automated FROM messages WHERE unsure = 1 ORDER BY at DESC LIMIT ?").all(max) as { key: string; text: string; automated: number }[];
-  const done = db.prepare("UPDATE messages SET unsure = 0 WHERE key = ?");
-  const shorten = db.prepare("UPDATE messages SET unsure = 0, text = ?, cleaned_by = ? WHERE key = ? AND text = ?");
+  // `source`: what the model reads: the whole cleaned text of a message shown as key lines, else what is shown.
+  const rows = db.prepare("SELECT key, text, COALESCE(pending_text, text) AS source, automated FROM messages WHERE unsure = 1 ORDER BY at DESC LIMIT ?").all(max) as { key: string; text: string; source: string; automated: number }[];
+  const done = db.prepare("UPDATE messages SET unsure = 0, pending_text = NULL WHERE key = ?");
+  const shorten = db.prepare("UPDATE messages SET unsure = 0, pending_text = NULL, text = ?, cleaned_by = ? WHERE key = ? AND text = ?");
   let asked = 0;
   let shortened = 0;
   for (const r of rows) {
@@ -394,18 +399,19 @@ export async function trimUnsure(hub: Hub, max = TRIM_MAX): Promise<{ asked: num
     const summary = !!r.automated;
     // The model sees only the code's text: numbered lines for a summary. The session name carries no address (the
     // model call log in chats.sqlite keeps it).
-    const prompt = summary ? summaryLines(r.text).map((l, i) => `${i + 1}: ${l}`).join("\n") : r.text;
+    const prompt = summary ? summaryLines(r.source).map((l, i) => `${i + 1}: ${l}`).join("\n") : r.text;
     const { text: raw, stopped } = await hub.ai.backgroundJson("mail-chat", summary ? SUMMARY_SYSTEM : TRIM_SYSTEM, prompt);
     if (stopped || raw === null) break; // a chat or a game took the model, or no model answered: next time
     asked++;
     let next: string | null;
-    if (summary) next = pickLines(field(raw, "lines"), r.text);
+    if (summary) next = pickLines(field(raw, "lines"), r.source);
     else {
       const keep = field(raw, "keep");
       next = typeof keep === "string" ? startOf(keep, r.text) : null;
     }
     // Kept only when it really is shorter: the same text back means the code was right after all.
-    if (next && next.length < r.text.length) shortened += shorten.run(next, summary ? "summary" : "model", r.key, r.text).changes;
+    // The model's picks replace the hub's key lines (they come from the whole text); either is shorter than that text.
+    if (next && next.length < (summary ? r.source : r.text).length) shortened += shorten.run(next, summary ? "summary" : "model", r.key, r.text).changes;
     else done.run(r.key);
   }
   if (asked) console.log(`[mail-chat] the model looked at ${asked} message(s), shortened ${shortened}`);

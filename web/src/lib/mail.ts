@@ -35,6 +35,7 @@ export function withLabel(c: Pick<MailConversationSummary, "with">): string {
  */
 export function cleanedNote(m: Pick<MailMessage, "cleaned_by" | "automated">): string | null {
   if (m.cleaned_by === "summary") return "Summary of an automated email: the lines your model picked, as written. Show original for all of it.";
+  if (m.cleaned_by === "key-lines") return "Key lines of an automated email, picked by the hub. Show original for all of it.";
   if (m.automated) return "Automated email, links and footer left out.";
   return null;
 }
