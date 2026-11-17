@@ -333,7 +333,12 @@ export const CHAT_MAX = 300;
  * Header lines fetched by name: the envelope already has In-Reply-To and Reply-To, but not References; the rest say
  * whether a system sent the mail (a list, a notice, a newsletter).
  */
-const CHAT_HEADERS = ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence"];
+const CHAT_HEADERS = ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence", ...ESP_HEADERS()];
+/**
+ * Headers only bulk-mail services add: Feedback-Id (which large senders must send), and the sending services' own
+ * (Mailgun, SendGrid, Amazon SES, Mailchimp, Postmark, SparkPost). A function so CHAT_HEADERS can use it above.
+ */
+function ESP_HEADERS() { return ["feedback-id", "x-mailgun-sid", "x-sg-eid", "x-ses-outgoing", "x-mc-user", "x-pm-message-id", "x-msys-api"]; }
 /** Sender addresses systems use: no-reply@, notifications@, shipment-tracking@ and the like. */
 const SYSTEM_SENDER = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?|notify|alerts?|updates?|news(letter)?s?|info|marketing|mailer(-daemon)?|bounces?|account(s)?|support|billing|receipts?|orders?|shipment-tracking|auto-?confirm|digest)([._+-][^@]*)?@/i;
 
@@ -346,6 +351,8 @@ export function isAutomated(headers: Buffer | undefined, fromAddress: string): b
   const auto = headerValue(headers, "auto-submitted").toLowerCase();
   if (auto && auto !== "no") return true;
   if (/^(bulk|list|junk)\b/i.test(headerValue(headers, "precedence"))) return true;
+  // Sent through a bulk-mail service (a shop's order notices, a newsletter).
+  if (ESP_HEADERS().some((h) => headerValue(headers, h))) return true;
   return SYSTEM_SENDER.test(fromAddress);
 }
 

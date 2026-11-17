@@ -31,7 +31,7 @@ test("icloud chat: reads Sent but not Junk, Trash or Drafts, every folder read-o
     assert.equal(seen.connects, 1);
     assert.equal(seen.logouts, 1);
     assert.deepEqual([...new Set(seen.calls)].sort(), ["connect", "download", "fetchOne", "list", "logout", "mailboxOpen", "search"]);
-    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence"] }, o: { uid: true } });
+    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence", "feedback-id", "x-mailgun-sid", "x-sg-eid", "x-ses-outgoing", "x-mc-user", "x-pm-message-id", "x-msys-api"] }, o: { uid: true } });
   } finally { done(t); }
 });
 
@@ -183,6 +183,10 @@ test("icloud chat: a mail a system sent is told from a person's", async () => {
   assert.equal(isAutomated(h("Auto-Submitted: auto-generated\n"), "x@example.com"), true);
   assert.equal(isAutomated(h("Auto-Submitted: no\n"), "x@example.com"), false);
   assert.equal(isAutomated(h("Precedence: bulk\n"), "x@example.com"), true);
+  // Sent through a bulk-mail service: a shop's notice from store+123@t.shop.example has no list headers, but these.
+  assert.equal(isAutomated(h("Feedback-Id: ct_x:s_1:shop\n"), "store+123@t.shop.example"), true);
+  assert.equal(isAutomated(h("X-Mailgun-Sid: WyJhIl0=\n"), "store+123@t.shop.example"), true);
+  assert.equal(isAutomated(h("X-SG-EID: abc\n"), "news@x.example"), true);
   for (const a of ["no_reply@email.fieldstone.example", "noreply@aid.example", "shipment-tracking@shop.example", "do-not-reply@bank.example", "notifications@app.example"]) assert.equal(isAutomated(undefined, a), true, a);
   for (const a of ["alex@example.com", "noreen@example.com", "replyall@example.com"]) assert.equal(isAutomated(undefined, a), false, a);
 

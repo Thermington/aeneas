@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { openExternal } from "../tauri/bridge";
 import { engine } from "../sync/engine";
 import { usePoll } from "../lib/usePoll";
 import { useMediaQuery } from "../lib/useMediaQuery";
@@ -10,6 +11,7 @@ import {
   keepLabel,
   mailLink,
   mailPath,
+  messageLines,
   nameHidesAddress,
   peopleLine,
   personLabel,
@@ -203,8 +205,21 @@ function Bubble({ m }: { m: MailMessage }) {
         {nameHidesAddress(m.from) && <div className="warn small">The sender's name shows a different address than the one it came from.</div>}
         {warning && <div className="warn small" role="note">{warning}</div>}
         {cleanedNote(m) && <div className="muted small mail-note">{cleanedNote(m)}</div>}
-        {/* Plain text in a text node: React escapes it, and nothing in a mail is ever read as HTML. */}
-        <div className="mail-text">{m.text}</div>
+        {/* Plain text in text nodes: React escapes it, and nothing in a mail is ever read as HTML. A button line is a link
+            with its real host beside it, opened in the browser. */}
+        <div className="mail-text">
+          {messageLines(m).map((line, i) => (
+            <Fragment key={i}>
+              {i > 0 && "\n"}
+              {line.link ? (
+                <>
+                  <a href={line.link.href} target="_blank" rel="noopener noreferrer" onClick={(e) => { e.preventDefault(); void openExternal(line.link!.href); }}>{line.text}</a>
+                  <span className="muted small"> ({line.link.host})</span>
+                </>
+              ) : line.text}
+            </Fragment>
+          ))}
+        </div>
         {open && (
           <div className="mail-original">
             {busy && <div className="muted small">Fetching the whole message from iCloud</div>}

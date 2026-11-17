@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanMail, footerStart, isGreeting, isNameSignOff, isPieceOf, isSignOff, keyLines, pickLines, summaryLines } from "../src/mail-clean.js";
+import { cleanMail, footerStart, isGreeting, isNameSignOff, isPieceOf, isSignOff, keyLines, pickLines, safeLink, summaryLines } from "../src/mail-clean.js";
 
 const body = (s: string) => cleanMail(s).text;
 
@@ -167,23 +167,56 @@ test("mail-clean (rules 2): an automated mail keeps only its own lines: no navig
   assert.equal(c.unsure, true, "always offered to the model for a summary");
   assert.equal(c.text, [
     "Robin, your package was shipped!", "Ordered", "", "Shipped", "", "Out for delivery", "", "Arriving today", "", "Order #", "112-0000000-0000000", "",
-    "* Garden hose, 50 ft, green", "Quantity: 1", "24.99 USD", "", "Total", "26.74 USD",
+    "Track package", "", "* Garden hose, 50 ft, green", "Quantity: 1", "24.99 USD", "", "Total", "26.74 USD",
   ].join("\n"));
+  // The button stays as a link; the navigation ("Your Orders", "Your Account") does not.
+  assert.deepEqual(c.links, [{ text: "Track package", url: "https://shop.example/track?orderId=112-0000000-0000000&shipmentId=AbCdEf&ref_=email_track_btn" }]);
   // The greeting after a headline or two goes.
   assert.equal(cleanMail("Apply for aid for next year.\n\nYour form is open\n\nRobin,\n\nYou can now send your form.", { automated: true }).text, "Apply for aid for next year.\n\nYour form is open\n\nYou can now send your form.");
   assert.equal(cleanMail("Click here to view this email as a web page.\nYour bill is ready.\nHow helpful was this email?\n1\n2\n3", { automated: true }).text, "Your bill is ready.");
 });
 
 test("mail-clean (rules 3): the key lines of an automated mail, picked by rules, every word the sender's", () => {
-  const cleaned = cleanMail(SHIPPED, { automated: true }).text;
-  assert.equal(keyLines(cleaned), "Robin, your package was shipped!\nArriving today\nOrder # 112-0000000-0000000\nTotal 26.74 USD");
+  const c = cleanMail(SHIPPED, { automated: true });
+  const cleaned = c.text;
+  assert.equal(keyLines(cleaned, c.links), "Robin, your package was shipped!\n\nArriving today\n\nOrder # 112-0000000-0000000\n\nTrack package\n\nTotal 26.74 USD", "the button too, and the paragraphs");
+  assert.equal(keyLines(cleaned), "Robin, your package was shipped!\n\nArriving today\n\nOrder # 112-0000000-0000000\n\nTotal 26.74 USD", "a line that is no button is no key line for being one");
   const aid = [
     "Apply for aid for next school year.", "Your 2027 form is open today", "You can now send your 2027 form. If you are in school next fall, send it early.",
     "Send your form", "Remember: you must send a form every year.", "If you have questions, visit our help pages.", "Need help with your form? Call us.", "Sign up for text alerts about your form.",
   ].join("\n\n");
-  assert.equal(keyLines(aid), "Apply for aid for next school year.\nYour 2027 form is open today\nYou can now send your 2027 form. If you are in school next fall, send it early.", "help text and offers left out");
+  assert.equal(keyLines(aid), "Apply for aid for next school year.\n\nYour 2027 form is open today\n\nYou can now send your 2027 form. If you are in school next fall, send it early.", "help text and offers left out");
   assert.equal(keyLines("Your code is 123456.\nIt expires in 10 minutes."), null, "short enough to show whole");
   for (const l of (keyLines(cleaned) ?? "").split("\n")) for (const w of l.split(/\s+/)) assert.ok(cleaned.includes(w), `"${w}" is the sender's`);
+});
+
+test("mail-clean (rules 6): a shop's notice: repeats, the subject, the shop's name and separators go; its button stays, linked", () => {
+  // Shaped like a real shop notice: headline, shop name, order number, the headline again between separators, the
+  // message, a date, a button, another link, a carrier number with its link, an item list, a help line.
+  const notice = [
+    "The last item in your order is out for delivery", "", "Fieldstone Records", "", "Order FS1234", "",
+    "-----------------------------------------------", "The last item in your order is out for delivery", "-----------------------------------------------", "",
+    "The last item in your order is out for delivery.", "Track your shipment to see the delivery status.", "",
+    "Estimated delivery date: November 17, 2026", "", "Track my shipment ", "( https://store.fieldstone.example/orders/abc/authenticate?key=xyz&id=1 )", "", "",
+    "or Visit our store ", "( https://store.fieldstone.example?id=2 )", "", "", "CARRIER tracking number: 384600000000 ", "( https://carrier.example/track?n=384600000000 )", "",
+    "Items in this shipment", "----------------------", "", "Vinyl (10th Anniversary Edition) × 1", "",
+    "If you have any questions, reply to this email or", "contact us at help@fieldstone.example.",
+  ].join("\n");
+  const c = cleanMail(notice, { automated: true, names: ["Fieldstone Records"], subject: "A shipment from order FS1234 is out for delivery" });
+  assert.deepEqual(c.links, [{ text: "Track my shipment", url: "https://store.fieldstone.example/orders/abc/authenticate?key=xyz&id=1" }], "only the button that acts on this message");
+  assert.ok(!c.text.includes("-----") && !c.text.includes("Fieldstone Records") && !c.text.includes("Order FS1234"), "separators, the shop's name, what the subject says");
+  assert.equal(c.text.split("\n").filter((l) => l.startsWith("The last item")).length, 1, "the repeated headline once");
+  assert.equal(keyLines(c.text, c.links), "The last item in your order is out for delivery.\nTrack your shipment to see the delivery status.\n\nEstimated delivery date: November 17, 2026\n\nTrack my shipment");
+});
+
+test("mail-clean (rules 6): a button's link must be https to a host, and buttons are few", () => {
+  for (const ok of ["https://shop.example/track?x=1", "https://a.b.example:8443/p"]) assert.ok(safeLink(ok), ok);
+  for (const bad of ["http://shop.example/", "javascript:alert(1)", "https://user:pw@shop.example/", "https://shop.example/a b", "data:text/html,x", `https://shop.example/${"x".repeat(2001)}`]) assert.equal(safeLink(bad), null, bad.slice(0, 40));
+  const many = ["Order ready.", ...[1, 2, 3, 4, 5].flatMap((n) => [`View item ${n}`, `https://shop.example/${n}`])].join("\n");
+  assert.equal(cleanMail(many, { automated: true }).links?.length, 3, "at most 3");
+  const http = cleanMail("Bill ready.\nPay now\nhttp://shop.example/pay", { automated: true });
+  assert.equal(http.links, undefined, "an http link is no button");
+  assert.ok(!http.text.includes("Pay now"), "and its label goes with it");
 });
 
 test("mail-clean (rules 2): a summary is only lines the model picked by number, as the sender wrote them", () => {

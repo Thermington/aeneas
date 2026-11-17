@@ -8,8 +8,10 @@ export interface MailAddress { name: string; address: string }
 export interface MailConversationSummary { id: string; subject: string; with: MailAddress[]; last_at: string; count: number; preview: string; last_mine?: boolean }
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null }
 export interface MailList { conversations: MailConversationSummary[]; keep_days: number; choices: number[]; mailboxes: MailMailbox[] }
-/** `to`: who you wrote to, on your own messages. `automated`: a system sent it (a notice, a newsletter). */
-export interface MailMessage { id: string; at: string; mine: boolean; automated?: boolean; from: MailAddress; to?: MailAddress[]; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
+/** An automated message's button: the line `text` shows as a link to `url`. */
+export interface MailButton { text: string; url: string }
+/** `to`: who you wrote to, on your own messages. `automated`: a system sent it (a notice, a newsletter). `links`: its buttons. */
+export interface MailMessage { id: string; at: string; mine: boolean; automated?: boolean; links?: MailButton[]; from: MailAddress; to?: MailAddress[]; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
 export interface MailConversation { id: string; subject: string; with?: MailAddress[]; messages: MailMessage[] }
 export interface MailOriginal { id: string; at: string; from: MailAddress; reply_to: string | null; subject: string; text: string }
 export type MailRefresh = { mailboxes: ({ email: string; listed: number; kept: number } | { email: string; error: string })[] };
@@ -77,6 +79,33 @@ export function mailLink(link: string | undefined, ua: string = typeof navigator
   if (/^message:\/\/%3C[^\s]+%3E$/i.test(link)) return /Macintosh|iPhone|iPad/.test(ua) ? link : null;
   if (link === "https://www.icloud.com/mail/") return link;
   return null;
+}
+
+/** A button's link as the screen may open it: https only, a host, no user name; with the host to show beside it. */
+export function httpsLink(url: string): { href: string; host: string } | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" || !u.hostname || u.username || u.password) return null;
+    return { href: u.toString(), host: u.hostname };
+  } catch { return null; }
+}
+
+/**
+ * A message's lines, each with its link when it is one of the message's buttons. A label that names a site
+ * ("Track at fedex.com") gets no link unless the link goes to that site: the label must not say one place and go another.
+ */
+export function messageLines(m: Pick<MailMessage, "text" | "links">): { text: string; link?: { href: string; host: string } }[] {
+  const byText = new Map<string, { href: string; host: string }>();
+  for (const b of m.links ?? []) {
+    const link = httpsLink(b.url);
+    const named = /\b[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}\b/i.exec(b.text)?.[0].toLowerCase();
+    if (!link || byText.has(b.text) || (named && link.host !== named && !link.host.endsWith(`.${named}`))) continue;
+    byText.set(b.text, link);
+  }
+  return m.text.split("\n").map((text) => {
+    const link = byText.get(text.trim());
+    return link ? { text, link } : { text };
+  });
 }
 
 /** "Mon, Nov 17": a day heading between messages, shown when the day changes. */

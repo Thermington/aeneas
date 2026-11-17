@@ -13,6 +13,25 @@ export interface Cleaned {
   text: string;
   /** The end still looks like a signature: the local model may shorten it. */
   unsure: boolean;
+  /** An automated message's action buttons ("Track my shipment"): a line of `text` that is each label, and its https link. */
+  links?: MailLink[];
+}
+
+/** A line of an automated message that is a button: shown as a link to `url`, its host beside it. */
+export interface MailLink { text: string; url: string }
+
+/** At most this many links per message. */
+export const LINKS_MAX = 3;
+/** A button label worth keeping as a link: a short call to act on this message, not navigation ("Your Orders", "Visit our store"). */
+const ACTION_LINK = /^(track|view|see|manage|pay|download|open|join|confirm|review|complete|get|check|start|rsvp|accept|reschedule|cancel)\b/i;
+
+/** `url` when it is a link the screen may show: https, a host, no spaces or control characters, at most 2000 characters. */
+export function safeLink(url: string): string | null {
+  if (url.length > 2000 || /[\s\u0000-\u001f]/.test(url)) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname && !u.username && !u.password ? u.toString() : null;
+  } catch { return null; }
 }
 
 /** Lines longer than this are never a greeting, sign-off or marker, so no pattern is tried on them. */
@@ -25,7 +44,7 @@ const SHORT = 200;
  * The rules' version. Kept with each hub's mail: when it changes, kept mail is fetched again and cleaned by the new
  * rules (the original is not kept, so it cannot be cleaned again in place).
  */
-export const CLEAN_VERSION = 5;
+export const CLEAN_VERSION = 6;
 
 /** `On Tue, 4 Nov 2026 at 09:12, Alex <alex@example.com> wrote:` (Apple Mail, Gmail and most others). */
 const ON_WROTE = /^on\b.{0,240}\bwrote:$/i;
@@ -163,19 +182,54 @@ const UPDATE_NOISE = /^((click here to )?view (this e-?mail )?(it )?(in|as) (a |
  * line and the label just above one ("Your Orders" / https://…), links inside sentences, view-in-browser lines, survey
  * scales and image names go, as do the greeting and the footer. What is left is only the sender's lines, in order.
  */
-function cleanUpdate(all: string[]): string[] {
+function cleanUpdate(all: string[]): { lines: string[]; links: MailLink[] } {
   const out: string[] = [];
+  const links: MailLink[] = [];
+  /** The link in a line that is only a link: `https://…`, `( https://… )`. */
+  const urlOf = (l: string) => /https?:\/\/[^\s)>\]]{1,2000}/i.exec(l)?.[0] ?? "";
   for (let i = 0; i < all.length; i++) {
+    const inline = /[([<]\s*(https?:\/\/[^\s)>\]]{1,2000})\s*[)\]>]\s*$/i.exec(all[i])?.[1] ?? "";
     const l = all[i].replace(/[([<]\s*https?:\/\/[^\s)>\]]{1,2000}\s*[)\]>]/gi, "").replace(/\bhttps?:\/\/\S{40,2000}/gi, "").replace(/\s{2,}/g, " ").trim();
     if (URL_ONLY.test(all[i]) || (l.length > SHORT ? false : UPDATE_NOISE.test(l))) continue;
-    // A label with its link on the next line (blank lines between allowed): navigation, not the message.
+    // A label with its link on the next line (blank lines between allowed), or after it in brackets: a button. A call to
+    // act on this message ("Track my shipment") stays, as a link; anything else is navigation and goes.
     let n = i + 1;
     while (n < all.length && all[n] === "") n++;
-    if (l && l.length <= 40 && l.split(/\s+/).length <= 5 && n < all.length && URL_ONLY.test(all[n])) continue;
+    const next = n < all.length && URL_ONLY.test(all[n]) ? urlOf(all[n]) : "";
+    const url = inline || next;
+    if (url && l && l.length <= 40 && l.split(/\s+/).length <= 6) {
+      const safe = safeLink(url);
+      if (safe && ACTION_LINK.test(l) && links.length < LINKS_MAX && !links.some((x) => x.text === l)) { links.push({ text: l, url: safe }); out.push(l); }
+      continue;
+    }
     if (l === "" && all[i] !== "") continue; // a line that was only links
     out.push(l);
   }
-  return trimBlank(out);
+  return { lines: trimBlank(out), links };
+}
+
+/** A line as compared for repeats: case, spaces and end punctuation aside. */
+const norm = (l: string) => l.toLowerCase().replace(/\s+/g, " ").replace(/[\s.,!:;]+$/, "").trim();
+
+/**
+ * An automated message's lines without what says nothing new: separator lines, a line repeated further down (the last
+ * copy stays: headings repeat what the message then says), the sender's own name alone ("Shop"), and a short line the
+ * subject already says ("Order 1234").
+ */
+function withoutRepeats(body: string[], subject: string, names: string[]): string[] {
+  const subj = norm(subject);
+  const sender = new Set(names.map(norm).filter(Boolean));
+  const seenLater = new Set<string>();
+  const out: string[] = [];
+  for (let i = body.length - 1; i >= 0; i--) {
+    const l = body[i];
+    if (l === "") { out.push(l); continue; }
+    const k = norm(l);
+    if (/^[-_=*~]{3,}$/.test(l) || seenLater.has(k) || sender.has(k) || (subj && k.split(" ").length <= 6 && k.length >= 4 && subj.includes(k))) continue;
+    seenLater.add(k);
+    out.push(l);
+  }
+  return trimBlank(out.reverse());
 }
 
 /** At most this many lines of signature after a sign-off (blank lines not counted): name, title, company, phones, address, links. */
@@ -260,14 +314,15 @@ function forwardedBody(all: string[]): string[] | null {
  * `automated`: a mail a system sent (a shipping notice, an alert, a newsletter): its links, navigation and footer go
  * too, and it is always `unsure`, so the local model may pick its lines that matter (a summary of the sender's lines).
  */
-export function cleanMail(text: string, opts: { names?: string[]; automated?: boolean } = {}): Cleaned {
+export function cleanMail(text: string, opts: { names?: string[]; automated?: boolean; subject?: string } = {}): Cleaned {
   let all = lines(text);
   if (!all.length) return { text: "", unsure: false };
   // 0. Forwarded with no words of its own: the forwarded message is the one to clean (one level).
   const fwd = forwardedBody(all);
   if (fwd) all = fwd;
   if (opts.automated) {
-    let body = cleanUpdate(all);
+    const update = cleanUpdate(all);
+    let body = update.lines;
     // In a system's mail, everything from its copyright line down is footer, whatever follows it.
     const copyright = body.findIndex((l, i) => i > 0 && l.length <= 600 && /^(©|\(c\)\s|copyright\b)|\ball rights reserved\b/i.test(l));
     if (copyright > 0) body = trimBlank(body.slice(0, copyright));
@@ -278,8 +333,13 @@ export function cleanMail(text: string, opts: { names?: string[]; automated?: bo
     const lead = body.slice(0, 6).map((l, i) => [l, i] as const).filter(([l]) => l !== "").slice(0, 3);
     const greet = lead.find(([l]) => isGreeting(l));
     if (greet && body.length > 1) body = trimBlank([...body.slice(0, greet[1]), ...body.slice(greet[1] + 1)]);
+    const fresh = withoutRepeats(body, opts.subject ?? "", opts.names ?? []);
+    if (fresh.length) body = fresh;
     if (!body.length) body = all;
-    return { text: join(body), unsure: true };
+    // Only links whose button line is still there.
+    const kept = new Set(body);
+    const links = update.links.filter((x) => kept.has(x.text));
+    return { text: join(body), unsure: true, ...(links.length ? { links } : {}) };
   }
 
   // 1. The quoted history and everything under it.
@@ -343,10 +403,13 @@ export function pickLines(picked: unknown, text: string): string | null {
 
 const MONEY = /([$€£]\s?\d|\b\d[\d,]*\.\d{2}\b|\b\d+(\.\d+)?\s?(usd|eur|gbp|cad|aud)\b)/i;
 const WHEN = /\b(today|tonight|tomorrow|yesterday|(mon|tues|wednes|thurs|fri|satur|sun)day|(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2}|\d{1,2}\/\d{1,2}(\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}(:\d{2})?\s?(am|pm))\b/i;
-const STATUS = /\b(shipped|delivered|arriving|arrives?|out for delivery|delayed|cancel{1,2}ed|refund(ed)?|due|overdue|expir(es|ed|ing)|renew(s|ed|al)?|confirm(ed|ation)?|approved|declined|failed|payment|paid|receipt|order|deadline|reminder|appointment|booked|reservation|password|sign[- ]?in|verification|security|balance|statement|invoice|bill|(is|are|can) now|now (open|available)|ready)\b/i;
+const STATUS = /\b(shipped|shipment|package|delivery|delivered|tracking|track your|arriving|arrives?|out for delivery|delayed|cancel{1,2}ed|refund(ed)?|due|overdue|expir(es|ed|ing)|renew(s|ed|al)?|confirm(ed|ation)?|approved|declined|failed|payment|paid|receipt|order|deadline|reminder|appointment|booked|reservation|password|sign[- ]?in|verification|security|balance|statement|invoice|bill|(is|are|can) now|now (open|available)|ready)\b/i;
 const ACTION = /\b(you (must|need to|have to)|please (confirm|complete|submit|pay|review|verify|update|reply)|action required)\b/i;
 /** Help text, offers and asides that automated mail adds: never key. */
 const BOILER = /^(if you('ve| have| did| are| need| wish)?\b|for (your|everyone'?s?)\b|please (note|do not)|note:|we (may|will never|recommend)|learn more|to learn|this (e-?mail|message)|you can (also|always)|questions\??|need help|sign up|download|follow us|view related|see (more|all|details)|shop|recommended)/i;
+/** Advice and asides anywhere in a line: "a driver may contact you", "for everyone's safety", "if you've used points". */
+const BOILER_ANY = /\b(may contact you|for (your|everyone'?s?) safety|if you'?ve used|if you have (any )?questions|we('ll| will) (never|not) ask|terms (and|&) conditions apply)\b/i;
+
 /** A label whose value is on the next line: "Total" / "26.74 USD", "Order #" / "112-…". */
 const AMOUNT_LABEL = /^(total|order total|grand total|amount( due)?|balance( due)?|subtotal|you paid|charged)\b.{0,20}$/i;
 const VALUE_LABEL = /^(order|order number|confirmation|confirmation (number|code)|tracking( number)?|reference|account|invoice)\s*(#|no\.?|number)?:?$/i;
@@ -359,15 +422,25 @@ const LONE_AMOUNT = /^[$€£]?\s?\d[\d,]*(\.\d{1,2})?\s?(usd|eur|gbp|cad|aud)?$
  * left out. At most SUMMARY_MAX lines, in the message's order, every word the sender's. Null when the message is short
  * enough to show whole, or nothing stands out.
  */
-export function keyLines(text: string): string | null {
-  const ls = summaryLines(text);
-  if (ls.length <= SUMMARY_MAX) return null;
+export function keyLines(text: string, links: MailLink[] = []): string | null {
+  // Each non-blank line with the paragraph it is in, so the key lines keep the message's paragraph breaks.
+  const src: { l: string; para: number }[] = [];
+  let para = 0;
+  for (const raw of text.split("\n").slice(0, 400)) {
+    const l = raw.trim();
+    if (!l) { para++; continue; }
+    if (src.length < 80) src.push({ l, para });
+  }
+  if (src.length <= SUMMARY_MAX) return null;
+  const buttons = new Set(links.map((x) => x.text));
   const items: string[] = [];
-  for (let i = 0; i < ls.length; i++) {
-    const l = ls[i];
-    const n = ls[i + 1];
-    if (n !== undefined && ((AMOUNT_LABEL.test(l) && LONE_AMOUNT.test(n)) || (VALUE_LABEL.test(l) && n.length <= 40))) { items.push(`${l} ${n}`); i++; continue; }
+  const paras: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    const l = src[i].l;
+    const n = src[i + 1]?.l;
+    if (n !== undefined && ((AMOUNT_LABEL.test(l) && LONE_AMOUNT.test(n)) || (VALUE_LABEL.test(l) && n.length <= 40))) { items.push(`${l} ${n}`); paras.push(src[i].para); i++; continue; }
     items.push(l);
+    paras.push(src[i].para);
   }
   // A tracker: three or more short lines in a row (a few words, no digits, no sentence).
   const step = (l: string) => l.split(/\s+/).length <= 3 && !/\d/.test(l) && !/[.!?:,]$/.test(l);
@@ -379,6 +452,8 @@ export function keyLines(text: string): string | null {
     i = Math.max(j, i + 1);
   }
   const scored = items.map((l, i) => {
+    // A button to act on the message ("Track my shipment") is key; it shows as its link.
+    if (buttons.has(l)) return { l, i, s: 3 };
     if (tracker.has(i)) return { l, i, s: WHEN.test(l) ? 3 : -9 };
     if (LONE_AMOUNT.test(l) || l.length > 600) return { l, i, s: -9 };
     let s = i === 0 ? 3 : 0;
@@ -386,12 +461,16 @@ export function keyLines(text: string): string | null {
     if (WHEN.test(l)) s += 2;
     if (STATUS.test(l)) s += 2;
     if (ACTION.test(l)) s += 1;
-    if (BOILER.test(l)) s -= 3;
+    if (BOILER.test(l) || BOILER_ANY.test(l)) s -= 3;
     if (l.length > 300) s -= 2;
+    // A heading ("Items in this shipment"): a few words, no number, no sentence's end. It names what follows; it is not news.
+    if (i > 0 && l.split(/\s+/).length <= 5 && !/\d/.test(l) && !/[.!?:]$/.test(l)) s -= 2;
     return { l, i, s };
   });
   const keep = scored.filter((x) => x.s >= 2).sort((a, b) => b.s - a.s || a.i - b.i).slice(0, SUMMARY_MAX).sort((a, b) => a.i - b.i);
-  return keep.length >= 2 ? keep.map((x) => x.l).join("\n") : null;
+  if (keep.length < 2) return null;
+  // A blank line between key lines from different paragraphs, as the message had it.
+  return keep.map((x, k) => (k > 0 && paras[x.i] !== paras[keep[k - 1].i] ? `\n${x.l}` : x.l)).join("\n");
 }
 
 /** Text with every run of whitespace made one space, for comparing pieces. */

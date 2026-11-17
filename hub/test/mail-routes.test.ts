@@ -189,6 +189,24 @@ test("mail routes: new cleaning rules fetch the kept mail again and clean it by 
   } finally { done(t); }
 });
 
+test("mail routes: an automated message's button comes with it as a link, checked again on the way out", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([{ uid: 1, folder: "INBOX", at: ago(1), subject: "Shipped", from: { name: "Shop", address: "no-reply@shop.example" }, messageId: "s1@x", plain: "Your order shipped.\n\nTrack package\nhttps://shop.example/track?id=1\n\nYour Account\nhttps://shop.example/account" }]);
+    await t.api("/mail/refresh", { method: "POST" });
+    const list = await (await t.api("/mail/conversations")).json() as { conversations: { id: string }[] };
+    const get = async () => ((await (await t.api(`/mail/conversations/${list.conversations[0].id}`)).json()) as { messages: { text: string; automated: boolean; links?: { text: string; url: string }[] }[] }).messages[0];
+    const m = await get();
+    assert.equal(m.automated, true);
+    assert.equal(m.text, "Your order shipped.\n\nTrack package");
+    assert.deepEqual(m.links, [{ text: "Track package", url: "https://shop.example/track?id=1" }]);
+    // A link that is not https (written straight into the file) never reaches the screen, nor one whose line is not shown.
+    t.hub.mailDb.prepare("UPDATE messages SET links = ?").run(JSON.stringify([{ text: "Track package", url: "javascript:alert(1)" }, { text: "Gone line", url: "https://shop.example/x" }]));
+    assert.equal((await get()).links, undefined);
+  } finally { done(t); }
+});
+
 test("mail routes: a refused password shows on the mailbox, without the server's words", async () => {
   const t = makeHub();
   try {

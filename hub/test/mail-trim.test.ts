@@ -86,7 +86,7 @@ test("mail trim: an answer that adds, rewrites or drops a middle line is not use
 
 const NOTICE = "Robin, your package was shipped!\nOrdered\n\nShipped\n\nArriving today\n\nOrder #\n112-0000000-0000000\n\n* Garden hose, 50 ft\nTotal\n26.74 USD";
 /** The hub's own key lines of NOTICE, shown until the model picks. */
-const KEY = "Robin, your package was shipped!\nArriving today\nOrder # 112-0000000-0000000\nTotal 26.74 USD";
+const KEY = "Robin, your package was shipped!\n\nArriving today\n\nOrder # 112-0000000-0000000\n\nTotal 26.74 USD";
 
 test("mail trim: a system's mail is summed up by the lines the model picks, as the sender wrote them", async () => {
   const t = makeHub();

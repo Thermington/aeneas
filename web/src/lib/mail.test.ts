@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { cleanedNote, dayHeading, keepLabel, mailLink, mailPath, nameHidesAddress, peopleLine, previewLine, replyToWarning, toLine, withLabel } from "./mail";
+import { cleanedNote, dayHeading, httpsLink, keepLabel, messageLines, mailLink, mailPath, nameHidesAddress, peopleLine, previewLine, replyToWarning, toLine, withLabel } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -32,6 +32,22 @@ describe("mail screen rules", () => {
     expect(cleanedNote({ cleaned_by: "key-lines", automated: true })).toMatch(/^Key lines of an automated email/);
     expect(cleanedNote({ cleaned_by: "code", automated: false })).toBeNull();
     expect(cleanedNote({ cleaned_by: "model" })).toBeNull();
+  });
+
+  it("shows a button line as a link to its https host, and only then", () => {
+    const m = { text: "Out for delivery.\n\nTrack my shipment\nTrack at fedex.com\nPay now", links: [
+      { text: "Track my shipment", url: "https://store.shop.example/orders/1?key=x" },
+      { text: "Track at fedex.com", url: "https://evil.example/fedex" },
+      { text: "Pay now", url: "http://shop.example/pay" },
+      { text: "Not a line here", url: "https://shop.example/x" },
+    ] };
+    const lines = messageLines(m);
+    expect(lines.map((l) => l.text)).toEqual(["Out for delivery.", "", "Track my shipment", "Track at fedex.com", "Pay now"]);
+    expect(lines[2].link).toEqual({ href: "https://store.shop.example/orders/1?key=x", host: "store.shop.example" });
+    expect(lines[3].link, "the label names another site").toBeUndefined();
+    expect(lines[4].link, "not https").toBeUndefined();
+    expect(messageLines({ text: "Track at fedex.com", links: [{ text: "Track at fedex.com", url: "https://www.fedex.com/t" }] })[0].link?.host).toBe("www.fedex.com");
+    for (const bad of ["javascript:alert(1)", "https://user:pw@shop.example/", "data:text/html,x", "not a url"]) expect(httpsLink(bad), bad).toBeNull();
   });
 
   it("warns when replies would go somewhere other than the sender", () => {
@@ -82,5 +98,8 @@ describe("mail screen rules", () => {
     expect(src).not.toMatch(/dangerouslySetInnerHTML|innerHTML|renderMarkdown|insertAdjacentHTML/);
     // Every link it shows goes through mailLink, so no href comes straight from a message.
     expect(src).not.toMatch(/href=\{m\.link\}|href=\{original/);
+    // Button links come only from messageLines, which checks them.
+    // (The screen's own in-app links, #/mail…, are not from a message.)
+    expect((src.match(/href=\{[^}]+\}/g) ?? []).filter((h) => !h.startsWith("href={`#")).sort()).toEqual(["href={line.link.href}", "href={link}"]);
   });
 });

@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import type { Hub } from "./hub.js";
 import { icloudLink, icloudSource, listChatICloud, type ChatAddress, type ChatMail } from "./imports/icloud.js";
-import { CLEAN_VERSION, cleanMail, keyLines, pickLines, startOf, summaryLines } from "./mail-clean.js";
+import { CLEAN_VERSION, cleanMail, keyLines, LINKS_MAX, pickLines, safeLink, startOf, summaryLines, type MailLink } from "./mail-clean.js";
 import { mailboxLabel, mailTimeReached } from "./mail-filer.js";
 import { errCode } from "./logsafe.js";
 import { dbJobClock, scheduleDaily } from "./schedule.js";
@@ -66,6 +66,8 @@ export function openMailDb(dbPath: string): DB {
   if (!cols.includes("automated")) db.exec("ALTER TABLE messages ADD COLUMN automated INTEGER NOT NULL DEFAULT 0");
   // The whole cleaned text of an automated message shown as its key lines, for the model to pick from; cleared once it has.
   if (!cols.includes("pending_text")) db.exec("ALTER TABLE messages ADD COLUMN pending_text TEXT");
+  // An automated message's action buttons (JSON [{ text, url }], https only, at most 3), shown as links on their lines.
+  if (!cols.includes("links")) db.exec("ALTER TABLE messages ADD COLUMN links TEXT");
   return db;
 }
 
@@ -178,8 +180,8 @@ export function threadOf(db: DB, account: string, m: ChatMail): string {
 export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date = new Date(), ownerNames: string[] = []): number {
   const since = keptSince(db, now).getTime();
   const has = db.prepare("SELECT 1 FROM messages WHERE account = ? AND id = ?");
-  const insert = db.prepare(`INSERT OR IGNORE INTO messages (account, id, key, message_id, thread, at, from_name, from_address, reply_to, subject, subject_key, text, mine, cleaned_by, unsure, recipients, automated, pending_text)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT OR IGNORE INTO messages (account, id, key, message_id, thread, at, from_name, from_address, reply_to, subject, subject_key, text, mine, cleaned_by, unsure, recipients, automated, pending_text, links)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   let kept = 0;
   db.transaction(() => {
     for (const m of [...mails].sort((a, b) => a.at.getTime() - b.at.getTime())) {
@@ -188,13 +190,14 @@ export function keepMails(db: DB, account: string, mails: ChatMail[], now: Date 
       // The owner's own mail often carries no display name in From: the profile's name is the owner's signature too, so
       // their greeting and sign-off go as anyone's do (the send feature will add them back, chosen for the conversation).
       const names = m.mine ? [m.from.name, ...ownerNames].filter((n) => n.trim()) : [m.from.name];
-      const c = cleanMail(m.text, { names, automated });
+      const c = cleanMail(m.text, { names, automated, subject: m.subject });
       // An automated message shows its key lines at once, picked by the rules; the whole cleaned text waits for the model.
-      const key = automated ? keyLines(c.text) : null;
+      const key = automated ? keyLines(c.text, c.links) : null;
       kept += insert.run(account, m.id, messageKey(account, m.id), m.message_id, threadOf(db, account, m), m.at.toISOString(), m.from.name, m.from.address, m.reply_to,
         m.subject, subjectKey(m.subject), key ?? c.text, m.mine ? 1 : 0, key ? "key-lines" : "code", c.unsure ? 1 : 0,
         // Recipients only of the owner's own messages: who they wrote to. Others' recipients are not kept.
-        m.mine && m.to?.length ? JSON.stringify(m.to.slice(0, 5)) : null, automated ? 1 : 0, key ? c.text : null).changes;
+        m.mine && m.to?.length ? JSON.stringify(m.to.slice(0, 5)) : null, automated ? 1 : 0, key ? c.text : null,
+        c.links?.length ? JSON.stringify(c.links.slice(0, LINKS_MAX)) : null).changes;
     }
   }).immediate();
   return kept;
@@ -212,9 +215,26 @@ export function isKept(db: DB, account: string): (id: string) => boolean {
 /** `last_mine`: the newest message is the owner's ("You: …" in the list). */
 export interface ConversationSummary { id: string; subject: string; with: ChatAddress[]; last_at: string; count: number; preview: string; last_mine: boolean }
 /** `to`: who the owner wrote to, on the owner's own messages only. */
-export interface ChatMessage { id: string; at: string; mine: boolean; automated: boolean; from: ChatAddress; to?: ChatAddress[]; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
+export interface ChatMessage { id: string; at: string; mine: boolean; automated: boolean; from: ChatAddress; to?: ChatAddress[]; links?: MailLink[]; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
 
-type Row = { account: string; id: string; key: string; message_id: string | null; thread: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; mine: number; cleaned_by: string; recipients: string | null; automated: number };
+type Row = { account: string; id: string; key: string; message_id: string | null; thread: string; at: string; from_name: string; from_address: string; reply_to: string | null; subject: string; text: string; mine: number; cleaned_by: string; recipients: string | null; automated: number; links: string | null };
+
+/**
+ * A message's links as the screen gets them: checked again (https, a host), and only those whose button line is in the
+ * text shown (a summary may have left it out).
+ */
+function linksOf(json: string | null, text: string): { links?: MailLink[] } {
+  if (!json) return {};
+  let v: unknown;
+  try { v = JSON.parse(json); } catch { return {}; }
+  if (!Array.isArray(v)) return {};
+  const lines = new Set(text.split(/\r?\n/).map((l) => l.trim()));
+  const links = v.flatMap((x): MailLink[] => {
+    const url = typeof x?.url === "string" ? safeLink(x.url) : null;
+    return url && typeof x?.text === "string" && lines.has(x.text) ? [{ text: x.text, url }] : [];
+  }).slice(0, LINKS_MAX);
+  return links.length ? { links } : {};
+}
 
 /** The owner's message's recipients as kept, or none. */
 function recipientsOf(json: string | null): ChatAddress[] {
@@ -277,6 +297,7 @@ export function conversation(db: DB, id: string): { id: string; subject: string;
         id: r.key, at: r.at, mine: !!r.mine, automated: !!r.automated,
         from: { name: r.from_name, address: r.from_address },
         ...(to.length ? { to } : {}),
+        ...linksOf(r.links, r.text),
         ...(r.reply_to ? { reply_to: r.reply_to } : {}),
         subject: r.subject, text: r.text, cleaned_by: r.cleaned_by,
         link: icloudLink({ account: r.account, id: r.id, message_id: r.message_id ?? undefined }),
