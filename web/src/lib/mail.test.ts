@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { dayHeading, keepLabel, mailLink, mailPath, nameHidesAddress, replyToWarning, withLabel } from "./mail";
+import { cleanedNote, dayHeading, keepLabel, mailLink, mailPath, nameHidesAddress, peopleLine, previewLine, replyToWarning, toLine, withLabel } from "./mail";
 import { SCREEN_MODULE, moduleOfScreen } from "./modules";
 
 const ALEX = { name: "Alex", address: "alex@example.com" };
@@ -13,6 +13,24 @@ describe("mail screen rules", () => {
     expect(withLabel({ with: [{ name: "", address: "sam@example.com" }] })).toBe("sam@example.com");
     expect(withLabel({ with: [ALEX, { name: "Sam", address: "s@x.example" }] })).toBe("Alex and Sam");
     expect(withLabel({ with: [ALEX, ALEX, ALEX, ALEX] })).toBe("Alex, Alex and 2 more");
+  });
+
+  it("says which way a conversation went and who is in it", () => {
+    expect(previewLine({ preview: "See you at 5.", last_mine: true })).toBe("You: See you at 5.");
+    expect(previewLine({ preview: "See you at 5.", last_mine: false })).toBe("See you at 5.");
+    // An older hub sends no last_mine.
+    expect(previewLine({ preview: "See you at 5." })).toBe("See you at 5.");
+    expect(peopleLine([ALEX, { name: " ", address: "sam@example.com" }])).toBe("Alex <alex@example.com>, sam@example.com");
+    expect(toLine([ALEX, { name: "Sam", address: "s@x.example" }])).toBe("To Alex and Sam");
+    expect(toLine([])).toBeNull();
+    expect(toLine(undefined)).toBeNull();
+  });
+
+  it("says when the text is a summary or a system's mail, and nothing for a person's mail", () => {
+    expect(cleanedNote({ cleaned_by: "summary", automated: true })).toMatch(/^Summary of an automated email/);
+    expect(cleanedNote({ cleaned_by: "code", automated: true })).toMatch(/^Automated email/);
+    expect(cleanedNote({ cleaned_by: "code", automated: false })).toBeNull();
+    expect(cleanedNote({ cleaned_by: "model" })).toBeNull();
   });
 
   it("warns when replies would go somewhere other than the sender", () => {

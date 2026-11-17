@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeHub } from "./helpers.js";
 import { ACCOUNT, ago, done, EMAIL, fake, FOLDERS, linked, type Msg } from "./fake-icloud-chat.js";
-import { CHAT_MAX, chatFolders, headerValue, listChatICloud, messageIds, originalICloud, REFUSED } from "../src/imports/icloud.js";
-import { readingText } from "../src/imports/mail-text.js";
+import { CHAT_MAX, chatFolders, headerValue, isAutomated, listChatICloud, messageIds, originalICloud, REFUSED } from "../src/imports/icloud.js";
+import { looksLikeHtml, readingText } from "../src/imports/mail-text.js";
 
 test("icloud chat: reads Sent but not Junk, Trash or Drafts, every folder read-only", async () => {
   const t = makeHub();
@@ -30,7 +30,7 @@ test("icloud chat: reads Sent but not Junk, Trash or Drafts, every folder read-o
     assert.equal(seen.connects, 1);
     assert.equal(seen.logouts, 1);
     assert.deepEqual([...new Set(seen.calls)].sort(), ["connect", "download", "fetchOne", "list", "logout", "mailboxOpen", "search"]);
-    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, o: { uid: true } });
+    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence"] }, o: { uid: true } });
   } finally { done(t); }
 });
 
@@ -42,6 +42,21 @@ test("icloud chat: a message from the owner's own address is the owner's whereve
     const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
     assert.equal(mails[0].mine, true, "addresses compared without case");
     assert.equal(mails[0].from.address, EMAIL);
+  } finally { done(t); }
+});
+
+test("icloud chat: who a message went to is read only for the owner's own mail, without the owner", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    const others = [{ name: "Jordan", address: "jordan@work.example" }, { name: "Robin", address: EMAIL }];
+    fake([
+      { uid: 1, folder: "INBOX", at: ago(1), subject: "Party", from: { name: "Alex", address: "alex@example.com" }, to: others, cc: [{ address: "guest@example.com" }], plain: "8pm" },
+      { uid: 2, folder: "Sent Messages", at: ago(1), subject: "Keys", from: { name: "Robin", address: EMAIL }, to: others, cc: [{ address: "guest@example.com" }], plain: "Under the mat" },
+    ]);
+    const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.deepEqual(mails.find((m) => m.subject === "Party")!.to, [], "someone else's mail: its recipients are not read");
+    assert.deepEqual(mails.find((m) => m.subject === "Keys")!.to.map((a) => a.address), ["jordan@work.example", "guest@example.com"]);
   } finally { done(t); }
 });
 
@@ -137,4 +152,38 @@ test("icloud chat: header helpers take only what they should from hostile header
 test("mail-text: readingText keeps paragraphs, drops invisible padding, prefers the text part", () => {
   assert.equal(readingText(["One\r\n\r\n\r\n\r\nTwo​  "], ["<p>ignored</p>"]), "One\n\nTwo");
   assert.equal(readingText(["  "], ["<div>Only&nbsp;HTML</div>"]), "Only HTML");
+});
+
+test("mail-text: a text part that is really HTML is never shown as code", () => {
+  // As some senders do: the text part holds a chunk of the HTML.
+  const broken = 'Apply for aid now. <!-- Mirror link -->\n<center>\n<table role="presentation"><tr><td><a href="https://x.example/m">View online</a></td></tr></table>\n</center>\nYou can now send your form.';
+  assert.equal(looksLikeHtml(broken), true);
+  assert.equal(readingText([broken], ["<p>Apply for aid now.</p><p>You can now send your form.</p>"]), "Apply for aid now.\nYou can now send your form.", "the HTML part instead");
+  assert.ok(!/<|role=/.test(readingText([broken], [])), "or that text made plain when there is no HTML part");
+  assert.equal(looksLikeHtml("Use <br> for a line break, and <p> for a paragraph."), false, "a mail about two tags is text");
+});
+
+test("icloud chat: a mail a system sent is told from a person's", async () => {
+  const h = (s: string) => Buffer.from(s.replace(/\n/g, "\r\n"));
+  assert.equal(isAutomated(h("References: <a@x>\n"), "alex@example.com"), false);
+  assert.equal(isAutomated(h("List-Unsubscribe: <mailto:u@shop.example>\n"), "deals@shop.example"), true);
+  assert.equal(isAutomated(h("List-Id: <club.lists.example>\n"), "sam@example.com"), true);
+  assert.equal(isAutomated(h("Auto-Submitted: auto-generated\n"), "x@example.com"), true);
+  assert.equal(isAutomated(h("Auto-Submitted: no\n"), "x@example.com"), false);
+  assert.equal(isAutomated(h("Precedence: bulk\n"), "x@example.com"), true);
+  for (const a of ["no_reply@email.fieldstone.example", "noreply@aid.example", "shipment-tracking@shop.example", "do-not-reply@bank.example", "notifications@app.example"]) assert.equal(isAutomated(undefined, a), true, a);
+  for (const a of ["alex@example.com", "noreen@example.com", "replyall@example.com"]) assert.equal(isAutomated(undefined, a), false, a);
+
+  // Through the listing: the headers are read, and the owner's own mail never counts.
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([
+      { uid: 1, folder: "INBOX", at: ago(1), subject: "Shipped", from: { name: "Shop", address: "shipment-tracking@shop.example" }, plain: "Your package was shipped!" },
+      { uid: 2, folder: "INBOX", at: ago(1), subject: "Hi", from: { name: "Alex", address: "alex@example.com" }, plain: "Lunch?" },
+      { uid: 3, folder: "Sent Messages", at: ago(1), subject: "Re: Hi", from: { name: "Robin", address: EMAIL }, plain: "Sure" },
+    ]);
+    const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.deepEqual(mails.map((m) => [m.subject, m.automated]).sort(), [["Hi", false], ["Re: Hi", false], ["Shipped", true]]);
+  } finally { done(t); }
 });

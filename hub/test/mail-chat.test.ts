@@ -16,7 +16,7 @@ let uid = 0;
 /** A fetched message, with only what a test cares about set. */
 function mail(over: Partial<ChatMail> & { at: Date }): ChatMail {
   uid++;
-  return { id: `7:${uid}:INBOX`, message_id: `m${uid}@example.com`, in_reply_to: null, references: [], from: { name: "Alex", address: "alex@example.com" }, reply_to: null, subject: "Gutters", text: "Hello there.", mine: false, ...over };
+  return { id: `7:${uid}:INBOX`, message_id: `m${uid}@example.com`, in_reply_to: null, references: [], from: { name: "Alex", address: "alex@example.com" }, reply_to: null, subject: "Gutters", text: "Hello there.", mine: false, to: [], automated: false, ...over };
 }
 
 function tmpDb() {
@@ -101,6 +101,16 @@ test("mail-chat: nothing older than the kept window is kept; a shorter window de
     assert.equal(setKeepDays(db, "30"), null);
     assert.equal(setKeepDays(db, 30, NOW), 30);
     assert.equal(keepDays(db), 30);
+  } finally { done(); }
+});
+
+test("mail-chat: recipients are kept only for the owner's own messages, even when the listing hands over more", () => {
+  const { db, done } = tmpDb();
+  try {
+    const guest = { name: "Secret Guest", address: "guest@example.com" };
+    keepMails(db, ACCOUNT, [mail({ at: hoursAgo(2), to: [guest] }), mail({ at: hoursAgo(1), mine: true, to: [guest] })], NOW);
+    const kept = db.prepare("SELECT mine, recipients FROM messages ORDER BY at").all() as { mine: number; recipients: string | null }[];
+    assert.deepEqual(kept.map((r) => r.recipients === null), [true, false], "theirs: none kept; mine: kept");
   } finally { done(); }
 });
 

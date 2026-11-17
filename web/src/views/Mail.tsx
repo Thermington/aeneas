@@ -5,13 +5,17 @@ import { useMediaQuery } from "../lib/useMediaQuery";
 import { plainError } from "../lib/errors";
 import { fmtDate, fmtDateTime, fmtTime } from "../lib/time";
 import {
+  cleanedNote,
   dayHeading,
   keepLabel,
   mailLink,
   mailPath,
   nameHidesAddress,
+  peopleLine,
   personLabel,
+  previewLine,
   replyToWarning,
+  toLine,
   withLabel,
   type MailConversation,
   type MailList,
@@ -82,8 +86,10 @@ function Conversations({ list, error, openId, searching }: { list: MailList | nu
               <span className="t mail-who">{withLabel(c)}</span>
               <span className="meta">{fmtDate(c.last_at)}</span>
             </span>
+            {/* One other person: their real address too, so a name alone never stands for who it is. */}
+            {c.with.length === 1 && c.with[0].name.trim() && <span className="mail-address">{c.with[0].address}</span>}
             <span className="mail-subject">{c.subject || "(no subject)"}{c.count > 1 ? ` (${c.count})` : ""}</span>
-            <span className="snippet">{c.preview}</span>
+            <span className="snippet">{previewLine(c)}</span>
           </span>
         </a>
       ))}
@@ -154,6 +160,7 @@ function Thread({ id }: { id: string }) {
   return (
     <div className="col mail-thread">
       <h2 className="mail-thread-subject">{conv.data.subject || "(no subject)"}</h2>
+      {!!conv.data.with?.length && <div className="muted small mail-with">With {peopleLine(conv.data.with)}</div>}
       {msgs.map((m, i) => {
         const day = dayHeading(m.at, i ? msgs[i - 1].at : null);
         return (
@@ -185,6 +192,7 @@ function Bubble({ m }: { m: MailMessage }) {
   return (
     <div className={`mail-row${m.mine ? " mine" : ""}`}>
       <div className={`msg mail-bubble${m.mine ? " user" : ""}`}>
+        {m.mine && toLine(m.to) && <div className="mail-from small muted">{toLine(m.to)}</div>}
         {!m.mine && (
           <div className="mail-from small">
             <strong>{personLabel(m.from)}</strong>{" "}
@@ -194,6 +202,7 @@ function Bubble({ m }: { m: MailMessage }) {
         )}
         {nameHidesAddress(m.from) && <div className="warn small">The sender's name shows a different address than the one it came from.</div>}
         {warning && <div className="warn small" role="note">{warning}</div>}
+        {cleanedNote(m) && <div className="muted small mail-note">{cleanedNote(m)}</div>}
         {/* Plain text in a text node: React escapes it, and nothing in a mail is ever read as HTML. */}
         <div className="mail-text">{m.text}</div>
         {open && (

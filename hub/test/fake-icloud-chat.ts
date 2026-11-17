@@ -17,6 +17,9 @@ export interface Msg {
   messageId?: string;
   inReplyTo?: string;
   references?: string;
+  /** To and Cc; To is the owner unless set. */
+  to?: { name?: string; address: string }[];
+  cc?: { name?: string; address: string }[];
   plain?: string;
   html?: string;
 }
@@ -63,7 +66,7 @@ export function fake(messages: Msg[], opts: { password?: string } = {}) {
         const parts = [m.plain !== undefined ? { type: "text/plain" } : null, m.html !== undefined ? { type: "text/html" } : null].filter(Boolean) as { type: string }[];
         return {
           internalDate: m.at,
-          envelope: { date: m.at, subject: m.subject, messageId: m.messageId && `<${m.messageId}>`, inReplyTo: m.inReplyTo && `<${m.inReplyTo}>`, from: [m.from], replyTo: [m.replyTo ?? m.from] },
+          envelope: { date: m.at, subject: m.subject, messageId: m.messageId && `<${m.messageId}>`, inReplyTo: m.inReplyTo && `<${m.inReplyTo}>`, from: [m.from], replyTo: [m.replyTo ?? m.from], to: m.to ?? [{ name: "Robin", address: EMAIL }], cc: m.cc ?? [] },
           bodyStructure: parts.length === 1 ? parts[0] : { type: "multipart/alternative", childNodes: parts.map((p, i) => ({ ...p, part: String(i + 1) })) },
           ...(query.headers ? { headers: Buffer.from(m.references ? `References: ${m.references}\r\n\r\n` : "\r\n") } : {}),
         };

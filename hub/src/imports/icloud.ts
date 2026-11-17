@@ -70,7 +70,7 @@ export interface ImapPart { part?: string; type: string; disposition?: string; d
 export interface ImapAddress { name?: string; address?: string }
 export interface ImapMessage {
   internalDate?: Date | string;
-  envelope?: { date?: Date | string; subject?: string; messageId?: string; inReplyTo?: string; from?: ImapAddress[]; replyTo?: ImapAddress[] };
+  envelope?: { date?: Date | string; subject?: string; messageId?: string; inReplyTo?: string; from?: ImapAddress[]; replyTo?: ImapAddress[]; to?: ImapAddress[]; cc?: ImapAddress[] };
   bodyStructure?: ImapPart;
   /** Only the header lines asked for by name (`headers`), as the server sent them. */
   headers?: Buffer;
@@ -329,8 +329,25 @@ export async function readICloud(hub: Hub, accountKey: string, id: string): Prom
 const CHAT_SKIP_USE = new Set(["\\Junk", "\\Trash", "\\Drafts"]);
 /** At most this many new messages are fetched per mailbox per refresh, newest first; the rest come on the next. */
 export const CHAT_MAX = 300;
-/** Header lines fetched by name: the envelope already has In-Reply-To and Reply-To, but not References. */
-const CHAT_HEADERS = ["references"];
+/**
+ * Header lines fetched by name: the envelope already has In-Reply-To and Reply-To, but not References; the rest say
+ * whether a system sent the mail (a list, a notice, a newsletter).
+ */
+const CHAT_HEADERS = ["references", "list-unsubscribe", "list-id", "auto-submitted", "precedence"];
+/** Sender addresses systems use: no-reply@, notifications@, shipment-tracking@ and the like. */
+const SYSTEM_SENDER = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?|notify|alerts?|updates?|news(letter)?s?|info|marketing|mailer(-daemon)?|bounces?|account(s)?|support|billing|receipts?|orders?|shipment-tracking|auto-?confirm|digest)([._+-][^@]*)?@/i;
+
+/**
+ * Whether a system sent this mail rather than a person: it says it is a list or automatic (List-Unsubscribe, List-Id,
+ * Auto-Submitted, Precedence bulk/list/junk), or it comes from a system's kind of address. The owner's own mail never is.
+ */
+export function isAutomated(headers: Buffer | undefined, fromAddress: string): boolean {
+  if (headerValue(headers, "list-unsubscribe") || headerValue(headers, "list-id")) return true;
+  const auto = headerValue(headers, "auto-submitted").toLowerCase();
+  if (auto && auto !== "no") return true;
+  if (/^(bulk|list|junk)\b/i.test(headerValue(headers, "precedence"))) return true;
+  return SYSTEM_SENDER.test(fromAddress);
+}
 
 export interface ChatAddress { name: string; address: string }
 /** One message for the Mail screen, before cleaning. Kept only in memory; mail-chat.ts decides what is stored. */
@@ -350,6 +367,10 @@ export interface ChatMail {
   text: string;
   /** Sent by the owner: in the Sent folder, or from the mailbox's own address. */
   mine: boolean;
+  /** Who the owner wrote to (To, then Cc; not the owner), at most 5. Only for the owner's own messages: others' recipients are not kept. */
+  to: ChatAddress[];
+  /** Sent by a system (a shipping notice, an alert, a newsletter), not a person: isAutomated. */
+  automated: boolean;
 }
 
 /** The folders the Mail screen reads: every one but Junk, Trash, Drafts and ones that cannot be opened. */
@@ -381,6 +402,13 @@ function chatMail(email: string, id: string, folder: ImapFolder, msg: ImapMessag
   const from = chatAddress(env.from?.[0]);
   const replyTo = chatAddress(env.replyTo?.[0]).address;
   const at = new Date(msg.internalDate ?? env.date ?? Date.now());
+  const mine = folder.specialUse === "\\Sent" || from.address === email;
+  const to: ChatAddress[] = [];
+  if (mine) {
+    for (const a of [...(env.to ?? []), ...(env.cc ?? [])].map(chatAddress)) {
+      if (a.address && a.address !== email && !to.some((x) => x.address === a.address) && to.length < 5) to.push(a);
+    }
+  }
   return {
     id,
     at: Number.isNaN(at.getTime()) ? new Date() : at,
@@ -392,7 +420,9 @@ function chatMail(email: string, id: string, folder: ImapFolder, msg: ImapMessag
     reply_to: replyTo && replyTo !== from.address ? replyTo : null,
     subject: (env.subject ?? "").slice(0, 500),
     text,
-    mine: folder.specialUse === "\\Sent" || from.address === email,
+    mine,
+    to,
+    automated: !mine && isAutomated(msg.headers, from.address),
   };
 }
 

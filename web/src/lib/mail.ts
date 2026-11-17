@@ -4,11 +4,13 @@
  */
 
 export interface MailAddress { name: string; address: string }
-export interface MailConversationSummary { id: string; subject: string; with: MailAddress[]; last_at: string; count: number; preview: string }
+/** `with`: the other people, who wrote to you and who you wrote to. `last_mine`: the newest message is yours. */
+export interface MailConversationSummary { id: string; subject: string; with: MailAddress[]; last_at: string; count: number; preview: string; last_mine?: boolean }
 export interface MailMailbox { email: string; last_refresh: string | null; last_error: string | null }
 export interface MailList { conversations: MailConversationSummary[]; keep_days: number; choices: number[]; mailboxes: MailMailbox[] }
-export interface MailMessage { id: string; at: string; mine: boolean; from: MailAddress; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
-export interface MailConversation { id: string; subject: string; messages: MailMessage[] }
+/** `to`: who you wrote to, on your own messages. `automated`: a system sent it (a notice, a newsletter). */
+export interface MailMessage { id: string; at: string; mine: boolean; automated?: boolean; from: MailAddress; to?: MailAddress[]; reply_to?: string; subject: string; text: string; cleaned_by: string; link: string }
+export interface MailConversation { id: string; subject: string; with?: MailAddress[]; messages: MailMessage[] }
 export interface MailOriginal { id: string; at: string; from: MailAddress; reply_to: string | null; subject: string; text: string }
 export type MailRefresh = { mailboxes: ({ email: string; listed: number; kept: number } | { email: string; error: string })[] };
 
@@ -25,6 +27,27 @@ export function withLabel(c: Pick<MailConversationSummary, "with">): string {
   if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return `${names[0]}, ${names[1]} and ${names.length - 2} more`;
+}
+
+/**
+ * What a message's text is, said above it when it is not simply the sender's message: a summary the model picked,
+ * or a system's mail with its links and footer taken off. Null for a person's mail.
+ */
+export function cleanedNote(m: Pick<MailMessage, "cleaned_by" | "automated">): string | null {
+  if (m.cleaned_by === "summary") return "Summary of an automated email: the lines your model picked, as written. Show original for all of it.";
+  if (m.automated) return "Automated email, links and footer left out.";
+  return null;
+}
+
+/** The list's preview: "You: " before it when the newest message is yours, so a one-message conversation says which way it went. */
+export const previewLine = (c: Pick<MailConversationSummary, "preview" | "last_mine">) => (c.last_mine ? `You: ${c.preview}` : c.preview);
+
+/** "Jordan Lee <jordan@work.example>, sam@example.com": names with their real addresses. */
+export const peopleLine = (people: MailAddress[]) => people.map((p) => (p.name.trim() ? `${p.name.trim()} <${p.address}>` : p.address)).join(", ");
+
+/** Above your own message: "To Jordan Lee and Sam", or null when who it went to is not known. */
+export function toLine(to: MailAddress[] | undefined): string | null {
+  return to?.length ? `To ${withLabel({ with: to })}` : null;
 }
 
 /**

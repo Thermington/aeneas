@@ -144,6 +144,51 @@ test("mail routes: the assistant's tools can neither read the mail nor refresh i
   }
 });
 
+test("mail routes: a conversation of the owner's own sent mail says who it went to; others' recipients are never kept", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([
+      { uid: 1, folder: "Sent Messages", at: ago(1), subject: "Keys", from: ME, messageId: "k1@x", to: [{ name: "Jordan Lee", address: "Jordan@Work.example" }, { address: EMAIL }], cc: [{ name: "Sam", address: "sam@example.com" }], plain: "I left the keys under the mat." },
+      { uid: 2, folder: "INBOX", at: ago(1), subject: "Party", from: ALEX, messageId: "p1@x", to: [{ name: "Robin", address: EMAIL }, { name: "Secret Guest", address: "guest@example.com" }], plain: "Party at 8!" },
+    ]);
+    await t.api("/mail/refresh", { method: "POST" });
+    const list = await (await t.api("/mail/conversations")).json() as { conversations: { id: string; subject: string; with: { name: string; address: string }[]; last_mine: boolean }[] };
+    const keys = list.conversations.find((c) => c.subject === "Keys")!;
+    assert.deepEqual(keys.with, [{ name: "Jordan Lee", address: "jordan@work.example" }, { name: "Sam", address: "sam@example.com" }], "To then Cc, not the owner");
+    assert.equal(keys.last_mine, true);
+    const party = list.conversations.find((c) => c.subject === "Party")!;
+    assert.deepEqual(party.with.map((w) => w.address), [ALEX.address]);
+    assert.equal(party.last_mine, false);
+    const conv = await (await t.api(`/mail/conversations/${keys.id}`)).json() as { with: unknown[]; messages: { to?: { address: string }[] }[] };
+    assert.deepEqual(conv.messages[0].to?.map((a) => a.address), ["jordan@work.example", "sam@example.com"]);
+    assert.equal(conv.with.length, 2);
+    const kept = JSON.stringify(t.hub.mailDb.prepare("SELECT * FROM messages").all());
+    assert.ok(!kept.includes("guest@example.com"), "who else someone else's mail went to is not kept");
+    // Found by who it went to.
+    const found = await (await t.api("/mail/conversations?q=jordan")).json() as { conversations: { subject: string }[] };
+    assert.deepEqual(found.conversations.map((c) => c.subject), ["Keys"]);
+  } finally { done(t); }
+});
+
+test("mail routes: new cleaning rules fetch the kept mail again and clean it by them", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    const seen = fake(THREAD);
+    await t.api("/mail/refresh", { method: "POST" });
+    const fetched = seen.fetches.length;
+    // As a hub kept it under the rules before: another version, and a text the old rules left.
+    t.hub.mailDb.prepare("UPDATE settings SET value = '1' WHERE key = 'clean_version'").run();
+    t.hub.mailDb.prepare("UPDATE messages SET text = 'old rules text'").run();
+    await t.api("/mail/refresh", { method: "POST" });
+    assert.equal(seen.fetches.length, fetched * 2, "everything fetched again");
+    assert.ok(!JSON.stringify(t.hub.mailDb.prepare("SELECT text FROM messages").all()).includes("old rules text"));
+    await t.api("/mail/refresh", { method: "POST" });
+    assert.equal(seen.fetches.length, fetched * 2, "once only");
+  } finally { done(t); }
+});
+
 test("mail routes: a refused password shows on the mailbox, without the server's words", async () => {
   const t = makeHub();
   try {

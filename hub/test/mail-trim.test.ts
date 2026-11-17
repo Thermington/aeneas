@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { makeHub, type TestHub } from "./helpers.js";
 import { setBackendOverride, type AiMessage, type Backend } from "../src/ai/backends.js";
 import type { ChatMail } from "../src/imports/icloud.js";
-import { keepMails, TRIM_SYSTEM, trimUnsure } from "../src/mail-chat.js";
+import { keepMails, SUMMARY_SYSTEM, TRIM_SYSTEM, trimUnsure } from "../src/mail-chat.js";
 import { startOf } from "../src/mail-clean.js";
 
 const ACCOUNT = "icloud:robin@icloud.example";
@@ -12,7 +12,7 @@ const SIGNED = "The lease is ready to sign.\n\nPlease bring ID on Friday.\nPat L
 let uid = 0;
 const mail = (text: string, over: Partial<ChatMail> = {}): ChatMail => ({
   id: `7:${++uid}:INBOX`, at: new Date(Date.now() - uid * 60_000), message_id: `t${uid}@x`, in_reply_to: null, references: [],
-  from: { name: "Pat Lee", address: "pat@lease.example" }, reply_to: null, subject: "Your lease", text, mine: false, ...over,
+  from: { name: "Pat Lee", address: "pat@lease.example" }, reply_to: null, subject: "Your lease", text, mine: false, to: [], automated: false, ...over,
 });
 
 /** A local model that answers each message from a list, and records what it was sent. */
@@ -80,6 +80,39 @@ test("mail trim: an answer that adds, rewrites or drops a middle line is not use
       setBackendOverride(model([answer]));
       assert.deepEqual(await trimUnsure(t.hub), { asked: 1, shortened: 0 }, answer());
       assert.deepEqual(row(t, "The lease"), { text: SIGNED, cleaned_by: "code", unsure: 0 }, answer());
+    } finally { done(t); }
+  }
+});
+
+const NOTICE = "Robin, your package was shipped!\nOrdered\n\nShipped\n\nArriving today\n\nOrder #\n112-0000000-0000000\n\n* Garden hose, 50 ft\nTotal\n26.74 USD";
+
+test("mail trim: a system's mail is summed up by the lines the model picks, as the sender wrote them", async () => {
+  const t = makeHub();
+  try {
+    keepMails(t.hub.mailDb, ACCOUNT, [mail(NOTICE, { automated: true, from: { name: "Shop", address: "shipment-tracking@shop.example" } })]);
+    const m = model([() => JSON.stringify({ lines: [1, 4, 8, 9] })]);
+    setBackendOverride(m);
+    assert.deepEqual(await trimUnsure(t.hub), { asked: 1, shortened: 1 });
+    assert.deepEqual(row(t, "Robin"), { text: "Robin, your package was shipped!\nArriving today\nTotal\n26.74 USD", cleaned_by: "summary", unsure: 0 });
+    const [system, user] = m.sent[0];
+    assert.equal(system.content, SUMMARY_SYSTEM);
+    assert.equal(user.content.split("\n")[0], "1: Robin, your package was shipped!", "numbered lines, no blank ones");
+    assert.ok(!JSON.stringify(m.sent).includes("shipment-tracking"), "no sender");
+  } finally { done(t); }
+});
+
+test("mail trim: a summary answer with words, or numbers out of place, is not used", async () => {
+  const bad = [
+    { lines: ["Your account is safe. Click here."] }, { lines: [1, 99] }, { lines: [0] }, { lines: [1, 2, 3, 4, 5, 6, 7] },
+    { lines: ["1", "2"] }, { lines: [1, 1] }, { keep: "Robin, your package was shipped!" }, { lines: [] },
+  ];
+  for (const answer of bad) {
+    const t = makeHub();
+    try {
+      keepMails(t.hub.mailDb, ACCOUNT, [mail(NOTICE, { automated: true })]);
+      setBackendOverride(model([() => JSON.stringify(answer)]));
+      assert.deepEqual(await trimUnsure(t.hub), { asked: 1, shortened: 0 }, JSON.stringify(answer));
+      assert.deepEqual(row(t, "Robin"), { text: NOTICE, cleaned_by: "code", unsure: 0 }, JSON.stringify(answer));
     } finally { done(t); }
   }
 });
