@@ -2,14 +2,13 @@ import SwiftUI
 import PhotosUI
 import EACore
 
-/// Capture: text, tap-to-talk dictation that waits and never auto-submits, optional photo. With Music on, a hummed
-/// melody or tapped rhythm goes straight to Music as MIDI.
+/// Capture: text, tap-to-talk dictation that waits and never auto-submits, optional photo. With Music on, Hum Song
+/// sends a hummed, sung, tapped or beatboxed take straight to Music, heard as a melody and as a rhythm.
 struct CaptureView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
     @StateObject private var dictation = DictationController()
     @StateObject private var hum = HumRecorder()
-    @State private var humMode: HumMidi.Mode = .melody
     @State private var humSending = false
     /// Where the last hum went, said under the buttons; tapping it opens the idea.
     @State private var humMessage: String?
@@ -64,7 +63,10 @@ struct CaptureView: View {
                     if model.isOn(.voice) { talk }
                     if model.isOn(.music) { humButton }
                 }
-                if hum.recording { HumRecordingPanel(recorder: hum, mode: $humMode) }
+                if hum.recording {
+                    HumRecordingPanel(recorder: hum)
+                    Text(Hum.hint).font(.footnote).foregroundStyle(.secondary)
+                }
                 humStatus
 
                 if let e = dictation.error { Text(e).font(.footnote).foregroundStyle(.red) }
@@ -156,9 +158,13 @@ struct CaptureView: View {
                 if humSending {
                     ProgressView().frame(height: 40)
                 } else {
-                    Image(systemName: hum.recording ? "stop.circle.fill" : "music.mic").font(.system(size: 34))
+                    if hum.recording {
+                        Image(systemName: "stop.circle.fill").font(.system(size: 34))
+                    } else {
+                        HumSongGlyph().frame(width: 38, height: 38)
+                    }
                 }
-                Text(hum.recording ? "Stop" : "Hum").font(.subheadline)
+                Text(hum.recording ? "Stop" : Hum.buttonTitle).font(.subheadline)
             }
             .frame(width: 96)
             .frame(minHeight: 84)
@@ -167,7 +173,7 @@ struct CaptureView: View {
         }
         .buttonStyle(.plain)
         .disabled(humSending)
-        .accessibilityLabel(hum.recording ? "Stop and send the hum to Music" : "Hum a melody or tap a rhythm for Music")
+        .accessibilityLabel(hum.recording ? "Stop and send the hum to Music" : "Hum Song: hum, sing, tap or beatbox for Music")
     }
 
     @ViewBuilder private var humStatus: some View {
@@ -206,13 +212,12 @@ struct CaptureView: View {
         humError = nil
         humMessage = nil
         humIdeaId = nil
-        let mode = humMode
         do {
-            let e = try await Hum.send(take, mode: mode, bpm: nil, fromCapture: true, engine: engine)
+            let e = try await Hum.send(take, bpm: nil, fromCapture: true, engine: engine)
             humSending = false
             humUnsent = nil
             humIdeaId = e.id
-            let first = "\(e.humMidi?.kindName ?? HumMidi(mode: mode, state: .listening).kindName): in Music"
+            let first = "\(e.humMidi?.kindName ?? HumMidi(state: .listening).kindName): in Music"
             humMessage = first
             for _ in 0..<60 {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

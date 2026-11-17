@@ -111,6 +111,11 @@ const hz = (p: number) => 440 * 2 ** ((p - 69) / 12);
  * hiss (42). Returns a function that stops it.
  */
 export function playNotes(notes: HumNote[], mode: "melody" | "rhythm"): () => void {
+  return playParts([{ notes, mode }]);
+}
+
+/** Several parts at once on one clock: a hum's melody and its rhythm together. Returns a function that stops them. */
+export function playParts(parts: { notes: HumNote[]; mode: "melody" | "rhythm" }[]): () => void {
   const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
   const out = ctx.createGain();
@@ -125,7 +130,7 @@ export function playNotes(notes: HumNote[], mode: "melody" | "rhythm"): () => vo
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     return noise;
   };
-  for (const n of notes) {
+  for (const { notes, mode } of parts) for (const n of notes) {
     const at = t0 + n.s;
     const vel = n.v / 127;
     const g = ctx.createGain();

@@ -1,0 +1,20 @@
+#!/bin/bash
+# Before a push from this checkout, run what CI runs (tools/check-all.mjs), with the Apple tests when the pushed
+# commits change Apple code (as CI's apple.yml does). Set once per checkout with
+#   git config core.hooksPath tools/githooks
+# A failure stops the push. git push --no-verify skips the check, for an emergency only.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+ZERO=0000000000000000000000000000000000000000
+any="" apple=""
+while read -r _lref lsha _rref rsha; do
+  [ "$lsha" = "$ZERO" ] && continue # deleting a branch or tag
+  any=1
+  if [ "$rsha" = "$ZERO" ] || ! git cat-file -e "$rsha^{commit}" 2>/dev/null; then
+    apple=1 # a new branch or tag, or the remote's commit is not here: check everything
+  elif [ -n "$(git diff --name-only "$rsha" "$lsha" -- apple .github/workflows/apple.yml)" ]; then
+    apple=1
+  fi
+done
+[ -n "$any" ] || exit 0
+exec node "$ROOT/tools/check-all.mjs" ${apple:+--apple}

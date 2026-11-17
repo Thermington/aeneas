@@ -13,6 +13,8 @@ permissions:
   attestations: write
 jobs:
   release:
+    # Releases are made in the public repository only.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

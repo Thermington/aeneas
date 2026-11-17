@@ -27,8 +27,25 @@ export const MUSIC_TYPES: MusicType[] = ["riff", "progression", "lyric", "song"]
 export type MusicStatus = "idea" | "wip" | "done";
 /** A note heard in a hum (hub hum.ts): MIDI pitch, start and length in seconds from the first note, velocity. */
 export type HumNote = { p: number; s: number; d: number; v: number };
-export type HumMidi = { source: "hum"; mode: "melody" | "rhythm"; state: "listening" | "done" | "failed"; error?: string; seconds?: number; notes: HumNote[] };
-export type MusicF = { title: string; type: MusicType; body?: string; key?: string; bpm?: number; time_sig?: string; tuning?: string; status: MusicStatus; tags?: string[]; project_id?: string; audio_ref?: string; midi?: HumMidi };
+/** A hum's notes (hub hum.ts). Since 2026-11-17 it is heard both ways, `melody` and `rhythm`; `mode` and `notes` repeat one for older apps, and are all an older idea has. */
+export type HumMidi = { source: "hum"; mode: "melody" | "rhythm"; state: "listening" | "done" | "failed"; error?: string; seconds?: number; notes: HumNote[]; melody?: HumNote[]; rhythm?: HumNote[] };
+/** What the owner keeps of a hum. */
+export type HumUse = "melody" | "rhythm" | "both";
+export type MusicF = { title: string; type: MusicType; body?: string; key?: string; bpm?: number; time_sig?: string; tuning?: string; status: MusicStatus; tags?: string[]; project_id?: string; audio_ref?: string; midi?: HumMidi; hum_use?: HumUse };
+
+/** A hum's two hearings; an idea heard before both were kept has one, under `mode` and `notes`. */
+export function humLayers(m: HumMidi | undefined): { melody: HumNote[]; rhythm: HumNote[] } {
+  if (!m) return { melody: [], rhythm: [] };
+  if (m.melody || m.rhythm) return { melody: m.melody ?? [], rhythm: m.rhythm ?? [] };
+  return m.mode === "rhythm" ? { melody: [], rhythm: m.notes ?? [] } : { melody: m.notes ?? [], rhythm: [] };
+}
+
+/** What the owner keeps: their choice, else both when both have notes, else the one that has (as the hub decides). */
+export function humUse(chosen: unknown, layers: { melody: HumNote[]; rhythm: HumNote[] }): HumUse {
+  if (chosen === "melody" || chosen === "rhythm" || chosen === "both") return chosen;
+  if (layers.melody.length && layers.rhythm.length) return "both";
+  return layers.rhythm.length ? "rhythm" : "melody";
+}
 export type QuizResult = "right" | "wrong" | "revealed";
 export type QuizItem = { q: string; a: string; hint: string; topic: string; asked_at?: string; result?: QuizResult };
 export type QuizF = { date: string; items: QuizItem[]; source_sessions?: string[]; completed_at?: string };

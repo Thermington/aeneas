@@ -10,11 +10,13 @@ public struct WatchHum: Codable, Equatable, Sendable {
     public static let maxSeconds: TimeInterval = 60
 
     public var id: String
+    /// From before the hub heard every hum both ways, when the Watch asked for a melody or a rhythm. Still sent and
+    /// read, so a recording queued by an older Watch app goes through; the hub no longer uses it.
     public var mode: HumMidi.Mode
     public var seconds: Double
     public var recordedAt: Date
 
-    public init(id: String = UUID().uuidString.lowercased(), mode: HumMidi.Mode, seconds: Double, recordedAt: Date = Date()) {
+    public init(id: String = UUID().uuidString.lowercased(), mode: HumMidi.Mode = .melody, seconds: Double, recordedAt: Date = Date()) {
         self.id = id; self.mode = mode; self.seconds = seconds; self.recordedAt = recordedAt
     }
 
@@ -64,7 +66,7 @@ public struct WatchHumResult: Equatable, Sendable {
 
     public var id: String
     public var state: State
-    /// The idea's title once the hub has heard it: "Melody in A minor, 120 BPM".
+    /// The idea's title once the hub has heard it: "Song in A minor, 120 BPM".
     public var title: String?
     public var error: String?
     public var ideaId: String?
@@ -90,7 +92,7 @@ public struct WatchHumResult: Equatable, Sendable {
         self.init(id: id, state: state, title: message["title"] as? String, error: message["error"] as? String, ideaId: message["idea_id"] as? String)
     }
 
-    /// The line the Watch shows: "Melody in A minor, 120 BPM: in Music".
+    /// The line the Watch shows: "Song in A minor, 120 BPM: in Music".
     public var line: String {
         switch state {
         case .waiting:

@@ -149,11 +149,22 @@ struct LauncherView: View {
     @Environment(\.widgetFamily) private var family
     var title: String
     var icon: String
+    /// Drawn instead of the symbol where a shape can go (Hum Song's note and drum, which SF Symbols lacks). Inline text
+    /// takes only a symbol, so `icon` stays for it.
+    var glyph: Bool = false
+
+    @ViewBuilder private func symbol(_ size: CGFloat) -> some View {
+        if glyph {
+            HumSongGlyph().frame(width: size, height: size)
+        } else {
+            Image(systemName: icon)
+        }
+    }
 
     var body: some View {
         switch family {
         case .accessoryCorner:
-            Image(systemName: icon).font(.title3.weight(.semibold))
+            symbol(22).font(.title3.weight(.semibold))
                 .widgetLabel(title)
         case .accessoryInline:
             Label(title, systemImage: icon)
@@ -161,7 +172,7 @@ struct LauncherView: View {
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: 1) {
-                    Image(systemName: icon).font(.title3)
+                    symbol(20).font(.title3)
                     Text(title).font(.system(size: 10, weight: .semibold)).minimumScaleFactor(0.7).lineLimit(1)
                 }
                 .padding(.horizontal, 2)
@@ -181,9 +192,9 @@ private struct LauncherProvider: TimelineProvider {
     }
 }
 
-private func launcher(kind: String, title: String, icon: String, url: String, name: String, description: String) -> some WidgetConfiguration {
+private func launcher(kind: String, title: String, icon: String, glyph: Bool = false, url: String, name: String, description: String) -> some WidgetConfiguration {
     StaticConfiguration(kind: kind, provider: LauncherProvider()) { _ in
-        LauncherView(title: title, icon: icon)
+        LauncherView(title: title, icon: icon, glyph: glyph)
             .containerBackground(.fill.tertiary, for: .widget)
             .widgetURL(URL(string: url))
     }
@@ -208,11 +219,11 @@ struct CaptureComplication: Widget {
     }
 }
 
-/// One tap to hum a melody (Music).
+/// One tap to hum, sing, tap or beatbox (Music): the hub hears it as a melody and as a rhythm.
 struct HumComplication: Widget {
     var body: some WidgetConfiguration {
-        launcher(kind: "com.gnomecannon.everythingapp.watch.hum", title: "Hum", icon: "music.note",
-                 url: "everythingapp://hum", name: "Hum", description: "Hum a melody; it goes to Music on your hub.")
+        launcher(kind: "com.gnomecannon.everythingapp.watch.hum", title: "Hum Song", icon: "music.note", glyph: true,
+                 url: "everythingapp://hum", name: "Hum Song", description: "Hum, sing, tap or beatbox; it goes to Music on your hub.")
     }
 }
 

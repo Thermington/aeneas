@@ -34,10 +34,10 @@ struct WatchVoiceView: View {
                         // Double tap (finger and thumb, Series 9 and later) captures without touching the screen.
                         tile("Capture", "mic.fill", .orange) { start(.capture) }
                             .handGestureShortcut(.primaryAction)
-                        // A tune caught on the go goes to Music through the iPhone; hidden while Music is off.
+                        // A tune or a beat caught on the go goes to Music through the iPhone, heard as a melody and as a
+                        // rhythm; hidden while Music is off.
                         if model.isOn(.music) {
-                            tile("Hum melody", "music.note", .pink) { record(.melody) }
-                            tile("Hum rhythm", "metronome.fill", .purple) { record(.rhythm) }
+                            tile("Hum Song", icon: AnyView(HumSongGlyph().frame(width: 24, height: 24)), .pink) { record() }
                         }
                     }
                 }
@@ -108,9 +108,13 @@ struct WatchVoiceView: View {
     }
 
     private func tile(_ title: String, _ icon: String, _ tint: Color, action: @escaping () -> Void) -> some View {
+        tile(title, icon: AnyView(Image(systemName: icon).font(.title3)), tint, action: action)
+    }
+
+    private func tile(_ title: String, icon: AnyView, _ tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Image(systemName: icon).font(.title3)
+                icon
                 Text(title).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity, minHeight: 64)
@@ -139,10 +143,10 @@ struct WatchVoiceView: View {
                 await capture(text)
             }
         case .hum:
-            // The Hum complication: a melody, straight away. Hum is part of Music.
+            // The Hum Song complication: recording straight away. Hum is part of Music.
             guard model.isOn(.music) else { show("Hum is part of Music, which is off. Turn it on in Settings, Modules."); WKHaptic.failure(); return }
             guard !hum.recorder.recording else { return }
-            record(.melody)
+            record()
         }
     }
 
@@ -177,9 +181,8 @@ struct WatchVoiceView: View {
         }
     }
 
-    private func record(_ mode: HumMidi.Mode) {
+    private func record() {
         guard model.isOn(.voice) else { show(Self.voiceOff); WKHaptic.failure(); return }
-        hum.mode = mode
         Task { await hum.record() }
     }
 }

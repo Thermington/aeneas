@@ -8,6 +8,7 @@ import { fmtDateTime } from "../lib/time";
 import { useDictation } from "../lib/useDictation";
 import { useEntity } from "../sync/hooks";
 import { HumRecorder } from "../components/Hum";
+import { HumSongIcon } from "../components/HumSongIcon";
 import { useModules } from "../lib/modules";
 import { engine } from "../sync/engine";
 import { DictationNotice } from "../components/DictationNotice";
@@ -105,7 +106,7 @@ export function Capture({ mini = false }: { mini?: boolean }) {
         )}
         {on("music") && engine.client && (
           <button type="button" className={humming ? "on" : ""} aria-pressed={humming} onClick={() => { setHumming(!humming); setHummed(null); }}>
-            Hum
+            <HumSongIcon /> Hum Song
           </button>
         )}
         {mini && isTauri && (
@@ -122,7 +123,7 @@ export function Capture({ mini = false }: { mini?: boolean }) {
       )}
       {hummed && (
         <div className="card small" style={{ marginTop: 12 }}>
-          {hummed.fields.midi && (hummed.fields.midi as { mode: string }).mode === "rhythm" ? "Tapped rhythm" : "Hummed melody"}: in <a href={`#/music/${hummed.id}`}>Music</a>. The notes and the MIDI file are there in a few seconds.
+          Hummed song: in <a href={`#/music/${hummed.id}`}>Music</a>. The melody, the rhythm and the MIDI file are there in a few seconds.
         </div>
       )}
       <DictationNotice d={dictation} />

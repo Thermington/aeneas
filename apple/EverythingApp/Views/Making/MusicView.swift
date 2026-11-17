@@ -1,13 +1,12 @@
 import SwiftUI
 import EACore
 
-/// Hum a melody or tap a rhythm and the hub writes it as MIDI; or one line in, one idea out. Music projects (projects
+/// Hum Song: hum, sing, tap or beatbox and the hub writes it as MIDI, as a melody and as a rhythm; or one line in, one idea out. Music projects (projects
 /// with area music), then ideas grouped by type with a status filter. Cheat sheets and checklists are notes in Music/Reference.
 struct MusicView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
     @StateObject private var recorder = HumRecorder()
-    @State private var humMode: HumMidi.Mode = .melody
     @State private var humTempo = ""
     @State private var humSending = false
     @State private var humError: String?
@@ -139,10 +138,9 @@ struct MusicView: View {
         .onDisappear { recorder.cancel() }
     }
 
-    /// Melody or rhythm, an optional tempo, and Record. After Stop the take goes to the hub and its idea opens.
+    /// An optional tempo and Hum Song. After Stop the take goes to the hub and its idea opens.
     private var hum: some View {
         SwiftUI.Section {
-            HumModePicker(mode: $humMode)
             LabeledContent("Tempo") {
                 TextField("found by the hub", text: $humTempo)
                     .multilineTextAlignment(.trailing)
@@ -157,7 +155,9 @@ struct MusicView: View {
                     Text("Sending the recording").foregroundStyle(.secondary)
                 }
             } else {
-                Button { Task { await recorder.start() } } label: { Label("Record", systemImage: "record.circle") }
+                Button { Task { await recorder.start() } } label: {
+                    Label { Text(Hum.buttonTitle) } icon: { HumSongGlyph().frame(width: 22, height: 22) }
+                }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
             }
@@ -178,11 +178,9 @@ struct MusicView: View {
                 }
             }
         } header: {
-            Text("Hum")
+            Text(Hum.buttonTitle)
         } footer: {
-            Text(humMode == .melody
-                 ? "Hum or sing one note at a time, up to 2 minutes. The hub writes the notes as MIDI for your DAW."
-                 : "Tap, clap or beatbox, up to 2 minutes. Low hits become kick, sharp ones snare, hissy ones hat.")
+            Text(Hum.hint)
         }
     }
 
@@ -197,7 +195,7 @@ struct MusicView: View {
         defer { humSending = false }
         do {
             guard let c = engine.client else { throw HubError.notConfigured }
-            let e = try await c.uploadHum(fileURL: url, mode: humMode, bpm: Hum.tempo(humTempo), fromCapture: false, clientId: clientId)
+            let e = try await c.uploadHum(fileURL: url, bpm: Hum.tempo(humTempo), fromCapture: false, clientId: clientId)
             await engine.absorb(e)
             engine.moment(.create, kind: .music_idea)
             try? FileManager.default.removeItem(at: url)

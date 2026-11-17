@@ -13,6 +13,9 @@ on:
       - '.github/workflows/apple.yml'
 jobs:
   apple:
+    # Only in the public repository, where Actions minutes are free. The private one is checked before each push from
+    # the development Mac instead (tools/check-all.mjs, run by tools/githooks/pre-push).
+    if: ${{ !github.event.repository.private }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:

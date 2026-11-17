@@ -5,6 +5,9 @@ on:
   pull_request:
 jobs:
   node:
+    # Only in the public repository, where Actions minutes are free. The private one is checked before each push from
+    # the development Mac instead (tools/check-all.mjs, run by tools/githooks/pre-push).
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,5 +26,7 @@ jobs:
       # Release rule 5: every npm package and Rust crate under an allowed open-source license (cargo is on the runner).
       - run: node --test tools/license-check/check.test.mjs
       - run: npm run license-check
+      # The check run before each push reads its steps from this file.
+      - run: node --test tools/check-all.test.mjs
       # The public copy has no tools/public-release (it is on the private list), so the scanner's tests run only here.
       - run: test ! -f tools/public-release/scan.test.mjs || node --test tools/public-release/scan.test.mjs

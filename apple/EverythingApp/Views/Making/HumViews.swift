@@ -7,6 +7,11 @@ import AppKit
 
 /// Hum to MIDI on the device: sending a take, and the files handed to a DAW.
 enum Hum {
+    /// The button and tile that start a recording.
+    static let buttonTitle = "Hum Song"
+    /// Under the recorder: what to do, and what happens after.
+    static let hint = "Hum, sing, tap or beatbox, up to 2 minutes. The hub hears it as a melody and as a rhythm; choose Melody, Rhythm or Both afterwards."
+
     /// A typed tempo the hub takes (30 to 300 BPM), or nil to let the hub find it.
     static func tempo(_ text: String) -> Double? {
         let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
@@ -29,9 +34,9 @@ enum Hum {
 
     /// Sends a take; the idea comes back at once and goes in the local store, and the recording leaves the device.
     @MainActor
-    static func send(_ take: HumTake, mode: HumMidi.Mode, bpm: Double?, fromCapture: Bool, engine: SyncEngine) async throws -> Entity {
+    static func send(_ take: HumTake, bpm: Double?, fromCapture: Bool, engine: SyncEngine) async throws -> Entity {
         guard let c = engine.client else { throw HubError.notConfigured }
-        let e = try await c.uploadHum(fileURL: take.url, mode: mode, bpm: bpm, fromCapture: fromCapture, clientId: "app-\(take.id.uuidString.lowercased())")
+        let e = try await c.uploadHum(fileURL: take.url, bpm: bpm, fromCapture: fromCapture, clientId: "app-\(take.id.uuidString.lowercased())")
         await engine.absorb(e)
         engine.moment(.create, kind: .music_idea)
         try? FileManager.default.removeItem(at: take.url)
@@ -39,10 +44,11 @@ enum Hum {
     }
 
     /// Writes the hub's .mid to a temporary file named from the hub's name, one folder per idea and timing.
-    static func write(_ m: HumMIDIFile, ideaId: String, grid: Bool) throws -> URL {
+    static func write(_ m: HumMIDIFile, ideaId: String, grid: Bool, use: HumMidi.Use) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("hum-midi", isDirectory: true)
             .appendingPathComponent(ideaId, isDirectory: true)
+            .appendingPathComponent(use.rawValue, isDirectory: true)
             .appendingPathComponent(grid ? "grid" : "hummed", isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -63,16 +69,12 @@ enum Hum {
 
 // MARK: recording
 
-/// Elapsed time, a live level meter, Stop and Cancel. With `mode` it also lets you pick melody or rhythm while you record.
+/// Elapsed time, a live level meter, Stop and Cancel.
 struct HumRecordingPanel: View {
     @ObservedObject var recorder: HumRecorder
-    var mode: Binding<HumMidi.Mode>? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let mode {
-                HumModePicker(mode: mode)
-            }
             HStack(spacing: 8) {
                 Circle().fill(.red).frame(width: 10, height: 10)
                 Text("Recording").font(.subheadline.weight(.semibold))
@@ -94,12 +96,13 @@ struct HumRecordingPanel: View {
     }
 }
 
-struct HumModePicker: View {
-    @Binding var mode: HumMidi.Mode
+/// Melody, Rhythm or Both, for an idea the hub has heard; only the choices with notes are offered.
+struct HumUsePicker: View {
+    var midi: HumMidi
+    @Binding var use: HumMidi.Use
     var body: some View {
-        Picker("Hum", selection: $mode) {
-            Text("Melody").tag(HumMidi.Mode.melody)
-            Text("Rhythm").tag(HumMidi.Mode.rhythm)
+        Picker("Use", selection: $use) {
+            ForEach(HumMidi.Use.allCases.filter { midi.has($0) }, id: \.self) { Text($0.name).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -129,27 +132,36 @@ struct HumLevelMeter: View {
 
 // MARK: piano roll
 
-/// Time runs left to right and pitch upward; a rhythm has three lanes, hat, snare and kick. Beat lines follow the
-/// tempo, counted from the first note as the hub's grid is. Long hums scroll sideways.
+/// Time runs left to right and pitch upward: the melody's pitches, then three drum lanes (hat, snare, kick) for the
+/// rhythm, as the layers in use have them. Beat lines follow the tempo, counted from the first note as the hub's grid
+/// is. Long hums scroll sideways.
 struct HumRoll: View {
     var midi: HumMidi
+    var use: HumMidi.Use
     var bpm: Double?
     @ObservedObject var player: HumPlayer
     @State private var available: CGFloat = 300
 
-    private let height: CGFloat = 200
     private let gutter: CGFloat = 40
 
-    private var rows: [Int] {
-        midi.mode == .rhythm ? HumMidi.Drum.allCases.map(\.rawValue) : Array(midi.pitchRange.reversed())
+    private enum Row: Hashable { case pitch(Int), drum(HumMidi.Drum) }
+
+    private var rows: [Row] {
+        var r: [Row] = []
+        if !midi.melody(in: use).isEmpty { r += midi.pitchRange.reversed().map { .pitch($0) } }
+        if !midi.rhythm(in: use).isEmpty { r += HumMidi.Drum.allCases.map { .drum($0) } }
+        return r
     }
 
-    private func row(of p: Int) -> Int {
-        midi.mode == .rhythm ? HumMidi.drum(p).rawValue : midi.pitchRange.upperBound - p
+    /// The melody keeps its height; the drum lanes add a little under it.
+    private var height: CGFloat {
+        let m: CGFloat = midi.melody(in: use).isEmpty ? 0 : 200
+        let d: CGFloat = midi.rhythm(in: use).isEmpty ? 0 : (m > 0 ? 66 : 200)
+        return max(80, m + d)
     }
 
     var body: some View {
-        let length = max(midi.length, 1)
+        let length = max(midi.length(in: use), 1)
         // About 50 points a second, never narrower than the screen, and capped so a long hum stays a light drawing.
         let width = min(max(available, CGFloat(length) * 50), 2400)
         HStack(spacing: 0) {
@@ -173,31 +185,56 @@ struct HumRoll: View {
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement()
-        .accessibilityLabel(midi.mode == .rhythm ? "Rhythm lanes" : "Piano roll")
-        .accessibilityValue(midi.countText)
+        .accessibilityLabel(use == .rhythm ? "Rhythm lanes" : use == .melody ? "Piano roll" : "Piano roll and rhythm lanes")
+        .accessibilityValue(midi.countText(in: use))
     }
 
-    private func rowHeight(_ size: CGSize) -> CGFloat { size.height / CGFloat(max(1, rows.count)) }
+    /// Each melody row and each drum lane gets its share of its own part of the height.
+    private func frames(_ size: CGSize) -> [Row: CGRect] {
+        let pitches = rows.filter { if case .pitch = $0 { return true } else { return false } }
+        let drums = rows.filter { if case .drum = $0 { return true } else { return false } }
+        let drumPart = drums.isEmpty ? 0 : (pitches.isEmpty ? size.height : size.height * 66 / 266)
+        let melodyPart = size.height - drumPart
+        var out: [Row: CGRect] = [:]
+        let ph = melodyPart / CGFloat(max(1, pitches.count))
+        for (i, r) in pitches.enumerated() { out[r] = CGRect(x: 0, y: CGFloat(i) * ph, width: size.width, height: ph) }
+        let dh = drumPart / CGFloat(max(1, drums.count))
+        for (i, r) in drums.enumerated() { out[r] = CGRect(x: 0, y: melodyPart + CGFloat(i) * dh, width: size.width, height: dh) }
+        return out
+    }
 
     private func drawLabels(_ ctx: inout GraphicsContext, _ size: CGSize) {
-        let h = rowHeight(size)
-        for (i, p) in rows.enumerated() {
+        let f = frames(size)
+        let pitchCount = rows.filter { if case .pitch = $0 { return true } else { return false } }.count
+        for r in rows {
+            guard let box = f[r] else { continue }
             let label: String?
-            if midi.mode == .rhythm { label = HumMidi.Drum(rawValue: p)?.name }
-            else { label = p % 12 == 0 || rows.count <= 16 ? HumMidi.noteName(p) : nil }
+            switch r {
+            case .drum(let d): label = d.name
+            case .pitch(let p): label = p % 12 == 0 || pitchCount <= 16 ? HumMidi.noteName(p) : nil
+            }
             guard let label else { continue }
-            ctx.draw(Text(label).font(.system(size: min(11, max(8, h * 0.8)))).foregroundColor(.secondary),
-                     at: CGPoint(x: 4, y: CGFloat(i) * h + h / 2), anchor: .leading)
+            ctx.draw(Text(label).font(.system(size: min(11, max(8, box.height * 0.8)))).foregroundColor(.secondary),
+                     at: CGPoint(x: 4, y: box.midY), anchor: .leading)
         }
     }
 
     private func drawNotes(_ ctx: inout GraphicsContext, _ size: CGSize, length: Double) {
-        let h = rowHeight(size)
+        let f = frames(size)
         let perSecond = size.width / CGFloat(length)
         // Black keys and every other drum lane are shaded, so a row is easy to follow across.
-        for (i, p) in rows.enumerated() {
-            let shaded = midi.mode == .rhythm ? i % 2 == 1 : [1, 3, 6, 8, 10].contains(p % 12)
-            if shaded { ctx.fill(Path(CGRect(x: 0, y: CGFloat(i) * h, width: size.width, height: h)), with: .color(.secondary.opacity(0.08))) }
+        for r in rows {
+            guard let box = f[r] else { continue }
+            let shaded: Bool
+            switch r {
+            case .drum(let d): shaded = d.rawValue % 2 == 1
+            case .pitch(let p): shaded = [1, 3, 6, 8, 10].contains(p % 12)
+            }
+            if shaded { ctx.fill(Path(box), with: .color(.secondary.opacity(0.08))) }
+        }
+        // A line between the melody and the drums.
+        if let firstDrum = f[.drum(.hat)], firstDrum.minY > 0 {
+            ctx.fill(Path(CGRect(x: 0, y: firstDrum.minY - 0.5, width: size.width, height: 1)), with: .color(.secondary.opacity(0.4)))
         }
         if let bpm, bpm > 0 {
             let beat = 60 / bpm
@@ -211,20 +248,23 @@ struct HumRoll: View {
                 t = Double(n) * beat
             }
         }
-        for note in midi.notes {
+        func draw(_ note: HumMidi.Note, _ row: Row, minWidth: CGFloat) {
+            guard let box = f[row] else { return }
             let x = CGFloat(note.s) * perSecond
-            let w = max(midi.mode == .rhythm ? 5 : 3, CGFloat(note.d) * perSecond - 1)
-            let y = CGFloat(row(of: note.p)) * h
-            let rect = CGRect(x: x, y: y + 1, width: w, height: max(2, h - 2))
-            ctx.fill(Path(roundedRect: rect, cornerRadius: min(3, h / 3)), with: .color(Color.accentColor.opacity(0.45 + 0.55 * Double(note.v) / 127)))
+            let w = max(minWidth, CGFloat(note.d) * perSecond - 1)
+            let rect = CGRect(x: x, y: box.minY + 1, width: w, height: max(2, box.height - 2))
+            ctx.fill(Path(roundedRect: rect, cornerRadius: min(3, box.height / 3)), with: .color(Color.accentColor.opacity(0.45 + 0.55 * Double(note.v) / 127)))
         }
+        for note in midi.melody(in: use) { draw(note, .pitch(note.p), minWidth: 3) }
+        for note in midi.rhythm(in: use) { draw(note, .drum(HumMidi.drum(note.p)), minWidth: 5) }
     }
 }
 
 // MARK: a hummed idea
 
-/// What a music idea made from a hum shows: Listening until the notes arrive (or why it failed), then the piano
-/// roll, playing, the MIDI file for a DAW, and hearing the recording again as the other mode or at a set tempo.
+/// What a music idea made from a hum shows: Listening until the notes arrive (or why it failed), then Melody, Rhythm
+/// or Both, the piano roll and drum lanes, playing, the MIDI file for a DAW, and hearing the recording again at a set
+/// tempo.
 struct HumIdeaSections: View {
     @EnvironmentObject var engine: SyncEngine
     var idea: Entity
@@ -245,12 +285,22 @@ struct HumIdeaSections: View {
     @State private var busy = false
     @State private var error: String?
 
-    private var heard: Bool { midi.state == .done && !midi.notes.isEmpty }
+    private var heard: Bool { midi.state == .done && midi.heard }
     private var bpm: Double? { idea.number("bpm") }
+    /// Melody, Rhythm or Both: the owner's choice when it has notes, else both or the one heard.
+    private var use: HumMidi.Use { midi.use(idea.string("hum_use")) }
 
-    /// The hub's file follows the notes, the timing choice, the title (its name) and the tempo.
+    /// The hub's file follows the notes, the layers in use, the timing choice, the title (its name) and the tempo.
     private var fileKey: String {
-        "\(idea.id)|\(grid)|\(idea.field_ts["midi"] ?? "")|\(idea.str("title"))|\(bpm.map { Making.num($0) } ?? "")|\(fileTry)"
+        "\(idea.id)|\(use.rawValue)|\(grid)|\(idea.field_ts["midi"] ?? "")|\(idea.str("title"))|\(bpm.map { Making.num($0) } ?? "")|\(fileTry)"
+    }
+
+    /// Kept like any other field of the idea: it syncs, and waits in the outbox while the hub is out of reach.
+    private var useBinding: Binding<HumMidi.Use> {
+        Binding(get: { use }, set: { u in
+            player.stop()
+            Task { _ = await engine.update(idea.id, fields: ["hum_use": .string(u.rawValue)]) }
+        })
     }
 
     var body: some View {
@@ -282,10 +332,6 @@ struct HumIdeaSections: View {
 
         if midi.state != .listening {
             SwiftUI.Section {
-                Button { Task { await rehear(mode: midi.mode == .melody ? .rhythm : .melody, bpm: Hum.tempo(tempo)) } } label: {
-                    Label(midi.mode == .melody ? "Hear again as rhythm" : "Hear again as melody", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(busy)
                 LabeledContent("Tempo") {
                     HStack(spacing: 8) {
                         TextField(bpm.map { Making.num($0) } ?? "BPM", text: $tempo)
@@ -293,7 +339,7 @@ struct HumIdeaSections: View {
                             .font(.body.monospaced())
                             .numericKeyboard()
                             .frame(maxWidth: 90)
-                        Button("Hear again") { Task { await rehear(mode: nil, bpm: Hum.tempo(tempo)) } }
+                        Button("Hear again") { Task { await rehear(bpm: Hum.tempo(tempo)) } }
                             .buttonStyle(.borderless)
                             .disabled(busy || Hum.tempo(tempo) == nil)
                     }
@@ -311,9 +357,7 @@ struct HumIdeaSections: View {
             ProgressView()
             VStack(alignment: .leading, spacing: 2) {
                 Text("Listening")
-                Text(midi.mode == .rhythm
-                     ? "The hub is finding the hits. This takes a few seconds."
-                     : "The hub is hearing the notes. This takes about \(Int(((midi.seconds ?? 10) * 1.2).rounded(.up)) + 3) seconds.")
+                Text("The hub is hearing the notes and the hits. This takes about \(Int(((midi.seconds ?? 10) * 1.2).rounded(.up)) + 3) seconds.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -330,17 +374,18 @@ struct HumIdeaSections: View {
 
     private var notes: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HumRoll(midi: midi, bpm: bpm, player: player)
+            if midi.has(.both) { HumUsePicker(midi: midi, use: useBinding) }
+            HumRoll(midi: midi, use: use, bpm: bpm, player: player)
             HStack(spacing: 14) {
-                if midi.mode == .melody, let k = idea.string("key"), !k.isEmpty { Text(k) }
+                if use != .rhythm, let k = idea.string("key"), !k.isEmpty { Text(k) }
                 if let b = bpm { Text("\(Making.num(b)) BPM") }
-                Text(midi.countText)
+                Text(midi.countText(in: use))
             }
             .font(.callout.monospaced())
             .foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Button {
-                    if player.playing == .notes { player.stop() } else { player.playNotes(midi) }
+                    if player.playing == .notes { player.stop() } else { player.playNotes(midi, use: use) }
                 } label: {
                     Label(player.playing == .notes ? "Stop" : "Play", systemImage: player.playing == .notes ? "stop.fill" : "play.fill")
                 }
@@ -397,7 +442,7 @@ struct HumIdeaSections: View {
         // A list row that scrolls back into view starts this again; the file it has is still right.
         if fileKeyDone == fileKey, file != nil { return }
         let key = fileKey
-        let made = "\(idea.id)|\(grid)|\(idea.field_ts["midi"] ?? "")"
+        let made = "\(idea.id)|\(use.rawValue)|\(grid)|\(idea.field_ts["midi"] ?? "")"
         let sameNotes = fileFor == made
         if !sameNotes { file = nil }
         fileError = nil
@@ -407,9 +452,9 @@ struct HumIdeaSections: View {
         }
         guard let c = engine.client else { fileError = "Connect to the hub to get the MIDI file."; return }
         do {
-            let m = try await c.humMIDI(idea.id, grid: grid)
+            let m = try await c.humMIDI(idea.id, grid: grid, use: use)
             if Task.isCancelled { return }
-            file = try Hum.write(m, ideaId: idea.id, grid: grid)
+            file = try Hum.write(m, ideaId: idea.id, grid: grid, use: use)
             fileFor = made
             fileKeyDone = key
         } catch {
@@ -429,14 +474,14 @@ struct HumIdeaSections: View {
         if let d = recording { player.playRecording(d) }
     }
 
-    private func rehear(mode: HumMidi.Mode?, bpm: Double?) async {
+    private func rehear(bpm: Double?) async {
         guard let c = engine.client else { error = "Connect to the hub to hear it again."; return }
         busy = true
         defer { busy = false }
         error = nil
         player.stop()
         do {
-            let e = try await c.rehearHum(idea.id, mode: mode, bpm: bpm)
+            let e = try await c.rehearHum(idea.id, bpm: bpm)
             await engine.absorb(e)
             tempo = ""
         } catch {

@@ -11,6 +11,7 @@ import EACore
 ///   -EAReferenceTest YES         open the Reference screen
 ///   -EAReferenceQuery <words>    open the Reference screen searching for the words
 ///   -EAReferenceOpen <book>/<path>  open the Reference screen with that page in the reader
+///   -EAHumSample YES             put a hummed song (melody and rhythm) on the device and open it
 @MainActor
 enum DebugHooks {
     static func applyLaunchArguments(_ model: AppModel) async {
@@ -20,6 +21,24 @@ enum DebugHooks {
         // The link a QR scan or the camera opens, without the system's "Open in Aeneas?" tap (automated tests).
         if let s = d.string(forKey: "EASetupURL"), let url = URL(string: s) { model.handle(url: url) }
         referenceRequests(model)
+        if d.bool(forKey: "EAHumSample") { await humSample(model) }
+    }
+
+    /// A hummed idea as the hub leaves it after hearing it both ways, for screenshots of Melody, Rhythm and Both.
+    static func humSample(_ model: AppModel) async {
+        let id = "0f9e8d7c-6b5a-4321-8fed-00000000b001"
+        let melody = [(57, 0.0, 0.5), (60, 0.5, 0.5), (64, 1.0, 0.75), (62, 1.75, 0.25), (60, 2.0, 0.5), (57, 2.5, 1.0), (55, 3.5, 0.5)]
+            .map { #"{"p":\#($0.0),"s":\#($0.1),"d":\#($0.2),"v":96}"# }.joined(separator: ",")
+        var hits: [String] = []
+        for beat in 0..<8 {
+            let t = Double(beat) * 0.5
+            hits.append(#"{"p":\#(beat % 2 == 0 ? 36 : 38),"s":\#(t),"d":0.125,"v":110}"#)
+            hits.append(#"{"p":42,"s":\#(t + 0.25),"d":0.125,"v":60}"#)
+        }
+        let json = #"{"id":"\#(id)","kind":"music_idea","space":"personal","created_at":"2026-11-17T20:00:00.000Z","updated_at":"2026-11-17T20:00:05.000Z","deleted_at":null,"fields":{"title":"Song in A minor, 120 BPM","type":"riff","body":"","status":"idea","tags":["hummed"],"key":"A minor","bpm":120,"audio_ref":"hum:\#(id)","midi":{"source":"hum","state":"done","seconds":4.2,"mode":"melody","notes":[\#(melody)],"melody":[\#(melody)],"rhythm":[\#(hits.joined(separator: ","))]}},"field_ts":{}}"#
+        guard let e = try? JSONCoding.decode(Entity.self, from: json) else { return }
+        await model.engine.absorb(e)
+        model.open(itemId: id)
     }
 
     /// Reference screenshots from a shell (`xcrun simctl launch booted <bundle id> -EAReferenceOpen <book>/<path>`).

@@ -338,6 +338,8 @@ export const ProcedureFields = z.object({
   project_id: z.string().optional(),
 });
 
+const HumNote = z.object({ p: z.number().int().min(0).max(127), s: z.number().min(0), d: z.number().min(0), v: z.number().int().min(1).max(127) });
+
 export const MusicIdeaFields = z.object({
   title: z.string(),
   type: z.enum(["riff", "progression", "lyric", "song", "template", "setting", "reference"]),
@@ -355,9 +357,15 @@ export const MusicIdeaFields = z.object({
   /** The tempo given with a hum, kept so a hearing interrupted by a restart is done again the same way. */
   hum_bpm_given: z.number().optional(),
   /**
-   * Notes heard in a hummed melody or a tapped rhythm (hub hum.ts): each `p` MIDI pitch (36 kick, 38 snare, 42 hat
-   * for a rhythm), `s` start and `d` length in seconds from the first note, `v` velocity. `state` is listening until
-   * the hub has heard it. `GET /music/<id>/midi` makes the .mid file from these.
+   * Which of a hum's two hearings the owner keeps: the melody, the rhythm or both (since 2026-11-17). Absent: both
+   * when both have notes, else the one that has.
+   */
+  hum_use: z.enum(["melody", "rhythm", "both"]).optional(),
+  /**
+   * Notes heard in a hum (hub hum.ts): each `p` MIDI pitch (36 kick, 38 snare, 42 hat in the rhythm), `s` start and
+   * `d` length in seconds from the first note of either hearing, `v` velocity. Since 2026-11-17 every hum is heard
+   * both ways, as `melody` and `rhythm` (either may be empty); `mode` and `notes` repeat one of them for apps from
+   * before then. `state` is listening until the hub has heard it. `GET /music/<id>/midi` makes the .mid file.
    */
   midi: z.object({
     source: z.enum(["hum"]).default("hum"),
@@ -367,7 +375,9 @@ export const MusicIdeaFields = z.object({
     seconds: z.number().optional(),
     /** The hearing these notes came from: a result that comes back after a newer hearing started is dropped. */
     job: z.string().optional(),
-    notes: z.array(z.object({ p: z.number().int().min(0).max(127), s: z.number().min(0), d: z.number().min(0), v: z.number().int().min(1).max(127) })).max(5000).default([]),
+    notes: z.array(HumNote).max(5000).default([]),
+    melody: z.array(HumNote).max(5000).optional(),
+    rhythm: z.array(HumNote).max(5000).optional(),
   }).optional(),
 });
 

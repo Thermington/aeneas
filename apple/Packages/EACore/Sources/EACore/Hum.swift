@@ -1,10 +1,25 @@
 import Foundation
 
-/// `fields.midi` of a music idea made from a hum (hub `hum.ts`): the notes the hub heard in a hummed melody or a
-/// tapped rhythm. `state` is `listening` until the hub has heard it; the notes, tempo, key and title then arrive by sync.
+/// `fields.midi` of a music idea made from a hum (hub `hum.ts`): the hub hears every recording twice, as a melody
+/// (`melody`, notes) and as a rhythm (`rhythm`, kick, snare and hat hits), and the owner picks which to use afterwards
+/// (`fields.hum_use`). `state` is `listening` until the hub has heard it; the notes, tempo, key and title then arrive
+/// by sync. `mode` and `notes` are what hubs before both layers sent (one of the two), still written for older apps.
 public struct HumMidi: Codable, Equatable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Sendable {
         case melody, rhythm
+    }
+
+    /// Which layers a hummed idea plays, draws and exports (`fields.hum_use`).
+    public enum Use: String, Codable, CaseIterable, Sendable {
+        case melody, rhythm, both
+
+        public var name: String {
+            switch self {
+            case .melody: return "Melody"
+            case .rhythm: return "Rhythm"
+            case .both: return "Both"
+            }
+        }
     }
 
     public enum State: String, Codable, Sendable {
@@ -57,12 +72,20 @@ public struct HumMidi: Codable, Equatable, Sendable {
     public var error: String?
     public var seconds: Double?
     public var notes: [Note]
+    /// The recording heard as a melody: empty when no notes were heard (a tapped rhythm, mostly).
+    public var melody: [Note]
+    /// The recording heard as a rhythm: kick 36, snare 38 and hat 42 hits; empty when none were heard.
+    public var rhythm: [Note]
 
-    public init(source: String = "hum", mode: Mode, state: State, error: String? = nil, seconds: Double? = nil, notes: [Note] = []) {
+    /// `melody` and `rhythm` left out: the layer `mode` names gets `notes`, as a hub before both layers sent it.
+    public init(source: String = "hum", mode: Mode = .melody, state: State, error: String? = nil, seconds: Double? = nil, notes: [Note] = [],
+                melody: [Note]? = nil, rhythm: [Note]? = nil) {
         self.source = source; self.mode = mode; self.state = state; self.error = error; self.seconds = seconds; self.notes = notes
+        self.melody = melody ?? (mode == .melody ? notes : [])
+        self.rhythm = rhythm ?? (mode == .rhythm ? notes : [])
     }
 
-    enum CodingKeys: String, CodingKey { case source, mode, state, error, seconds, notes }
+    enum CodingKeys: String, CodingKey { case source, mode, state, error, seconds, notes, melody, rhythm }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -71,22 +94,65 @@ public struct HumMidi: Codable, Equatable, Sendable {
         error = try? c.decodeIfPresent(String.self, forKey: .error)
         seconds = try? c.decodeIfPresent(Double.self, forKey: .seconds)
         // A malformed note is left out; the rest still show.
-        notes = (try? c.decodeIfPresent([Lenient<Note>].self, forKey: .notes))?.compactMap(\.value) ?? []
+        let notes = (try? c.decodeIfPresent([Lenient<Note>].self, forKey: .notes))?.compactMap(\.value) ?? []
+        self.notes = notes
+        let mode = self.mode
+        // An idea heard before both layers has only `notes`, in the layer `mode` names.
+        func layer(_ key: CodingKeys, _ m: Mode) -> [Note] {
+            if let l = try? c.decodeIfPresent([Lenient<Note>].self, forKey: key) { return l.compactMap(\.value) }
+            return mode == m ? notes : []
+        }
+        melody = layer(.melody, .melody)
+        rhythm = layer(.rhythm, .rhythm)
         // A state from a newer hub reads as done when there are notes to show, else as still listening.
-        state = (try? c.decodeIfPresent(String.self, forKey: .state)).flatMap(State.init(rawValue:)) ?? (notes.isEmpty ? .listening : .done)
+        let any = !(notes.isEmpty && melody.isEmpty && rhythm.isEmpty)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)).flatMap(State.init(rawValue:)) ?? (any ? .done : .listening)
     }
 
-    /// Where the last note ends, in seconds.
-    public var length: Double { notes.map { $0.s + $0.d }.max() ?? 0 }
+    /// Whether a choice has notes to play: Both needs both layers.
+    public func has(_ u: Use) -> Bool {
+        switch u {
+        case .melody: return !melody.isEmpty
+        case .rhythm: return !rhythm.isEmpty
+        case .both: return !melody.isEmpty && !rhythm.isEmpty
+        }
+    }
 
-    /// "24 notes" or "16 hits".
-    public var countText: String {
-        let word = mode == .rhythm ? "hit" : "note"
-        return notes.count == 1 ? "1 \(word)" : "\(notes.count) \(word)s"
+    /// With no choice made: both when both were heard, else the one that was.
+    public var defaultUse: Use { has(.both) ? .both : has(.melody) ? .melody : .rhythm }
+
+    /// The owner's choice (`fields.hum_use`) when it has notes, else `defaultUse`, as the hub reads it for the file.
+    public func use(_ chosen: String?) -> Use {
+        if let u = chosen.flatMap(Use.init(rawValue:)), has(u) { return u }
+        return defaultUse
+    }
+
+    /// The melody's notes for a choice that plays it, else none; the same for the rhythm.
+    public func melody(in u: Use) -> [Note] { u == .rhythm ? [] : melody }
+    public func rhythm(in u: Use) -> [Note] { u == .melody ? [] : rhythm }
+
+    /// Something to show: notes in either layer.
+    public var heard: Bool { !melody.isEmpty || !rhythm.isEmpty }
+
+    /// Where the last note ends, in seconds.
+    public var length: Double { length(in: .both) }
+
+    public func length(in u: Use) -> Double { (melody(in: u) + rhythm(in: u)).map { $0.s + $0.d }.max() ?? 0 }
+
+    /// "24 notes", "16 hits" or "24 notes, 16 hits".
+    public var countText: String { countText(in: defaultUse) }
+
+    public func countText(in u: Use) -> String {
+        func count(_ n: Int, _ word: String) -> String { n == 1 ? "1 \(word)" : "\(n) \(word)s" }
+        switch u {
+        case .melody: return count(melody.count, "note")
+        case .rhythm: return count(rhythm.count, "hit")
+        case .both: return "\(count(melody.count, "note")), \(count(rhythm.count, "hit"))"
+        }
     }
 
     /// What the app calls it before the hub names it.
-    public var kindName: String { mode == .rhythm ? "Tapped rhythm" : "Hummed melody" }
+    public var kindName: String { "Hummed song" }
 
     public static func drum(_ pitch: Int) -> Drum {
         if pitch <= 37 { return .kick }
@@ -96,7 +162,7 @@ public struct HumMidi: Codable, Equatable, Sendable {
 
     /// The pitches a piano roll shows, low to high: the notes with two semitones either side, at least an octave.
     public var pitchRange: ClosedRange<Int> {
-        guard let lo = notes.map(\.p).min(), let hi = notes.map(\.p).max() else { return 57...72 }
+        guard let lo = melody.map(\.p).min(), let hi = melody.map(\.p).max() else { return 57...72 }
         var a = lo - 2, b = hi + 2
         while b - a < 12 { a -= 1; if b - a < 12 { b += 1 } }
         a = max(0, a); b = min(127, b)
@@ -111,7 +177,10 @@ public struct HumMidi: Codable, Equatable, Sendable {
 
     /// A format 0 MIDI file of the notes for playing on this device, at 120 BPM so one second is 960 ticks and the
     /// timing stays as heard. The hub's `GET /music/<id>/midi` makes the file for a DAW, at the idea's own tempo.
-    public func playbackMIDIFile(channel: UInt8 = 0) -> Data {
+    public func playbackMIDIFile(channel: UInt8 = 0) -> Data { Self.playbackMIDIFile(melody, channel: channel) }
+
+    /// The same for any notes (the melody of the layers in use).
+    public static func playbackMIDIFile(_ notes: [Note], channel: UInt8 = 0) -> Data {
         let perSecond = 960.0
         // Note offs sort before note ons at the same tick, so a repeated pitch is not cut short.
         var events: [(tick: Int, order: Int, bytes: [UInt8])] = []
@@ -199,6 +268,9 @@ extension Entity {
         guard kind == .music_idea, let v = fields["midi"], case .object = v else { return nil }
         return try? JSONCoding.typed(HumMidi.self, from: v)
     }
+
+    /// The layers a hummed idea uses: the owner's choice (`hum_use`) when it has notes, else both or the one heard.
+    public var humUse: HumMidi.Use? { humMidi.map { $0.use(string("hum_use")) } }
 }
 
 /// Short drum sounds made from scratch for playing a tapped rhythm on the device: a low sine thump for the kick, a

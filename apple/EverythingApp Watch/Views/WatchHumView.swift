@@ -5,7 +5,8 @@ import EACore
 /// One hum on its way from the wrist, as the Watch last heard of it.
 struct WatchHumStatus: Codable, Identifiable, Equatable {
     var id: String
-    var mode: HumMidi.Mode
+    /// Saved by Watch apps from before every hum was heard both ways; read and no longer shown.
+    var mode: HumMidi.Mode?
     var seconds: Double
     var at: Date
     /// 0 sent or waiting for the iPhone, 1 the iPhone has it, then `WatchHumResult.State.rank`.
@@ -23,7 +24,6 @@ struct WatchHumStatus: Codable, Identifiable, Equatable {
 @MainActor
 final class WatchHumModel: ObservableObject {
     let recorder = HumRecorder(limit: WatchHum.maxSeconds)
-    @Published var mode: HumMidi.Mode = .melody
     @Published private(set) var recent: [WatchHumStatus]
     @Published var problem: String?
     private var subs: Set<AnyCancellable> = []
@@ -50,7 +50,7 @@ final class WatchHumModel: ObservableObject {
 
     private func send(_ take: HumTake) {
         recorder.finished = nil
-        let hum = WatchHum(mode: mode, seconds: take.seconds)
+        let hum = WatchHum(seconds: take.seconds)
         let reachable = WatchLink.shared.isReachable
         do {
             try WatchLink.shared.queueHum(hum, file: take.url)
@@ -60,7 +60,7 @@ final class WatchHumModel: ObservableObject {
             WKHaptic.failure()
             return
         }
-        recent.insert(WatchHumStatus(id: hum.id, mode: hum.mode, seconds: hum.seconds, at: hum.recordedAt, step: 0,
+        recent.insert(WatchHumStatus(id: hum.id, seconds: hum.seconds, at: hum.recordedAt, step: 0,
                                      line: reachable ? "Sent to your iPhone" : "Waiting for your iPhone"), at: 0)
         save()
     }
@@ -102,7 +102,7 @@ struct WatchHumRecordingPanel: View {
         VStack(spacing: 8) {
             HStack(spacing: 4) {
                 Circle().fill(.red).frame(width: 7, height: 7)
-                Text(hum.mode == .melody ? "Hum a tune" : "Tap or beatbox a rhythm").font(.caption2).foregroundStyle(.secondary)
+                Text("Hum, sing, tap or beatbox").font(.caption2).foregroundStyle(.secondary)
             }
             Text("\(Self.clock(hum.recorder.elapsed)) of \(Self.clock(WatchHum.maxSeconds))")
                 .font(.title3.monospacedDigit())
@@ -141,7 +141,7 @@ struct WatchHumRow: View {
                 .foregroundStyle(status.failed ? Color.orange : status.finished ? Color.green : Color.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(StyleGuard.dashes(status.line)).font(.footnote).fixedSize(horizontal: false, vertical: true)
-                Text("\(status.mode == .melody ? "Melody" : "Rhythm"), \(WatchHumRecordingPanel.clock(status.seconds)), \(status.at.formatted(date: .omitted, time: .shortened))")
+                Text("Song, \(WatchHumRecordingPanel.clock(status.seconds)), \(status.at.formatted(date: .omitted, time: .shortened))")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

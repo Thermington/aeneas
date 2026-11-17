@@ -74,7 +74,7 @@ final class WatchHumRelay {
                 continue
             }
             do {
-                let idea = try await client.uploadHum(fileURL: queue.audioURL(id), mode: e.hum.mode, fromCapture: true, clientId: id)
+                let idea = try await client.uploadHum(fileURL: queue.audioURL(id), fromCapture: true, clientId: id)
                 await engine.absorb(idea)
                 queue.markSent(id, ideaId: idea.id)
                 let r = WatchHumResult.heard(idea, humId: id)

@@ -57,7 +57,8 @@ final class HumTests: XCTestCase {
         XCTAssertEqual(m.state, .listening)
         XCTAssertEqual(m.seconds, 7.5)
         XCTAssertTrue(m.notes.isEmpty)
-        XCTAssertEqual(m.kindName, "Hummed melody")
+        XCTAssertEqual(m.kindName, "Hummed song")
+        XCTAssertTrue(m.melody.isEmpty && m.rhythm.isEmpty)
         XCTAssertEqual(try e.decode(MusicIdeaFields.self).midi, m)
     }
 
@@ -85,6 +86,58 @@ final class HumTests: XCTestCase {
         XCTAssertEqual(f?.error, "no hits were heard; tap or clap closer to the microphone")
     }
 
+    func testBothLayersDecodeAndTheChoiceFollowsWhatWasHeard() throws {
+        let e = try JSONCoding.decode(Entity.self, from: idea(fields: #"{"title":"Song in A minor, 120 BPM","type":"riff","key":"A minor","bpm":120,"midi":{"source":"hum","state":"done","seconds":4,"mode":"melody","notes":[{"p":57,"s":0,"d":0.5,"v":90}],"melody":[{"p":57,"s":0,"d":0.5,"v":90},{"p":60,"s":0.5,"d":0.5,"v":90}],"rhythm":[{"p":36,"s":0,"d":0.125,"v":110},{"p":38,"s":0.5,"d":0.125,"v":100},{"p":42,"s":1.75,"d":0.125,"v":60}]}}"#))
+        let m = try XCTUnwrap(e.humMidi)
+        XCTAssertEqual(m.melody.count, 2)
+        XCTAssertEqual(m.rhythm.count, 3)
+        XCTAssertEqual(m.notes.count, 1, "the older apps' copy is kept as sent")
+        XCTAssertEqual(m.defaultUse, .both)
+        XCTAssertEqual(e.humUse, .both)
+        XCTAssertEqual(m.countText, "2 notes, 3 hits")
+        XCTAssertEqual(m.countText(in: .melody), "2 notes")
+        XCTAssertEqual(m.countText(in: .rhythm), "3 hits")
+        XCTAssertEqual(m.length(in: .melody), 1)
+        XCTAssertEqual(m.length(in: .both), 1.875)
+        XCTAssertEqual(m.melody(in: .rhythm), [])
+        XCTAssertEqual(m.rhythm(in: .melody), [])
+        XCTAssertEqual(m.pitchRange, 52...64, "from the melody only, not the drum pitches")
+        XCTAssertEqual(m.use("rhythm"), .rhythm)
+        XCTAssertEqual(m.use("melody"), .melody)
+        XCTAssertEqual(m.use("nonsense"), .both)
+        XCTAssertEqual(m.use(nil), .both)
+
+        // The owner's choice, kept on the idea.
+        var chosen = e
+        chosen.fields["hum_use"] = .string("rhythm")
+        XCTAssertEqual(chosen.humUse, .rhythm)
+
+        // A tapped rhythm: no melody, so Melody and Both are not offered and a stale choice falls back to Rhythm.
+        let tapped = try XCTUnwrap(JSONCoding.decode(Entity.self, from: idea(fields: #"{"title":"Song, 96 BPM","type":"riff","hum_use":"both","midi":{"state":"done","mode":"rhythm","notes":[{"p":36,"s":0,"d":0.1,"v":100}],"melody":[],"rhythm":[{"p":36,"s":0,"d":0.1,"v":100}]}}"#)).humMidi)
+        XCTAssertFalse(tapped.has(.melody))
+        XCTAssertFalse(tapped.has(.both))
+        XCTAssertEqual(tapped.defaultUse, .rhythm)
+        XCTAssertEqual(tapped.use("both"), .rhythm)
+        XCTAssertEqual(tapped.use("melody"), .rhythm)
+    }
+
+    func testIdeasHeardBeforeBothLayersGetTheirOneLayer() throws {
+        let melody = try XCTUnwrap(JSONCoding.decode(Entity.self, from: idea(fields: #"{"title":"Melody, 120 BPM","type":"riff","midi":{"mode":"melody","state":"done","notes":[{"p":60,"s":0,"d":0.5,"v":90}]}}"#)).humMidi)
+        XCTAssertEqual(melody.melody.count, 1)
+        XCTAssertTrue(melody.rhythm.isEmpty)
+        XCTAssertEqual(melody.defaultUse, .melody)
+        XCTAssertEqual(melody.use("both"), .melody)
+        let rhythm = try XCTUnwrap(JSONCoding.decode(Entity.self, from: idea(fields: #"{"title":"Rhythm, 96 BPM","type":"riff","midi":{"mode":"rhythm","state":"done","notes":[{"p":36,"s":0,"d":0.1,"v":90}]}}"#)).humMidi)
+        XCTAssertTrue(rhythm.melody.isEmpty)
+        XCTAssertEqual(rhythm.rhythm.count, 1)
+        XCTAssertEqual(rhythm.defaultUse, .rhythm)
+        // Made on the device without layers: the mode's layer gets the notes.
+        XCTAssertEqual(HumMidi(mode: .rhythm, state: .done, notes: [.init(p: 38, s: 0, d: 0.1, v: 90)]).rhythm.count, 1)
+        // Encoded and read back, both layers come along.
+        let both = HumMidi(state: .done, notes: [], melody: [.init(p: 60, s: 0, d: 0.5, v: 90)], rhythm: [.init(p: 36, s: 0, d: 0.1, v: 90)])
+        XCTAssertEqual(try JSONCoding.decode(HumMidi.self, from: JSONCoding.data(both)), both)
+    }
+
     func testOddMidiNeverHidesTheIdea() throws {
         // A newer state, a float pitch and one broken note: the rest still reads.
         let e = try JSONCoding.decode(Entity.self, from: idea(fields: #"{"title":"x","type":"riff","midi":{"mode":"melody","state":"tidying","notes":[{"p":60.0,"s":0,"d":0.5,"v":80},{"p":"high"},{"p":200,"s":-1,"d":0.1,"v":0}]}}"#))
@@ -104,6 +157,8 @@ final class HumTests: XCTestCase {
         XCTAssertEqual(HubClient.humQuery(mode: .rhythm, bpm: 96, title: "  Verse groove ", projectId: "p1", fromCapture: true),
                        ["mode": "rhythm", "bpm": "96", "title": "Verse groove", "project_id": "p1", "from": "capture"])
         XCTAssertEqual(HubClient.humQuery(mode: .melody, bpm: 0, title: "", projectId: "", fromCapture: false), ["mode": "melody"])
+        // The hub hears every take both ways: this app sends no mode.
+        XCTAssertEqual(HubClient.humQuery(bpm: nil, title: nil, projectId: nil, fromCapture: true), ["from": "capture"])
     }
 
     func testUploadRequestShape() throws {
@@ -154,6 +209,9 @@ final class HumTests: XCTestCase {
         XCTAssertNil(HumStubProtocol.seen.last?.url?.query)
         _ = try await c.humMIDI(ideaId, grid: false)
         XCTAssertEqual(HumStubProtocol.seen.last?.url?.query, "grid=off")
+        _ = try await c.humMIDI(ideaId, use: .both)
+        XCTAssertEqual(HumStubProtocol.seen.last?.url?.query, "use=both")
+        XCTAssertEqual(HubClient.humMIDIQuery(grid: false, use: .rhythm), ["grid": "off", "use": "rhythm"])
 
         HumStubProtocol.reply = .init(status: 409, headers: [:], body: Data(#"{"error":"still listening; try again in a moment"}"#.utf8))
         do { _ = try await c.humMIDI(ideaId); XCTFail("expected an error") }

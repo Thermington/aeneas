@@ -10,6 +10,7 @@ import { useDraftSave } from "../lib/useDraftSave";
 import { fmtDateTime } from "../lib/time";
 import { MUSIC_TYPES, musicMeta, parseMusicQuick, type MusicF, type MusicStatus, type MusicType, type ProjectF } from "../lib/creative";
 import { HumRecorder, HumResult } from "../components/Hum";
+import { HumSongIcon } from "../components/HumSongIcon";
 
 const STATUSES: MusicStatus[] = ["idea", "wip", "done"];
 
@@ -118,7 +119,7 @@ function MusicList() {
       </form>
 
       <details className="card" style={{ marginTop: 10 }}>
-        <summary><strong>Hum it</strong> <span className="muted small">a melody or a rhythm, to notes and a MIDI file</span></summary>
+        <summary><strong><HumSongIcon /> Hum Song</strong> <span className="muted small">a melody, a rhythm or both, to notes and a MIDI file</span></summary>
         <div style={{ marginTop: 8 }}>
           <HumRecorder onDone={(idea) => go(`/music/${idea.id}`)} />
         </div>

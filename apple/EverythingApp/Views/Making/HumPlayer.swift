@@ -3,8 +3,8 @@ import AVFoundation
 import AudioToolbox
 import EACore
 
-/// Plays a hummed idea on this device: a melody through a sampler, a rhythm as short drum sounds made on the spot,
-/// or the original recording. One thing plays at a time, and the audio session is active only while it plays.
+/// Plays a hummed idea on this device: the melody through a sampler and the rhythm as short drum sounds made on the
+/// spot, either or both, or the original recording. One thing plays at a time, and the audio session is active only while it plays.
 @MainActor
 final class HumPlayer: NSObject, ObservableObject {
     enum Playing: Equatable { case notes, recording }
@@ -19,29 +19,27 @@ final class HumPlayer: NSObject, ObservableObject {
     private var audio: AVAudioPlayer?
     private var endTask: Task<Void, Never>?
 
-    func playNotes(_ midi: HumMidi) {
+    /// The layers in use together: the melody through the sampler and the rhythm as drum sounds, on one engine.
+    func playNotes(_ midi: HumMidi, use: HumMidi.Use) {
         stop()
         error = nil
-        guard !midi.notes.isEmpty else { return }
+        let melody = midi.melody(in: use), rhythm = midi.rhythm(in: use)
+        guard !melody.isEmpty || !rhythm.isEmpty else { return }
         do {
             try activate()
             let engine = AVAudioEngine()
-            switch midi.mode {
-            case .melody:
-                let sampler = AVAudioUnitSampler()
-                engine.attach(sampler)
-                engine.connect(sampler, to: engine.mainMixerNode, format: nil)
-                Self.loadPiano(sampler)
-                try engine.start()
-                let seq = AVAudioSequencer(audioEngine: engine)
-                try seq.load(from: midi.playbackMIDIFile(), options: [])
-                for t in seq.tracks { t.destinationAudioUnit = sampler }
-                seq.prepareToPlay()
-                try seq.start()
-                sequencer = seq
-            case .rhythm:
+            var sampler: AVAudioUnitSampler?
+            if !melody.isEmpty {
+                let s = AVAudioUnitSampler()
+                engine.attach(s)
+                engine.connect(s, to: engine.mainMixerNode, format: nil)
+                Self.loadPiano(s)
+                sampler = s
+            }
+            var drums: (node: AVAudioPlayerNode, buffer: AVAudioPCMBuffer)?
+            if !rhythm.isEmpty {
                 let rate = 44_100.0
-                let samples = HumDrums.render(midi.notes, sampleRate: rate)
+                let samples = HumDrums.render(rhythm, sampleRate: rate)
                 guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
                       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
                       let channel = buffer.floatChannelData?[0] else {
@@ -54,15 +52,26 @@ final class HumPlayer: NSObject, ObservableObject {
                 let node = AVAudioPlayerNode()
                 engine.attach(node)
                 engine.connect(node, to: engine.mainMixerNode, format: format)
-                try engine.start()
-                node.scheduleBuffer(buffer, at: nil, options: [])
-                node.play()
+                drums = (node, buffer)
+            }
+            try engine.start()
+            if let sampler {
+                let seq = AVAudioSequencer(audioEngine: engine)
+                try seq.load(from: HumMidi.playbackMIDIFile(melody), options: [])
+                for t in seq.tracks { t.destinationAudioUnit = sampler }
+                seq.prepareToPlay()
+                try seq.start()
+                sequencer = seq
+            }
+            if let drums {
+                drums.node.scheduleBuffer(drums.buffer, at: nil, options: [])
+                drums.node.play()
             }
             self.engine = engine
             playing = .notes
             AudioFocus.playing = true
             startedAt = Date()
-            stopAfter(midi.length + 0.6)
+            stopAfter(midi.length(in: use) + 0.6)
         } catch {
             stop()
             deactivate()

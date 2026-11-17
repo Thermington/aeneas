@@ -606,9 +606,9 @@ export class HubClient {
   setPasswordManagerAccess(body: { access?: "all" | "chosen"; excluded?: string[] }) {
     return this.req<PasswordManagerView>("PUT", "/connections/password-manager/access", body);
   }
-  /** Hum to MIDI: a WAV recording becomes a music idea at once; its notes, key and tempo follow by sync. */
-  async hum(wav: Blob, opts: { mode: "melody" | "rhythm"; bpm?: number; title?: string; projectId?: string; fromCapture?: boolean; clientId?: string }): Promise<Entity> {
-    const q = new URLSearchParams({ mode: opts.mode });
+  /** Hum to MIDI: a WAV recording becomes a music idea at once; its melody, rhythm, key and tempo follow by sync. */
+  async hum(wav: Blob, opts: { bpm?: number; title?: string; projectId?: string; fromCapture?: boolean; clientId?: string }): Promise<Entity> {
+    const q = new URLSearchParams();
     // One id per take: sent again after a cut-off upload, the hub returns the idea it already made.
     if (opts.clientId) q.set("client_id", opts.clientId);
     if (opts.bpm) q.set("bpm", String(opts.bpm));
@@ -623,13 +623,16 @@ export class HubClient {
     }
     return (await res.json()) as Entity;
   }
-  /** Hear a hummed idea's recording again, as the other mode or at a set tempo. */
-  rehearHum(id: string, body: { mode?: "melody" | "rhythm"; bpm?: number }) {
+  /** Hear a hummed idea's recording again, at a set tempo or a found one. */
+  rehearHum(id: string, body: { bpm?: number }) {
     return this.req<Entity>("POST", `/music/${encodeURIComponent(id)}/rehear`, body);
   }
   /** The idea's notes as a .mid file, snapped to the 1/16 grid or as hummed, with the hub's file name. */
-  async musicMidi(id: string, grid: boolean): Promise<{ blob: Blob; name: string }> {
-    const res = await this.fetchImpl(this.url(`/music/${encodeURIComponent(id)}/midi${grid ? "" : "?grid=off"}`), { headers: this.headers() });
+  async musicMidi(id: string, grid: boolean, use?: "melody" | "rhythm" | "both"): Promise<{ blob: Blob; name: string }> {
+    const q = new URLSearchParams();
+    if (!grid) q.set("grid", "off");
+    if (use) q.set("use", use);
+    const res = await this.fetchImpl(this.url(`/music/${encodeURIComponent(id)}/midi${q.size ? `?${q}` : ""}`), { headers: this.headers() });
     if (!res.ok) {
       let msg = `${res.status}`;
       try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not JSON */ }

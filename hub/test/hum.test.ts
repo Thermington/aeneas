@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { makeHub } from "./helpers.js";
-import { basicPitch, estimateBpm, estimateKey, findHits, hear, humEngine, HUM_RATE, melodyNotes, midiFile, readWav, snapToGrid, stopHumWorker, writeWav, type HumNote, type PitchTrack } from "../src/hum.js";
+import { basicPitch, estimateBpm, estimateKey, findHits, hear, hearBoth, heardCount, humEngine, humLayers, humUse, HUM_RATE, melodyNotes, midiFile, readWav, snapToGrid, stopHumWorker, writeWav, type HumNote, type PitchTrack } from "../src/hum.js";
 
 after(() => stopHumWorker());
 
@@ -158,28 +158,44 @@ test("hum: POST /music/hum makes the idea at once, fills in the notes, and gives
     assert.equal(idea.fields.midi.state, "listening");
     for (let i = 0; i < 50 && (t.hub.store.get(idea.id)!.fields.midi as { state: string }).state === "listening"; i++) await new Promise((res) => setTimeout(res, 20));
     const done = t.hub.store.get(idea.id)!;
-    const midi = done.fields.midi as { state: string; notes: HumNote[] };
+    const midi = done.fields.midi as { state: string; mode: string; notes: HumNote[]; melody: HumNote[]; rhythm: HumNote[] };
     assert.equal(midi.state, "done");
-    assert.deepEqual(midi.notes.map((n) => n.p), [57, 60, 64, 62, 57]);
+    // Heard both ways: the tune, and the hits where each note starts, on one clock.
+    assert.deepEqual(midi.melody.map((n) => n.p), [57, 60, 64, 62, 57]);
+    assert.ok(midi.rhythm.length > 0, "the note starts are hits too");
+    assert.equal(Math.min(midi.melody[0].s, midi.rhythm[0].s), 0);
+    // Apps from before both were kept read the melody.
+    assert.equal(midi.mode, "melody");
+    assert.deepEqual(midi.notes, midi.melody);
     assert.equal(done.fields.bpm, 120);
     assert.equal(done.fields.key, "A minor");
-    assert.equal(done.fields.title, "Melody in A minor, 120 BPM");
+    assert.equal(done.fields.title, "Song in A minor, 120 BPM");
     const file = await t.api(`/music/${idea.id}/midi`);
     assert.equal(file.status, 200);
     assert.equal(file.headers.get("content-type"), "audio/midi");
-    assert.match(file.headers.get("content-disposition") ?? "", /Melody in A minor, 120 BPM\.mid/);
-    assert.equal(Buffer.from(await file.arrayBuffer()).toString("ascii", 0, 4), "MThd");
+    assert.match(file.headers.get("content-disposition") ?? "", /Song in A minor, 120 BPM\.mid/);
+    // Nothing chosen yet: both, the melody on channel 1 and the drums on channel 10.
+    const both = Buffer.from(await file.arrayBuffer());
+    assert.equal(both.toString("ascii", 0, 4), "MThd");
+    const ons = (f: Buffer, status: number) => { let n = 0; for (let i = 22; i < f.length - 2; i++) if (f[i] === status && f[i + 2] > 0) n++; return n; };
+    assert.ok(ons(both, 0x90) > 0 && ons(both, 0x99) > 0);
+    const melodyOnly = Buffer.from(await (await t.api(`/music/${idea.id}/midi?use=melody`)).arrayBuffer());
+    assert.equal(ons(melodyOnly, 0x99), 0);
+    // The owner keeps only the rhythm: the file follows.
+    t.hub.store.patch(idea.id, { hum_use: "rhythm" });
+    const rhythmOnly = Buffer.from(await (await t.api(`/music/${idea.id}/midi`)).arrayBuffer());
+    assert.ok(ons(rhythmOnly, 0x99) > 0 && ons(rhythmOnly, 0x90) === 0);
     assert.equal((await t.api(`/music/${idea.id}/audio`)).status, 200);
     // From Capture, the day's diary says so.
     const diary = t.hub.store.list({ kind: "note" }).find((n) => String(n.fields.path ?? "").startsWith("Diary/"));
-    assert.match(String(diary?.fields.body ?? ""), /Hummed a melody: Melody in A minor/);
-    // Heard again as a rhythm from the kept recording.
-    assert.equal((await t.api(`/music/${idea.id}/rehear`, { method: "POST", json: { mode: "rhythm" } })).status, 202);
+    assert.match(String(diary?.fields.body ?? ""), /Hummed a song: Song in A minor, 120 BPM \(5 notes, \d+ hits?\)/);
+    // An app from before asks to hear it again as a melody: both are heard again, and the melody is what is kept.
+    assert.equal((await t.api(`/music/${idea.id}/rehear`, { method: "POST", json: { mode: "melody" } })).status, 202);
     for (let i = 0; i < 50 && (t.hub.store.get(idea.id)!.fields.midi as { state: string }).state === "listening"; i++) await new Promise((res) => setTimeout(res, 20));
     const again = t.hub.store.get(idea.id)!;
-    assert.equal((again.fields.midi as { mode: string }).mode, "rhythm");
-    assert.equal(again.fields.key, undefined, "a rhythm has no key");
-    assert.match(String(again.fields.title), /^Rhythm, \d+ BPM$/);
+    assert.equal(again.fields.hum_use, "melody");
+    assert.equal((again.fields.midi as { mode: string }).mode, "melody");
+    assert.ok((again.fields.midi as { rhythm: HumNote[] }).rhythm.length > 0, "the rhythm is still heard");
     // Not a WAV, and silence.
     assert.equal((await t.api("/music/hum", { method: "POST", body: Buffer.from("hello") as unknown as RequestInit["body"] })).status, 422);
     const quiet = await (await t.api("/music/hum", { method: "POST", body: writeWav(new Float32Array(HUM_RATE)) as unknown as RequestInit["body"] })).json() as { id: string };
@@ -230,18 +246,21 @@ test("hum: a newer hearing wins, a resent take is the same idea, a restart hears
   const real = humEngine.transcribe;
   const settle = async (id: string) => { for (let i = 0; i < 100 && (t.hub.store.get(id)!.fields.midi as { state: string }).state === "listening"; i++) await new Promise((res) => setTimeout(res, 20)); };
   try {
-    // The melody hearing is slow; a rhythm rehear started meanwhile finishes first and must stay.
-    let release: () => void = () => {};
-    humEngine.transcribe = () => new Promise((res) => { release = () => res(line([[60, 0.4]]).track); });
+    // The first hearing is slow; a rehear started meanwhile finishes first and must stay.
+    const releases: (() => void)[] = [];
+    let calls = 0;
+    humEngine.transcribe = () => new Promise((res) => { const pitch = ++calls === 1 ? 60 : 67; releases.push(() => res(line([[pitch, 0.4]]).track)); });
     const wav = writeWav(hum([60, 62], 120)) as unknown as RequestInit["body"];
     const idea = await (await t.api("/music/hum?mode=melody&client_id=watch-hum-0001", { method: "POST", body: wav })).json() as { id: string };
-    assert.equal((await t.api(`/music/${idea.id}/rehear`, { method: "POST", json: { mode: "rhythm" } })).status, 202);
+    assert.equal((await t.api(`/music/${idea.id}/rehear`, { method: "POST", json: { bpm: 90 } })).status, 202);
+    for (let i = 0; i < 50 && releases.length < 2; i++) await new Promise((res) => setTimeout(res, 10));
+    releases[1]();
     await settle(idea.id);
-    release();
+    releases[0]();
     await new Promise((res) => setTimeout(res, 50));
     const after = t.hub.store.get(idea.id)!;
-    assert.equal((after.fields.midi as { mode: string }).mode, "rhythm", "the older melody hearing was dropped");
-    assert.match(String(after.fields.title), /^Rhythm/);
+    assert.deepEqual((after.fields.midi as { melody: HumNote[] }).melody.map((n) => n.p), [67], "the older hearing was dropped");
+    assert.equal(after.fields.bpm, 90);
     // The same take sent again comes back as the same idea.
     const again = await (await t.api("/music/hum?mode=melody&client_id=watch-hum-0001", { method: "POST", body: wav })).json() as { id: string };
     assert.equal(again.id, idea.id);
@@ -253,7 +272,7 @@ test("hum: a newer hearing wins, a resent take is the same idea, a restart hears
     const { resumeHums } = await import("../src/hum.js");
     assert.equal(resumeHums(t.hub), 2);
     await settle(idea.id);
-    assert.deepEqual((t.hub.store.get(idea.id)!.fields.midi as { state: string; notes: HumNote[] }).notes.map((n) => n.p), [64]);
+    assert.deepEqual((t.hub.store.get(idea.id)!.fields.midi as { state: string; melody: HumNote[] }).melody.map((n) => n.p), [64]);
     assert.match(String((t.hub.store.get(lost.id)!.fields.midi as { error?: string }).error), /restarted/);
     // A typed tempo of 0 is not used for the file.
     t.hub.store.patch(idea.id, { bpm: 0 });
@@ -285,4 +304,27 @@ test("hum: hums sent together are heard one after another, each with its own tim
   assert.equal(results.length, 3);
   for (const r of results) assert.ok(r && typeof r === "object", "each hum got its pitch line");
   stopHumWorker();
+});
+
+test("hum: a tapped rhythm heard both ways keeps every hit at its tempo; older ideas and the default choice", async () => {
+  const e = 60 / 110 / 2;
+  const pattern: [number, "k" | "s" | "h"][] = [];
+  const bar = ["k", "h", "s", "h", "k", "k", "s", "h"] as const;
+  for (let i = 0; i < 16; i++) pattern.push([0.2 + i * e, bar[i % 8]]);
+  const h = await hearBoth(drums(pattern, 0.2 + 16 * e + 0.5), undefined, basicPitch);
+  assert.deepEqual(h.rhythm.map((n) => n.p), pattern.map(([, k]) => (k === "k" ? 36 : k === "s" ? 38 : 42)));
+  assert.ok(h.rhythm.length >= h.melody.length, "the tempo comes from the hits");
+  assert.ok(Math.abs(h.bpm - 110) <= 2, `bpm ${h.bpm}`);
+  assert.equal(Math.min(h.rhythm[0].s, h.melody[0]?.s ?? Infinity), 0);
+  // Silence is still refused.
+  await assert.rejects(hearBoth(new Float32Array(HUM_RATE), undefined, basicPitch), /silent/);
+  // An idea heard before both were kept has one hearing, under mode and notes.
+  const n = [{ p: 60, s: 0, d: 0.5, v: 90 }];
+  assert.deepEqual(humLayers({ mode: "rhythm", notes: n }), { melody: [], rhythm: n });
+  assert.deepEqual(humLayers({ mode: "melody", notes: n }), { melody: n, rhythm: [] });
+  // Nothing chosen: both when both have notes, else the one that has.
+  assert.equal(humUse(undefined, { melody: n, rhythm: n }), "both");
+  assert.equal(humUse(undefined, { melody: [], rhythm: n }), "rhythm");
+  assert.equal(humUse("melody", { melody: n, rhythm: n }), "melody");
+  assert.equal(heardCount({ melody: [], rhythm: [...n, ...n] }), "2 hits");
 });

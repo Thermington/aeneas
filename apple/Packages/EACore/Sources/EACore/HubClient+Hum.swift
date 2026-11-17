@@ -16,7 +16,9 @@ extension HubClient {
     /// The hub answers at once with the new music idea, `midi.state` listening; the notes, tempo, key and a title
     /// follow by sync a few seconds later. `fromCapture` also writes a line in the day's diary.
     /// `clientId` names the take: sent again after an upload that was cut off, the hub returns the idea it already made.
-    public func uploadHum(fileURL: URL, mode: HumMidi.Mode, bpm: Double? = nil, title: String? = nil,
+    /// The hub hears every take as a melody and as a rhythm; `mode` is for hubs from before that (they hear only it,
+    /// and a melody without it).
+    public func uploadHum(fileURL: URL, mode: HumMidi.Mode? = nil, bpm: Double? = nil, title: String? = nil,
                           projectId: String? = nil, fromCapture: Bool = false, clientId: String? = nil) async throws -> Entity {
         guard let http else { throw HubError.transport("Sending a hum needs a direct connection to the hub") }
         let r = Self.humUploadRequest(http, mode: mode, bpm: bpm, title: title, projectId: projectId, fromCapture: fromCapture, clientId: clientId)
@@ -29,14 +31,15 @@ extension HubClient {
 
     /// The upload request on its own, so the tests can read it. Two minutes of audio is about 5 MB, so the timeout
     /// is a few minutes rather than the usual 20 seconds.
-    static func humUploadRequest(_ http: HTTPTransport, mode: HumMidi.Mode, bpm: Double?, title: String?, projectId: String?, fromCapture: Bool, clientId: String? = nil) -> URLRequest {
+    static func humUploadRequest(_ http: HTTPTransport, mode: HumMidi.Mode? = nil, bpm: Double?, title: String?, projectId: String?, fromCapture: Bool, clientId: String? = nil) -> URLRequest {
         var r = http.request(method: "POST", path: "music/hum", query: humQuery(mode: mode, bpm: bpm, title: title, projectId: projectId, fromCapture: fromCapture, clientId: clientId), timeout: 180)
         r.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         return r
     }
 
-    static func humQuery(mode: HumMidi.Mode, bpm: Double?, title: String?, projectId: String?, fromCapture: Bool, clientId: String? = nil) -> [String: String] {
-        var q = ["mode": mode.rawValue]
+    static func humQuery(mode: HumMidi.Mode? = nil, bpm: Double?, title: String?, projectId: String?, fromCapture: Bool, clientId: String? = nil) -> [String: String] {
+        var q: [String: String] = [:]
+        if let mode { q["mode"] = mode.rawValue }
         if let id = clientId, !id.isEmpty { q["client_id"] = id }
         if let bpm, bpm > 0 { q["bpm"] = JSONValue.number(bpm.rounded()).displayString }
         if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { q["title"] = t }
@@ -45,18 +48,20 @@ extension HubClient {
         return q
     }
 
-    /// `POST /music/<id>/rehear`: the hub hears the kept recording again, as the other mode or at a given tempo.
-    /// The idea comes back listening; the new notes follow by sync.
+    /// `POST /music/<id>/rehear`: the hub hears the kept recording again, as a melody and as a rhythm, at a given tempo
+    /// or one it finds. The idea comes back listening; the new notes follow by sync. `mode` is for older apps' "hear
+    /// it as the other one" (the hub also sets `hum_use` to it); this app sends only a tempo.
     public func rehearHum(_ id: String, mode: HumMidi.Mode? = nil, bpm: Double? = nil) async throws -> Entity {
         struct B: Encodable { var mode: HumMidi.Mode?; var bpm: Double? }
         return try await post("music/\(id)/rehear", B(mode: mode, bpm: bpm.map { $0.rounded() }), as: Entity.self)
     }
 
-    /// `GET /music/<id>/midi`: snapped to a 1/16 grid, or with `grid` false the timing as hummed. The hub answers
-    /// 409 while it is still listening.
-    public func humMIDI(_ id: String, grid: Bool = true) async throws -> HumMIDIFile {
+    /// `GET /music/<id>/midi`: snapped to a 1/16 grid, or with `grid` false the timing as hummed. `use` picks the
+    /// layers (both: the melody on channel 1 and the drums on channel 10 of one file); left out, the idea's own
+    /// `hum_use`. The hub answers 409 while it is still listening.
+    public func humMIDI(_ id: String, grid: Bool = true, use: HumMidi.Use? = nil) async throws -> HumMIDIFile {
         let path = "music/\(id)/midi"
-        let query: [String: String] = grid ? [:] : ["grid": "off"]
+        let query = Self.humMIDIQuery(grid: grid, use: use)
         guard let http else {
             // The Watch relay carries no headers, so there is no name to read.
             return HumMIDIFile(name: "Hum.mid", data: try await send("GET", path, query: query))
@@ -68,6 +73,12 @@ extension HubClient {
         let h = try Self.checked(resp, data)
         let name = Self.fileName(contentDisposition: h.value(forHTTPHeaderField: "Content-Disposition")) ?? "Hum.mid"
         return HumMIDIFile(name: name.lowercased().hasSuffix(".mid") ? name : name + ".mid", data: data)
+    }
+
+    static func humMIDIQuery(grid: Bool, use: HumMidi.Use?) -> [String: String] {
+        var q: [String: String] = grid ? [:] : ["grid": "off"]
+        if let use { q["use"] = use.rawValue }
+        return q
     }
 
     /// `GET /music/<id>/audio`: the kept recording as WAV, 22,050 Hz mono.

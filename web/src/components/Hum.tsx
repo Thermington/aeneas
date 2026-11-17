@@ -2,18 +2,17 @@ import { plainError } from "../lib/errors";
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { engine } from "../sync/engine";
-import { MAX_HUM_SECONDS, playNotes, startHumRecording, type HumRecording } from "../lib/hum";
+import { MAX_HUM_SECONDS, playParts, startHumRecording, type HumRecording } from "../lib/hum";
 import { saveBlob } from "../lib/download";
-import type { HumMidi, MusicF } from "../lib/creative";
-
-type Mode = "melody" | "rhythm";
+import { humLayers, humUse, type HumMidi, type HumNote, type HumUse, type MusicF } from "../lib/creative";
+import { updateEntity } from "../sync/edits";
 
 /**
- * Record a hummed melody or a tapped rhythm and send it to the hub, which turns it into notes and a MIDI file
- * (hub hum.ts). Used on Music and on Capture (`fromCapture`, which also puts a line in the day's diary).
+ * Record anything hummed, sung, tapped or beatboxed and send it to the hub, which hears it both as a melody and as a
+ * rhythm and makes notes and a MIDI file (hub hum.ts); which to keep is chosen afterwards. Used on Music and on
+ * Capture (`fromCapture`, which also puts a line in the day's diary).
  */
 export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCapture?: boolean; projectId?: string; onDone: (idea: Entity) => void }) {
-  const [mode, setMode] = useState<Mode>("melody");
   const [bpm, setBpm] = useState("");
   const [rec, setRec] = useState<HumRecording | null>(null);
   const [secs, setSecs] = useState(0);
@@ -21,18 +20,18 @@ export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCa
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   // A take whose upload failed (the hub restarting, the network gone): kept to send again.
-  const [unsent, setUnsent] = useState<{ wav: Blob; mode: Mode; bpm?: number; id: string } | null>(null);
+  const [unsent, setUnsent] = useState<{ wav: Blob; bpm?: number; id: string } | null>(null);
   const tick = useRef<number | null>(null);
   const live = useRef<HumRecording | null>(null);
 
   // On leaving the screen only: a cleanup tied to `rec` ran when recording started and stopped the clock and meter.
   useEffect(() => () => { if (tick.current) cancelAnimationFrame(tick.current); live.current?.cancel(); }, []);
 
-  const send = async (take: { wav: Blob; mode: Mode; bpm?: number; id: string }) => {
+  const send = async (take: { wav: Blob; bpm?: number; id: string }) => {
     setBusy(true);
     setErr("");
     try {
-      const idea = await engine.client!.hum(take.wav, { mode: take.mode, bpm: take.bpm, projectId, fromCapture, clientId: take.id });
+      const idea = await engine.client!.hum(take.wav, { bpm: take.bpm, projectId, fromCapture, clientId: take.id });
       setUnsent(null);
       await engine.absorb([idea]);
       onDone(idea);
@@ -71,19 +70,12 @@ export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCa
     if (r.seconds() < 0.5) { r.cancel(); setErr("That was under half a second. Hold Record a little longer."); return; }
     const wav = await r.stop();
     const n = Number(bpm);
-    await send({ wav, mode, bpm: Number.isFinite(n) && n >= 30 && n <= 300 ? n : undefined, id: newTakeId() });
+    await send({ wav, bpm: Number.isFinite(n) && n >= 30 && n <= 300 ? n : undefined, id: newTakeId() });
   };
 
   return (
     <div className="col hum">
       <div className="row wrap">
-        <div className="seg" role="radiogroup" aria-label="What you will record">
-          {(["melody", "rhythm"] as const).map((m) => (
-            <button key={m} type="button" role="radio" aria-checked={mode === m} className={mode === m ? "on" : ""} disabled={!!rec || busy} onClick={() => setMode(m)}>
-              {m === "melody" ? "Melody" : "Rhythm"}
-            </button>
-          ))}
-        </div>
         <input className="mono" style={{ width: 90 }} inputMode="numeric" value={bpm} onChange={(e) => setBpm(e.target.value.replace(/[^\d]/g, ""))} placeholder="BPM" aria-label="Tempo (optional)" disabled={!!rec || busy} />
         {!rec ? (
           <button type="button" className="primary" disabled={busy || !engine.client} onClick={() => void start()}>
@@ -109,9 +101,7 @@ export function HumRecorder({ fromCapture = false, projectId, onDone }: { fromCa
         </div>
       )}
       <div className="muted small">
-        {mode === "melody"
-          ? "Hum or sing one line, on \"doo\" or \"da\". It becomes notes, a key, a tempo and a MIDI file for your DAW."
-          : "Tap, clap or beatbox: low thumps become kicks, cracks snares, short hisses hats."}
+        Hum, sing, tap or beatbox, up to 2 minutes. The hub hears it as a melody and as a rhythm; choose Melody, Rhythm or Both afterwards.
       </div>
       {err && <div className="error small">{err}</div>}
     </div>
@@ -123,7 +113,7 @@ function newTakeId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? `web-${crypto.randomUUID()}` : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** A hummed idea: what was heard, drawn, playable, and its MIDI file. */
+/** A hummed idea: what was heard both ways, which of it to keep, drawn, playable, and its MIDI file. */
 export function HumResult({ idea }: { idea: Entity }) {
   const f = idea.fields as MusicF;
   const m = f.midi as HumMidi;
@@ -135,23 +125,31 @@ export function HumResult({ idea }: { idea: Entity }) {
 
   if (m.state === "listening") return <div className="card muted">Listening to the recording ({m.seconds ? `${Math.round(m.seconds)} s` : "a moment"}); the notes appear here when it is done.</div>;
 
+  const layers = humLayers(m);
+  const use = humUse(f.hum_use, layers);
+  const melody = use === "rhythm" ? [] : layers.melody;
+  const rhythm = use === "melody" ? [] : layers.rhythm;
+  const shown = [...melody, ...rhythm];
+
   const play = () => {
     stopPlay?.();
-    const stop = playNotes(m.notes, m.mode);
+    const stop = playParts([{ notes: melody, mode: "melody" }, { notes: rhythm, mode: "rhythm" }]);
     setStopPlay(() => stop);
-    const end = Math.max(0, ...m.notes.map((n) => n.s + n.d)) * 1000 + 600;
+    const end = Math.max(0, ...shown.map((n) => n.s + n.d)) * 1000 + 600;
     setTimeout(() => setStopPlay((cur) => (cur === stop ? null : cur)), end);
   };
   const download = async (grid: boolean) => {
-    try { const r = await client!.musicMidi(idea.id, grid); saveBlob(r.blob, r.name); } catch (e) { setMsg(plainError(e)); }
+    try { const r = await client!.musicMidi(idea.id, grid, use); saveBlob(r.blob, r.name); } catch (e) { setMsg(plainError(e)); }
   };
   const original = async () => {
     try { setAudioUrl(URL.createObjectURL(await client!.musicAudio(idea.id))); } catch (e) { setMsg(plainError(e)); }
   };
-  const rehear = async (body: { mode?: "melody" | "rhythm"; bpm?: number }) => {
+  const rehear = async (body: { bpm?: number }) => {
     try { await engine.absorb([await client!.rehearHum(idea.id, body)]); setMsg(""); } catch (e) { setMsg(plainError(e)); }
   };
-  const other: "melody" | "rhythm" = m.mode === "melody" ? "rhythm" : "melody";
+  const keep = (u: HumUse) => { stopPlay?.(); setStopPlay(null); void updateEntity(idea, { hum_use: u }); };
+  const has: Record<HumUse, boolean> = { melody: layers.melody.length > 0, rhythm: layers.rhythm.length > 0, both: layers.melody.length > 0 && layers.rhythm.length > 0 };
+  const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
   return (
     <section className="card col">
@@ -160,11 +158,19 @@ export function HumResult({ idea }: { idea: Entity }) {
       ) : (
         <>
           <div className="row wrap small">
-            <strong>{m.mode === "rhythm" ? `${m.notes.length} hits` : `${m.notes.length} notes`}</strong>
-            {f.key && <span className="mono">{f.key}</span>}
+            <div className="seg" role="radiogroup" aria-label="What to keep">
+              {(["melody", "rhythm", "both"] as const).map((u) => (
+                <button key={u} type="button" role="radio" aria-checked={use === u} className={use === u ? "on" : ""} disabled={!has[u]} title={has[u] ? undefined : `No ${u === "both" ? "melody or no rhythm" : u} was heard`} onClick={() => keep(u)}>
+                  {u === "melody" ? "Melody" : u === "rhythm" ? "Rhythm" : "Both"}
+                </button>
+              ))}
+            </div>
+            <strong>{[melody.length ? count(melody.length, "note") : "", rhythm.length ? count(rhythm.length, "hit") : ""].filter(Boolean).join(", ")}</strong>
+            {f.key && melody.length > 0 && <span className="mono">{f.key}</span>}
             {f.bpm && <span className="mono">{f.bpm} BPM</span>}
           </div>
-          <PianoRoll midi={m} />
+          {melody.length > 0 && <PianoRoll notes={melody} lanes={false} end={Math.max(...shown.map((n) => n.s + n.d))} />}
+          {rhythm.length > 0 && <PianoRoll notes={rhythm} lanes end={Math.max(...shown.map((n) => n.s + n.d))} />}
           <div className="row wrap">
             {stopPlay ? <button type="button" onClick={() => { stopPlay(); setStopPlay(null); }}>Stop</button> : <button type="button" className="primary" onClick={play}>Play</button>}
             <button type="button" onClick={() => void download(true)}>Download MIDI</button>
@@ -174,11 +180,10 @@ export function HumResult({ idea }: { idea: Entity }) {
       )}
       <div className="row wrap small">
         {audioUrl ? <audio src={audioUrl} controls autoPlay style={{ height: 32 }} /> : <button type="button" className="ghost small" onClick={() => void original()}>Play the recording</button>}
-        <button type="button" className="ghost small" onClick={() => void rehear({ mode: other })}>Hear it again as a {other}</button>
         <RetempoButton bpm={f.bpm} onSet={(b) => void rehear({ bpm: b })} />
       </div>
       {msg && <div className="error small">{msg}</div>}
-      <div className="muted small">The MIDI file opens in Cubase, Ableton or any DAW: drag it onto a track. Downloads snap to a 1/16 grid at the tempo; "as hummed" keeps your timing.</div>
+      <div className="muted small">The MIDI file opens in Cubase, Ableton or any DAW: drag it onto a track. With Both, the melody is on channel 1 and the drums on channel 10. Downloads snap to a 1/16 grid at the tempo; "as hummed" keeps your timing.</div>
     </section>
   );
 }
@@ -193,20 +198,18 @@ function RetempoButton({ bpm, onSet }: { bpm?: number; onSet: (bpm: number) => v
   );
 }
 
-/** Notes across time, pitch up the side (a rhythm gets three lanes: hat, snare, kick). */
-function PianoRoll({ midi }: { midi: HumMidi }) {
-  const notes = midi.notes;
+/** Notes across time, pitch up the side, or a rhythm's three lanes (hat, snare, kick); `end` lines up two of them. */
+function PianoRoll({ notes, lanes: drumLanes, end }: { notes: HumNote[]; lanes: boolean; end: number }) {
   if (!notes.length) return null;
-  const end = Math.max(...notes.map((n) => n.s + n.d));
-  const lanes = midi.mode === "rhythm" ? [42, 38, 36] : null;
+  const lanes = drumLanes ? [42, 38, 36] : null;
   const lo = lanes ? 0 : Math.min(...notes.map((n) => n.p)) - 1;
   const hi = lanes ? 2 : Math.max(...notes.map((n) => n.p)) + 1;
   const rows = hi - lo + 1;
-  const W = 640, H = Math.max(80, Math.min(220, rows * 10));
-  const y = (p: number) => (lanes ? lanes.indexOf(p) : hi - p) * (H / rows);
+  const W = 640, H = lanes ? 60 : Math.max(80, Math.min(220, rows * 10));
+  const y = (p: number) => (lanes ? Math.max(0, lanes.indexOf(p)) : hi - p) * (H / rows);
   const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={`${notes.length} ${midi.mode === "rhythm" ? "hits" : "notes"} over ${end.toFixed(1)} seconds`} style={{ background: "var(--surface-2, #8881)", borderRadius: 6 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={`${notes.length} ${lanes ? "hits" : "notes"} over ${end.toFixed(1)} seconds`} style={{ background: "var(--surface-2, #8881)", borderRadius: 6 }}>
       {!lanes && Array.from({ length: rows }, (_, i) => hi - i).filter((p) => p % 12 === 0).map((p) => (
         <g key={p}>
           <line x1={0} x2={W} y1={y(p) + H / rows} y2={y(p) + H / rows} stroke="currentColor" opacity={0.12} />

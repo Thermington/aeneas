@@ -51,7 +51,7 @@ export function creativeRoutes() {
     return c.json(rehear(c.get("hub"), c.req.param("id"), body), 202);
   });
   r.get("/music/:id/midi", (c) => {
-    const m = ideaMidi(c.get("hub"), c.req.param("id"), c.req.query("grid") !== "off");
+    const m = ideaMidi(c.get("hub"), c.req.param("id"), c.req.query("grid") !== "off", c.req.query("use"));
     return c.body(new Uint8Array(m.bytes), 200, { "content-type": "audio/midi", "content-disposition": `attachment; filename="${m.name.replace(/"/g, "")}"`, "cache-control": "no-store" });
   });
   r.get("/music/:id/audio", (c) => {

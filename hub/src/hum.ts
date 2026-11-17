@@ -10,8 +10,9 @@ import { appendDiary } from "./diary.js";
 import { errCode } from "./logsafe.js";
 
 /**
- * Hum to MIDI: a hummed melody or a tapped, clapped or beatboxed rhythm becomes notes, a key, a tempo and a MIDI
- * file for a DAW. The recording is kept beside the data (`<data>/audio/<idea id>.wav`) and the notes live on the
+ * Hum to MIDI: anything hummed, sung, tapped, clapped or beatboxed becomes notes, a key, a tempo and a MIDI file for a
+ * DAW. Every hum is heard both ways (since 2026-11-17): as a melody and as a rhythm, and the owner keeps the melody,
+ * the rhythm or both afterwards (`fields.hum_use`), so nothing has to be chosen before recording. The recording is kept beside the data (`<data>/audio/<idea id>.wav`) and the notes live on the
  * music idea (`fields.midi`), so every device can draw, play and export them.
  *
  * Melody uses Spotify's Basic Pitch model (Apache-2.0) on the CPU in a worker thread, so the hub keeps answering
@@ -22,6 +23,8 @@ import { errCode } from "./logsafe.js";
 export const HUM_RATE = 22050;
 export const MAX_HUM_SECONDS = 120;
 export type HumMode = "melody" | "rhythm";
+/** What the owner keeps of a hum: one hearing or both. */
+export type HumUse = HumMode | "both";
 /** One note: MIDI pitch, start and length in seconds from the first note, velocity 1 to 127. */
 export interface HumNote { p: number; s: number; d: number; v: number }
 
@@ -520,16 +523,21 @@ function varLen(n: number): number[] {
  * notes: channel 1 for a melody, channel 10 (General MIDI drums) for a rhythm. Opens in Cubase, Ableton, Logic.
  */
 export function midiFile(notes: HumNote[], opts: { bpm: number; name: string; drums: boolean }): Buffer {
+  return midiParts([{ notes, drums: opts.drums }], opts);
+}
+
+/** One format 0 file holding several parts, each on its channel (a melody on 1, drums on 10). */
+export function midiParts(parts: { notes: HumNote[]; drums: boolean }[], opts: { bpm: number; name: string }): Buffer {
   const tpq = 480;
   const tick = (sec: number) => Math.max(0, Math.round(sec * (opts.bpm / 60) * tpq));
-  const ch = opts.drums ? 9 : 0;
   const ev: { t: number; order: number; bytes: number[] }[] = [];
   const name = [...Buffer.from(opts.name.slice(0, 120), "utf8")];
   ev.push({ t: 0, order: 0, bytes: [0xff, 0x03, ...varLen(name.length), ...name] });
   const us = Math.round(60_000_000 / opts.bpm);
   ev.push({ t: 0, order: 0, bytes: [0xff, 0x51, 0x03, (us >> 16) & 0xff, (us >> 8) & 0xff, us & 0xff] });
   ev.push({ t: 0, order: 0, bytes: [0xff, 0x58, 0x04, 4, 2, 24, 8] });
-  for (const n of notes) {
+  for (const { notes, drums } of parts) for (const n of notes) {
+    const ch = drums ? 9 : 0;
     const p = Math.max(0, Math.min(127, Math.round(n.p)));
     const v = Math.max(1, Math.min(127, Math.round(n.v)));
     const on = tick(n.s), off = Math.max(on + 1, tick(n.s + n.d));
@@ -556,10 +564,7 @@ export interface Heard { mode: HumMode; notes: HumNote[]; bpm: number; key: stri
 /** What was hummed or tapped: notes from the first one at 0, the tempo (given or found), and the key of a melody. */
 export async function hear(samples: Float32Array, mode: HumMode, bpmGiven: number | undefined, transcribe: Transcriber = basicPitch): Promise<Heard> {
   const seconds = round3(samples.length / HUM_RATE);
-  const top = peak(samples);
-  if (top < 0.01) throw new StoreError(422, "nothing was heard: the recording is silent");
-  const x = new Float32Array(samples.length);
-  for (let i = 0; i < x.length; i++) x[i] = (samples[i] / top) * 0.9;
+  const x = normalized(samples);
   let notes: HumNote[];
   if (mode === "rhythm") {
     notes = findHits(x).map((h) => ({ p: h.p, s: h.s, d: 0.1, v: h.v }));
@@ -573,6 +578,53 @@ export async function hear(samples: Float32Array, mode: HumMode, bpmGiven: numbe
   const bpm = bpmGiven && bpmGiven >= 30 && bpmGiven <= 300 ? Math.round(bpmGiven) : estimateBpm(notes.map((n) => n.s));
   if (mode === "rhythm") notes = notes.map((n) => ({ ...n, d: round3(60 / bpm / 4) }));
   return { mode, notes, bpm, key: mode === "melody" ? estimateKey(notes) : null, seconds };
+}
+
+/** The recording scaled so its loudest sample is 0.9; a silent one is refused. */
+function normalized(samples: Float32Array): Float32Array {
+  const top = peak(samples);
+  if (top < 0.01) throw new StoreError(422, "nothing was heard: the recording is silent");
+  const x = new Float32Array(samples.length);
+  for (let i = 0; i < x.length; i++) x[i] = (samples[i] / top) * 0.9;
+  return x;
+}
+
+export interface HeardBoth { melody: HumNote[]; rhythm: HumNote[]; bpm: number; key: string | null; seconds: number }
+
+/**
+ * A hum heard both ways: the melody (the model's pitch line) and the rhythm (hits, no model), on one clock that starts
+ * at the first note of either, at one tempo. Either may be empty (a tapped rhythm has no tune); both empty is refused.
+ * The tempo is the one given, else the one found from whichever hearing has more starts (the melody on a tie).
+ */
+export async function hearBoth(samples: Float32Array, bpmGiven: number | undefined, transcribe: Transcriber = basicPitch): Promise<HeardBoth> {
+  const seconds = round3(samples.length / HUM_RATE);
+  const x = normalized(samples);
+  const rhythm0 = findHits(x).map((h) => ({ p: h.p, s: h.s, d: 0.1, v: h.v }));
+  const track = await transcribe(x);
+  const melody0 = melodyNotes(track, frameLevels(x, track.t));
+  if (!melody0.length && !rhythm0.length) throw new StoreError(422, "nothing was heard; hum, sing, tap or beatbox a little louder or closer");
+  const t0 = Math.min(melody0[0]?.s ?? Infinity, rhythm0[0]?.s ?? Infinity);
+  const shift = (ns: HumNote[]) => ns.map((n) => ({ ...n, s: round3(n.s - t0), d: round3(n.d) }));
+  const melody = shift(melody0);
+  let rhythm = shift(rhythm0);
+  const starts = (melody.length >= rhythm.length ? melody : rhythm).map((n) => n.s);
+  const bpm = bpmGiven && bpmGiven >= 30 && bpmGiven <= 300 ? Math.round(bpmGiven) : estimateBpm(starts);
+  rhythm = rhythm.map((n) => ({ ...n, d: round3(60 / bpm / 4) }));
+  return { melody, rhythm, bpm, key: estimateKey(melody), seconds };
+}
+
+/** The two hearings of an idea's `midi`; an idea heard before both were kept has one, under `mode` and `notes`. */
+export function humLayers(m: { mode?: string; notes?: HumNote[]; melody?: HumNote[]; rhythm?: HumNote[] } | undefined): { melody: HumNote[]; rhythm: HumNote[] } {
+  if (!m) return { melody: [], rhythm: [] };
+  if (m.melody || m.rhythm) return { melody: m.melody ?? [], rhythm: m.rhythm ?? [] };
+  return m.mode === "rhythm" ? { melody: [], rhythm: m.notes ?? [] } : { melody: m.notes ?? [], rhythm: [] };
+}
+
+/** What the owner keeps: their choice, else both when both have notes, else the one that has. */
+export function humUse(chosen: unknown, layers: { melody: HumNote[]; rhythm: HumNote[] }): HumUse {
+  if (chosen === "melody" || chosen === "rhythm" || chosen === "both") return chosen;
+  if (layers.melody.length && layers.rhythm.length) return "both";
+  return layers.rhythm.length ? "rhythm" : "melody";
 }
 
 const audioDir = (hub: Hub) => path.join(hub.cfg.dataDir, "audio");
@@ -592,43 +644,48 @@ export function startHum(hub: Hub, wav: Buffer, opts: { mode?: unknown; bpm?: un
     const had = hub.store.list({ kind: "music_idea", where: { hum_client_id: clientId } })[0];
     if (had) return had;
   }
-  const mode: HumMode = opts.mode === "rhythm" ? "rhythm" : "melody";
+  // `mode` (melody or rhythm, from apps before every hum was heard both ways) is no longer needed.
   const samples = readWav(wav);
   if (samples.length < HUM_RATE * 0.5) throw new StoreError(422, "the recording is under half a second");
   const bpm = typeof opts.bpm === "number" ? opts.bpm : typeof opts.bpm === "string" && opts.bpm ? Number(opts.bpm) : undefined;
-  const title = typeof opts.title === "string" && opts.title.trim() ? opts.title.trim().slice(0, 160) : mode === "rhythm" ? "Tapped rhythm" : "Hummed melody";
+  const title = typeof opts.title === "string" && opts.title.trim() ? opts.title.trim().slice(0, 160) : "Hummed song";
   // The recording is written before the idea exists: a failed write leaves no idea listening for audio it never got.
   const id = crypto.randomUUID();
   fs.mkdirSync(audioDir(hub), { recursive: true, mode: 0o700 });
   fs.writeFileSync(humAudioPath(hub, id), writeWav(samples), { mode: 0o600 });
   const job = newJob();
   hub.store.create("music_idea", {
-    title, type: "riff", body: "", status: "idea", tags: ["hummed", mode], audio_ref: `hum:${id}`,
+    title, type: "riff", body: "", status: "idea", tags: ["hummed"], audio_ref: `hum:${id}`,
     ...(typeof opts.project_id === "string" && opts.project_id ? { project_id: opts.project_id } : {}),
     ...(clientId ? { hum_client_id: clientId } : {}),
     ...(bpm !== undefined && Number.isFinite(bpm) ? { hum_bpm_given: bpm } : {}),
-    midi: { source: "hum", mode, state: "listening", seconds: round3(samples.length / HUM_RATE), notes: [], job },
+    midi: { source: "hum", mode: "melody", state: "listening", seconds: round3(samples.length / HUM_RATE), notes: [], melody: [], rhythm: [], job },
   }, "personal", id);
-  void listen(hub, id, samples, mode, bpm, opts.from === "capture", job);
+  void listen(hub, id, samples, bpm, opts.from === "capture", job);
   return hub.store.get(id)!;
 }
 
 /** Each hearing has its own token: a result that comes back after a newer hearing started is dropped. */
 const newJob = () => crypto.randomUUID().slice(0, 8);
 
-/** Hear an idea's kept recording again, as a melody or a rhythm, at a given tempo or a found one. */
+/**
+ * Hear an idea's kept recording again, both ways, at a given tempo or a found one. A `mode` (from apps before every hum
+ * was heard both ways, whose button said "hear it again as a rhythm") keeps that hearing.
+ */
 export function rehear(hub: Hub, id: string, opts: { mode?: unknown; bpm?: unknown }): Entity {
   const idea = hub.store.get(id);
   if (!idea || idea.kind !== "music_idea" || idea.deleted_at) throw new StoreError(404, "music idea not found");
   const file = humAudioPath(hub, id);
   if (!fs.existsSync(file)) throw new StoreError(409, "this idea has no recording to hear again");
-  const prev = idea.fields.midi as { mode?: HumMode } | undefined;
-  const mode: HumMode = opts.mode === "rhythm" || opts.mode === "melody" ? opts.mode : prev?.mode ?? "melody";
+  const keep = opts.mode === "rhythm" || opts.mode === "melody" ? opts.mode : undefined;
   const bpm = typeof opts.bpm === "number" ? opts.bpm : undefined;
   const samples = readWav(fs.readFileSync(file));
   const job = newJob();
-  hub.store.patch(id, { midi: { source: "hum", mode, state: "listening", seconds: round3(samples.length / HUM_RATE), notes: [], job }, tags: [...new Set([...((idea.fields.tags as string[]) ?? []).filter((t) => t !== "melody" && t !== "rhythm"), mode])] });
-  void listen(hub, id, samples, mode, bpm, false, job);
+  hub.store.patch(id, {
+    midi: { source: "hum", mode: keep ?? "melody", state: "listening", seconds: round3(samples.length / HUM_RATE), notes: [], melody: [], rhythm: [], job },
+    ...(keep ? { hum_use: keep } : {}),
+  });
+  void listen(hub, id, samples, bpm, false, job);
   return hub.store.get(id)!;
 }
 
@@ -652,7 +709,7 @@ export function resumeHums(hub: Hub): number {
       const job = newJob();
       const given = idea.fields.hum_bpm_given;
       hub.store.patch(idea.id, { midi: { ...m, job } });
-      void listen(hub, idea.id, samples, m.mode === "rhythm" ? "rhythm" : "melody", typeof given === "number" ? given : undefined, false, job);
+      void listen(hub, idea.id, samples, typeof given === "number" ? given : undefined, false, job);
     } catch (e) {
       hub.store.patch(idea.id, { midi: { ...m, source: "hum", state: "failed", error: e instanceof StoreError ? e.message : "its recording could not be read", notes: [] } });
     }
@@ -660,8 +717,8 @@ export function resumeHums(hub: Hub): number {
   return n;
 }
 
-/** Titles the hub writes itself: the placeholder while listening, and "Melody in A minor, 120 BPM". */
-const AUTO_TITLE = /^(Hummed melody|Tapped rhythm|(Melody|Rhythm)( in [A-G][#b]? (major|minor))?, \d+ BPM)$/;
+/** Titles the hub writes itself: the placeholder while listening, and "Song in A minor, 120 BPM" (or older ones). */
+const AUTO_TITLE = /^(Hummed song|Hummed melody|Tapped rhythm|(Song|Melody|Rhythm)( in [A-G][#b]? (major|minor))?, \d+ BPM)$/;
 
 /** Still the idea's current hearing (not deleted, and no newer rehear started since). */
 function current(hub: Hub, id: string, job: string): Entity | null {
@@ -670,29 +727,38 @@ function current(hub: Hub, id: string, job: string): Entity | null {
   return idea;
 }
 
-async function listen(hub: Hub, id: string, samples: Float32Array, mode: HumMode, bpm: number | undefined, fromCapture: boolean, job: string): Promise<void> {
+async function listen(hub: Hub, id: string, samples: Float32Array, bpm: number | undefined, fromCapture: boolean, job: string): Promise<void> {
   try {
-    const h = await hear(samples, mode, bpm, humEngine.transcribe);
+    const h = await hearBoth(samples, bpm, humEngine.transcribe);
     const idea = current(hub, id, job);
     if (!idea) return;
     // A title the hub made (or the placeholder) is made again; one the owner typed stays.
     const generic = AUTO_TITLE.test(String(idea.fields.title ?? ""));
-    const title = generic ? `${mode === "rhythm" ? "Rhythm" : "Melody"}${h.key ? ` in ${h.key}` : ""}, ${h.bpm} BPM` : String(idea.fields.title);
+    const title = generic ? `Song${h.key ? ` in ${h.key}` : ""}, ${h.bpm} BPM` : String(idea.fields.title);
+    // Apps from before both hearings were kept read `mode` and `notes`: the kept rhythm when that is all the owner
+    // keeps, else the melody when there is one.
+    const legacy: HumMode = (idea.fields.hum_use === "rhythm" && h.rhythm.length) || !h.melody.length ? "rhythm" : "melody";
     hub.store.patch(id, {
-      // A rhythm has no key: one left from hearing it as a melody goes.
-      title, bpm: h.bpm, ...(h.key ? { key: h.key } : mode === "rhythm" && generic ? { key: null } : {}),
-      midi: { source: "hum", mode, state: "done", seconds: h.seconds, notes: h.notes, job },
+      // With no melody there is no key: one left from an earlier hearing goes.
+      title, bpm: h.bpm, ...(h.key ? { key: h.key } : generic ? { key: null } : {}),
+      midi: { source: "hum", mode: legacy, state: "done", seconds: h.seconds, notes: legacy === "rhythm" ? h.rhythm : h.melody, melody: h.melody, rhythm: h.rhythm, job },
     });
     if (fromCapture) {
-      try { appendDiary(hub.store, `Hummed ${mode === "rhythm" ? "a rhythm" : "a melody"}: ${title} (${h.notes.length} ${mode === "rhythm" ? "hits" : "notes"}), in Music`, new Date(idea.created_at)); } catch { /* the idea is what matters */ }
+      try { appendDiary(hub.store, `Hummed a song: ${title} (${heardCount(h)}), in Music`, new Date(idea.created_at)); } catch { /* the idea is what matters */ }
     }
   } catch (e) {
     const idea = current(hub, id, job);
     if (!idea) return;
     const msg = e instanceof StoreError ? e.message : `could not hear it: ${(e as Error).message}`;
     if (!(e instanceof StoreError)) console.error(`[hum] ${id}: ${errCode(e)}`);
-    hub.store.patch(id, { midi: { ...((idea.fields.midi as object) ?? {}), source: "hum", mode, state: "failed", error: msg, notes: [] } });
+    hub.store.patch(id, { midi: { ...((idea.fields.midi as object) ?? {}), source: "hum", state: "failed", error: msg, notes: [], melody: [], rhythm: [] } });
   }
+}
+
+/** "12 notes, 9 hits": what each hearing found, leaving out one that found nothing. */
+export function heardCount(h: { melody: HumNote[]; rhythm: HumNote[] }): string {
+  const part = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  return [h.melody.length ? part(h.melody.length, "note") : "", h.rhythm.length ? part(h.rhythm.length, "hit") : ""].filter(Boolean).join(", ");
 }
 
 /**
@@ -713,17 +779,29 @@ export function pruneHumAudio(hub: Hub): number {
   return gone;
 }
 
-/** GET /music/:id/midi: the idea's notes as a .mid file, snapped to the 1/16 grid unless `grid=off`. */
-export function ideaMidi(hub: Hub, id: string, grid: boolean): { name: string; bytes: Buffer } {
+/**
+ * GET /music/:id/midi: the idea's notes as a .mid file, snapped to the 1/16 grid unless `grid=off`: the melody, the
+ * rhythm or both (`use`, else what the owner keeps), both in one file with the melody on channel 1 and drums on 10.
+ */
+export function ideaMidi(hub: Hub, id: string, grid: boolean, use?: unknown): { name: string; bytes: Buffer } {
   const idea = hub.store.get(id);
   if (!idea || idea.kind !== "music_idea" || idea.deleted_at) throw new StoreError(404, "music idea not found");
-  const m = idea.fields.midi as { mode?: HumMode; state?: string; notes?: HumNote[] } | undefined;
-  if (!m?.notes?.length) throw new StoreError(409, m?.state === "listening" ? "still listening; try again in a moment" : "this idea has no notes");
+  const m = idea.fields.midi as { mode?: HumMode; state?: string; notes?: HumNote[]; melody?: HumNote[]; rhythm?: HumNote[] } | undefined;
+  const layers = humLayers(m);
+  const wanted = humUse(use === "melody" || use === "rhythm" || use === "both" ? use : idea.fields.hum_use, layers);
+  const melody = wanted === "rhythm" ? [] : layers.melody;
+  const rhythm = wanted === "melody" ? [] : layers.rhythm;
+  if (!melody.length && !rhythm.length) {
+    throw new StoreError(409, m?.state === "listening" ? "still listening; try again in a moment" : wanted === "both" ? "this idea has no notes" : `this idea has no ${wanted}`);
+  }
   // A typed tempo of 0 or 2 would make NaN times or wrap the file's tempo field.
   const typed = Number(idea.fields.bpm);
   const bpm = Number.isFinite(typed) && typed >= 20 && typed <= 400 ? typed : 100;
   const title = String(idea.fields.title ?? "Hum");
-  const notes = grid ? snapToGrid(m.notes, bpm, m.mode === "rhythm" ? "rhythm" : "melody") : m.notes;
   const file = `${title.replace(/[^\w ,.#()-]+/g, "").replace(/\s+/g, " ").trim().slice(0, 80) || "hum"}.mid`;
-  return { name: file, bytes: midiFile(notes, { bpm, name: title, drums: m.mode === "rhythm" }) };
+  const parts = [
+    { notes: grid ? snapToGrid(melody, bpm, "melody") : melody, drums: false },
+    { notes: grid ? snapToGrid(rhythm, bpm, "rhythm") : rhythm, drums: true },
+  ].filter((p) => p.notes.length);
+  return { name: file, bytes: midiParts(parts, { bpm, name: title }) };
 }
