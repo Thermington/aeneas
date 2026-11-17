@@ -18,8 +18,13 @@ export function bodyText(plain: string[], html: string[]): string {
  */
 export function readingText(plain: string[], html: string[]): string {
   const p = plain.join("\n");
+  const h = html.length ? htmlToText(html.join("\n")) : "";
+  const count = (s: string) => s.split("\n").filter((l) => l.trim()).length;
   // Some senders put HTML in the text part: then the HTML part (or that text, made plain) is read, never the tags.
-  const raw = p.trim() && !looksLikeHtml(p) ? p : htmlToText(html.length ? html.join("\n") : p);
+  // Others flatten the text part to a line or two (iCloud Mail on the web: "Hi Jennifer, I'd be glad … Best, Robin")
+  // while the HTML keeps the lines that tell greeting, message and sign-off apart: then the HTML is read too.
+  const flattened = h && count(p) <= 2 && count(h) >= 3;
+  const raw = p.trim() && !looksLikeHtml(p) && !flattened ? p : html.length ? h : htmlToText(p);
   const lines = raw.replace(/\r\n?/g, "\n").replace(/[\u200b-\u200f\u00ad\u034f\u2060\ufeff]/g, "").replace(/\u00a0/g, " ")
     .split("\n").map((l) => l.replace(/[ \t]+/g, " ").trim());
   return lines.filter((l, i) => l.trim() !== "" || (i > 0 && lines[i - 1].trim() !== "")).join("\n").trim();

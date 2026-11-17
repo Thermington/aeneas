@@ -25,7 +25,7 @@ const SHORT = 200;
  * The rules' version. Kept with each hub's mail: when it changes, kept mail is fetched again and cleaned by the new
  * rules (the original is not kept, so it cannot be cleaned again in place).
  */
-export const CLEAN_VERSION = 4;
+export const CLEAN_VERSION = 5;
 
 /** `On Tue, 4 Nov 2026 at 09:12, Alex <alex@example.com> wrote:` (Apple Mail, Gmail and most others). */
 const ON_WROTE = /^on\b.{0,240}\bwrote:$/i;

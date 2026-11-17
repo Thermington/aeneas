@@ -4,6 +4,7 @@ import { makeHub } from "./helpers.js";
 import { ACCOUNT, ago, done, EMAIL, fake, FOLDERS, linked, type Msg } from "./fake-icloud-chat.js";
 import { CHAT_MAX, chatFolders, headerValue, isAutomated, listChatICloud, messageIds, originalICloud, REFUSED } from "../src/imports/icloud.js";
 import { looksLikeHtml, readingText } from "../src/imports/mail-text.js";
+import { cleanMail } from "../src/mail-clean.js";
 
 test("icloud chat: reads Sent but not Junk, Trash or Drafts, every folder read-only", async () => {
   const t = makeHub();
@@ -161,6 +162,17 @@ test("mail-text: a text part that is really HTML is never shown as code", () => 
   assert.equal(readingText([broken], ["<p>Apply for aid now.</p><p>You can now send your form.</p>"]), "Apply for aid now.\nYou can now send your form.", "the HTML part instead");
   assert.ok(!/<|role=/.test(readingText([broken], [])), "or that text made plain when there is no HTML part");
   assert.equal(looksLikeHtml("Use <br> for a line break, and <p> for a paragraph."), false, "a mail about two tags is text");
+});
+
+test("mail-text: a text part flattened to one line is read from the HTML, so greeting and sign-off can be told apart", () => {
+  // As iCloud Mail on the web sends it: the text part on one line, the HTML with every line.
+  const plain = ["Hi Alex, I'd be glad to meet. I'm free from 2:30 to 4:30 PM today. Monday afternoon works too. Best, Robin"];
+  const html = ['<html><body><div><div><br></div></div><div>Hi Alex,</div><div style="font-family:system-ui"><br></div><div>I\'d be glad to meet. I\'m free from 2:30 to 4:30 PM today.&nbsp;</div><div><br></div><div>Monday afternoon works too.&nbsp;</div><div><br></div><div>Best,</div><div>Robin</div></body></html>'];
+  const read = readingText(plain, html);
+  assert.equal(read, "Hi Alex,\n\nI'd be glad to meet. I'm free from 2:30 to 4:30 PM today.\n\nMonday afternoon works too.\n\nBest,\nRobin");
+  assert.equal(cleanMail(read, { names: ["Robin Lee"] }).text, "I'd be glad to meet. I'm free from 2:30 to 4:30 PM today.\n\nMonday afternoon works too.");
+  // A short text part whose HTML has no more lines stays the text part.
+  assert.equal(readingText(["Thanks!"], ["<div>Thanks!</div>"]), "Thanks!");
 });
 
 test("icloud chat: a mail a system sent is told from a person's", async () => {
