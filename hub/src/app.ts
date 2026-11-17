@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import { nowIso, Platform } from "@everythingapp/shared";
-import { moduleDef, moduleOfPath } from "./modules.js";
+import { moduleDef, modulesOfPath } from "./modules.js";
 import { refuseToolCall } from "./ai/api-guard.js";
 import { StoreError } from "./store.js";
 import { VERSION, type Hub } from "./hub.js";
@@ -35,6 +35,7 @@ import { layoutRoutes } from "./routes/layouts.js";
 import { backupRoutes } from "./routes/backup.js";
 import { hubsRoutes } from "./routes/hubs.js";
 import { referenceRoutes } from "./routes/reference.js";
+import { mailRoutes } from "./routes/mail.js";
 import { BEFORE_YOU_INSTALL } from "./disclosure.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
@@ -311,8 +312,9 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
 
   // A module that is off (Settings, Modules) answers like a route that is not there, on every device.
   app.use("*", async (c, next) => {
-    const m = moduleOfPath(c.req.path);
-    if (m && !hub.modules.on(m)) return c.json({ error: `${moduleDef(m).title} is off. Turn it on in Settings, Modules.`, module: m }, 404);
+    const owners = modulesOfPath(c.req.path);
+    const m = owners[0];
+    if (m && !owners.some((id) => hub.modules.on(id))) return c.json({ error: `${moduleDef(m).title} is off. Turn it on in Settings, Modules.`, module: m }, 404);
     return next();
   });
 
@@ -453,6 +455,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.route("/", backupRoutes());
   app.route("/", hubsRoutes());
   app.route("/", referenceRoutes());
+  app.route("/", mailRoutes());
   // Assistant tools call this same app in-process, with the hub's own token, so they get the routes' validation and hooks.
   hub.ai.setApi(async (method, path, body) => {
     const refused = refuseToolCall(method, path);

@@ -64,6 +64,7 @@ export const AREAS: Array<{ title: string; items: Item[] }> = [
     { path: "/sensors", label: "Sensors" },
   ] },
   { title: "Life admin", items: [
+    { path: "/mail", label: "Mail" },
     { path: "/lists", label: "Lists" },
     { path: "/games", label: "Games" },
     { path: "/films", label: "Films" },

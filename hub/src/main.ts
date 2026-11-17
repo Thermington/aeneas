@@ -2,6 +2,7 @@ import { mainPortGuard, startLink } from "./link.js";
 import { startGalleryJob } from "./gallery.js";
 import { linkCaptureThreads, startFilingJob } from "./capture-filer.js";
 import { startMailJob } from "./mail-filer.js";
+import { startMailChatJob } from "./mail-chat.js";
 import { kick as kickImports } from "./imports/bulk.js";
 import { startNoteLinker } from "./note-linker.js";
 import path from "node:path";
@@ -248,6 +249,7 @@ async function main(): Promise<void> {
   const stopReference = startReference(hub);
   const stopImports = startImportJob(hub);
   const stopMail = startMailJob(hub);
+  const stopMailChat = startMailChatJob(hub);
   const stopNotes = startNoteLinker(hub);
   const stopGallery = startGalleryJob(hub);
   const linked = linkCaptureThreads(hub);
@@ -289,6 +291,7 @@ async function main(): Promise<void> {
     stopReference();
     stopImports();
     stopMail();
+    stopMailChat();
     stopNotes();
     stopGallery();
     stopFiling();

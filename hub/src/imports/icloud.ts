@@ -4,7 +4,7 @@ import type { Hub } from "../hub.js";
 import { StoreError } from "../store.js";
 import { BACKFILL_DAYS, MAIL_QUERY, OVERLAP_MS } from "./gmail.js";
 import type { FetchedMail, MailRef, MailSource } from "./mail-sources.js";
-import { bodyText } from "./mail-text.js";
+import { bodyText, readingText } from "./mail-text.js";
 
 /**
  * iCloud Mail, read-only, over IMAP. Apple has no sign-in for mail, so each mailbox is linked with an app-specific
@@ -14,7 +14,8 @@ import { bodyText } from "./mail-text.js";
  *
  * Read-only for real: every folder is opened with EXAMINE, message parts are fetched with BODY.PEEK (nothing is marked
  * read), and nothing here stores, moves, copies, appends, expunges or deletes. Only text parts are fetched, capped,
- * never attachments. Mail is read in memory and never stored, as for Gmail.
+ * never attachments. For receipts, mail is read in memory and never stored, as for Gmail; the Mail screen's listing
+ * (listChatICloud) hands its text to mail-chat.ts, which keeps only the cleaned body, briefly.
  */
 
 const HOST = "imap.mail.me.com";
@@ -49,7 +50,7 @@ export interface ICloudAccount {
 }
 
 /** Said when iCloud refused a mailbox's password and the hub stopped signing in. */
-export const REFUSED = "iCloud refused this mailbox's app-specific password (it was revoked, or the Apple Account changed). The hub stopped signing in so your account is not locked. Make a new app-specific password at account.apple.com and link the mailbox again, or press Read now to try this one once more.";
+export const REFUSED = "iCloud refused this mailbox's app-specific password (it was revoked, or the Apple Account changed). The hub stopped signing in so your account is not locked. Make a new app-specific password at account.apple.com and link the mailbox again, or press Read now (or Refresh in Mail) to try this one once more.";
 
 /**
  * Gmail's search words, so both sources look for the same mail: every `subject:` word in MAIL_QUERY, and the two
@@ -66,10 +67,13 @@ const SEARCH_ID = JSON.stringify({ subject: SUBJECT_WORDS, body: BODY_WORDS });
 
 export interface ImapFolder { path: string; specialUse?: string; flags: Set<string> }
 export interface ImapPart { part?: string; type: string; disposition?: string; dispositionParameters?: Record<string, string>; parameters?: Record<string, string>; childNodes?: ImapPart[] }
+export interface ImapAddress { name?: string; address?: string }
 export interface ImapMessage {
   internalDate?: Date | string;
-  envelope?: { date?: Date | string; subject?: string; messageId?: string; from?: { name?: string; address?: string }[] };
+  envelope?: { date?: Date | string; subject?: string; messageId?: string; inReplyTo?: string; from?: ImapAddress[]; replyTo?: ImapAddress[] };
   bodyStructure?: ImapPart;
+  /** Only the header lines asked for by name (`headers`), as the server sent them. */
+  headers?: Buffer;
 }
 export interface ImapClient {
   connect(): Promise<void>;
@@ -78,7 +82,8 @@ export interface ImapClient {
   list(): Promise<ImapFolder[]>;
   mailboxOpen(path: string, options: { readOnly: true }): Promise<{ uidValidity: bigint }>;
   search(query: Record<string, unknown>, options: { uid: true }): Promise<number[] | false | undefined>;
-  fetchOne(uid: string, query: { envelope: true; bodyStructure: true; internalDate: true }, options: { uid: true }): Promise<ImapMessage | false>;
+  /** `headers` names header lines to fetch (with BODY.PEEK, like everything here): only the Mail screen asks for them. */
+  fetchOne(uid: string, query: { envelope: true; bodyStructure: true; internalDate: true; headers?: string[] }, options: { uid: true }): Promise<ImapMessage | false>;
   download(uid: string, part: string, options: { uid: true; maxBytes: number }): Promise<{ content?: NodeJS.ReadableStream } | undefined>;
 }
 export interface ImapLogin { user: string; pass: string }
@@ -270,6 +275,17 @@ async function readStream(s: NodeJS.ReadableStream | undefined): Promise<string>
   return Buffer.concat(chunks).subarray(0, PART_MAX).toString("utf8");
 }
 
+/** A message's text parts (BODY.PEEK, capped), split into plain and HTML in the order they came. */
+async function downloadText(c: ImapClient, uid: string, msg: ImapMessage): Promise<{ plain: string[]; html: string[] }> {
+  const plain: string[] = [];
+  const html: string[] = [];
+  for (const p of textParts(msg.bodyStructure)) {
+    const d = await c.download(uid, p.part, { uid: true, maxBytes: PART_MAX });
+    (p.html ? html : plain).push(await readStream(d?.content));
+  }
+  return { plain, html };
+}
+
 /** One queued message as text, or null when it is gone (its folder, its UIDVALIDITY or the message itself). */
 export async function readICloud(hub: Hub, accountKey: string, id: string): Promise<FetchedMail | null> {
   const ref = parseId(id);
@@ -288,12 +304,7 @@ export async function readICloud(hub: Hub, accountKey: string, id: string): Prom
     if (String(box.uidValidity) !== ref.validity) return null;
     const msg = await c.fetchOne(ref.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
     if (!msg) return null;
-    const plain: string[] = [];
-    const html: string[] = [];
-    for (const p of textParts(msg.bodyStructure)) {
-      const d = await c.download(ref.uid, p.part, { uid: true, maxBytes: PART_MAX });
-      (p.html ? html : plain).push(await readStream(d?.content));
-    }
+    const { plain, html } = await downloadText(c, ref.uid, msg);
     const env = msg.envelope ?? {};
     const sender = env.from?.[0];
     const at = new Date(msg.internalDate ?? env.date ?? Date.now());
@@ -306,6 +317,138 @@ export async function readICloud(hub: Hub, accountKey: string, id: string): Prom
     };
   }).catch((e) => {
     if (e instanceof ICloudRefused) saveAccount(hub, email, { last_sync: nowIso(), last_error: REFUSED, refused_at: nowIso() });
+    throw e;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The Mail screen (mail-chat.ts): every recent message, the owner's sent mail included, with what threads it. Read-only
+// as above: EXAMINE, BODY.PEEK (headers too), nothing changed.
+
+/** Folders that are not conversations: Junk, Trash and Drafts. Sent is read: it is the owner's side. */
+const CHAT_SKIP_USE = new Set(["\\Junk", "\\Trash", "\\Drafts"]);
+/** At most this many new messages are fetched per mailbox per refresh, newest first; the rest come on the next. */
+export const CHAT_MAX = 300;
+/** Header lines fetched by name: the envelope already has In-Reply-To and Reply-To, but not References. */
+const CHAT_HEADERS = ["references"];
+
+export interface ChatAddress { name: string; address: string }
+/** One message for the Mail screen, before cleaning. Kept only in memory; mail-chat.ts decides what is stored. */
+export interface ChatMail {
+  /** `<UIDVALIDITY>:<UID>:<folder>`, as for receipts. */
+  id: string;
+  at: Date;
+  message_id: string | null;
+  in_reply_to: string | null;
+  /** The Message-IDs in References, oldest first, at most 50. */
+  references: string[];
+  from: ChatAddress;
+  /** Set only when replies would go somewhere other than From. */
+  reply_to: string | null;
+  subject: string;
+  /** The text as a person reads it (readingText), not yet cleaned. */
+  text: string;
+  /** Sent by the owner: in the Sent folder, or from the mailbox's own address. */
+  mine: boolean;
+}
+
+/** The folders the Mail screen reads: every one but Junk, Trash, Drafts and ones that cannot be opened. */
+export function chatFolders(folders: ImapFolder[]): ImapFolder[] {
+  return folders.filter((f) => !(f.specialUse && CHAT_SKIP_USE.has(f.specialUse)) && !f.flags.has("\\Noselect") && !f.flags.has("\\NonExistent"));
+}
+
+/** `<id@host>` tokens in a header (References, In-Reply-To), at most `max`, without their angle brackets. */
+export function messageIds(v: string | undefined | null, max = 50): string[] {
+  if (!v) return [];
+  return [...v.slice(0, 64 * 1024).matchAll(/<([^<>\s]{1,250})>/g)].slice(0, max).map((m) => m[1]);
+}
+
+/** One header's value from header lines as the server sent them (folded lines unfolded), or "". */
+export function headerValue(raw: Buffer | undefined, name: string): string {
+  if (!raw) return "";
+  const text = raw.subarray(0, 64 * 1024).toString("utf8").replace(/\r?\n[ \t]+/g, " ");
+  const want = `${name.toLowerCase()}:`;
+  const line = text.split(/\r?\n/).find((l) => l.toLowerCase().startsWith(want));
+  return line ? line.slice(want.length).trim() : "";
+}
+
+const chatAddress = (a: ImapAddress | undefined): ChatAddress => ({ name: (a?.name ?? "").trim().slice(0, 200), address: (a?.address ?? "").trim().toLowerCase().slice(0, 254) });
+const bareId = (v: string | undefined | null) => messageIds(v, 1)[0] ?? null;
+
+/** What the Mail screen shows of one fetched message. */
+function chatMail(email: string, id: string, folder: ImapFolder, msg: ImapMessage, text: string): ChatMail {
+  const env = msg.envelope ?? {};
+  const from = chatAddress(env.from?.[0]);
+  const replyTo = chatAddress(env.replyTo?.[0]).address;
+  const at = new Date(msg.internalDate ?? env.date ?? Date.now());
+  return {
+    id,
+    at: Number.isNaN(at.getTime()) ? new Date() : at,
+    message_id: bareId(env.messageId),
+    in_reply_to: bareId(env.inReplyTo),
+    references: messageIds(headerValue(msg.headers, "references")),
+    from,
+    // IMAP servers fill Reply-To with From when a mail has none, so only a different address is worth a warning.
+    reply_to: replyTo && replyTo !== from.address ? replyTo : null,
+    subject: (env.subject ?? "").slice(0, 500),
+    text,
+    mine: folder.specialUse === "\\Sent" || from.address === email,
+  };
+}
+
+/**
+ * The Mail screen's refresh for one mailbox: every message since `since` in every folder but Junk, Trash and Drafts
+ * whose id `known` does not have, newest first in each folder, at most CHAT_MAX. One connection, closed at the end.
+ * A refused password pauses the mailbox exactly as for receipts; `owner` (the Refresh button) tries it once.
+ */
+export async function listChatICloud(hub: Hub, accountKey: string, since: Date, known: (id: string) => boolean, opts: { owner?: boolean } = {}): Promise<{ mails: ChatMail[]; more: boolean }> {
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at && !opts.owner) throw new StoreError(409, REFUSED);
+  const mails: ChatMail[] = [];
+  let more = false;
+  try {
+    await withClient({ user: a.email, pass: a.password }, DEADLINES.list, async (c) => {
+      for (const f of chatFolders(await c.list())) {
+        const box = await c.mailboxOpen(f.path, { readOnly: true });
+        const uids = ((await c.search({ since }, { uid: true })) || []).filter((uid) => !known(messageId(box.uidValidity, uid, f.path)));
+        for (const uid of [...uids].sort((x, y) => y - x)) {
+          if (mails.length >= CHAT_MAX) { more = true; return; }
+          const msg = await c.fetchOne(String(uid), { envelope: true, bodyStructure: true, internalDate: true, headers: CHAT_HEADERS }, { uid: true });
+          if (!msg) continue;
+          const { plain, html } = await downloadText(c, String(uid), msg);
+          mails.push(chatMail(email, messageId(box.uidValidity, uid, f.path), f, msg, readingText(plain, html)));
+        }
+      }
+    });
+  } catch (e) {
+    const f = failure(e);
+    if (f instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
+    throw f;
+  }
+  if (a.refused_at) saveAccount(hub, email, { last_error: null, refused_at: null });
+  return { mails, more };
+}
+
+/** Show original: one message's whole text, fetched now and never kept; null when it is gone from the mailbox. */
+export async function originalICloud(hub: Hub, accountKey: string, id: string): Promise<{ at: Date; from: ChatAddress; reply_to: string | null; subject: string; text: string } | null> {
+  const ref = parseId(id);
+  if (!ref) return null;
+  const email = emailOf(accountKey);
+  const a = account(hub, email);
+  if (a.refused_at) throw new StoreError(409, REFUSED);
+  return withClient({ user: a.email, pass: a.password }, DEADLINES.read, async (c) => {
+    let box: { uidValidity: bigint };
+    try { box = await c.mailboxOpen(ref.folder, { readOnly: true }); }
+    catch (e) { if ((e as { responseStatus?: string })?.responseStatus === "NO") return null; throw e; }
+    if (String(box.uidValidity) !== ref.validity) return null;
+    const msg = await c.fetchOne(ref.uid, { envelope: true, bodyStructure: true, internalDate: true }, { uid: true });
+    if (!msg) return null;
+    const { plain, html } = await downloadText(c, ref.uid, msg);
+    const m = chatMail(email, id, { path: ref.folder, flags: new Set() }, msg, readingText(plain, html));
+    return { at: m.at, from: m.from, reply_to: m.reply_to, subject: m.subject, text: m.text };
+  }).catch((e) => {
+    if (e instanceof ICloudRefused) saveAccount(hub, email, { last_error: REFUSED, refused_at: nowIso() });
     throw e;
   });
 }

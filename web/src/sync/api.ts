@@ -6,6 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
+import type { MailConversation, MailList, MailOriginal, MailRefresh } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -788,6 +789,23 @@ export class HubClient {
   }
   wikiSearch(q: string, limit = 30, signal?: AbortSignal) {
     return this.req<{ results: WikiHit[] }>("GET", `/wiki/search?q=${encodeURIComponent(q)}&limit=${limit}`, undefined, signal);
+  }
+
+  /** The Mail screen (module mail_chat): iCloud mail as conversations, read-only. */
+  mailConversations(q = "", signal?: AbortSignal) {
+    return this.req<MailList>("GET", `/mail/conversations${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`, undefined, signal);
+  }
+  mailConversation(id: string) {
+    return this.req<MailConversation>("GET", `/mail/conversations/${encodeURIComponent(id)}`);
+  }
+  mailOriginal(id: string) {
+    return this.req<MailOriginal>("GET", `/mail/messages/${encodeURIComponent(id)}/original`);
+  }
+  mailRefresh() {
+    return this.req<MailRefresh>("POST", "/mail/refresh", {});
+  }
+  setMailKeepDays(keep_days: number) {
+    return this.req<{ keep_days: number; choices: number[] }>("PUT", "/mail/settings", { keep_days });
   }
 
   gamePick(body: { players: string[]; hours?: number; coop?: boolean; exclude?: string[] }) {

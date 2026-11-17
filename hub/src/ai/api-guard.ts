@@ -14,6 +14,8 @@ const NO_READ = [
   "/feeds",
   // Another person's hub: its pairing codes and who is on this machine.
   "/hubs",
+  // The Mail screen's mail (since 2026-11-17): a mail could otherwise steer the model into reading other mail.
+  "/mail",
 ];
 
 /** Paths a tool may change: syncing a linked account now. Every other write under these prefixes is the owner's. */

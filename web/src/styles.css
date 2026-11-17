@@ -858,6 +858,31 @@ table.amort th:first-child, table.amort td:first-child { text-align: left; }
 .md th { background: var(--surface-2); font-weight: 600; }
 .md del { color: var(--muted); }
 
+/* Mail: conversations beside the open one, each message a bubble (theirs left, yours right, as in Assistant). */
+.split.mail { grid-template-columns: 320px 1fr; }
+.mail-side h1 { margin-bottom: 10px; }
+.mail-item { color: var(--text); }
+.mail-item:hover { text-decoration: none; border-color: var(--muted); }
+.mail-item.active { border-color: var(--accent); }
+.mail-item .mail-who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-item .mail-subject { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-item .snippet { display: block; font-size: 13px; color: var(--text-2); margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.mail-footer { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+.mail-main { min-width: 0; }
+.mail-thread { gap: 10px; max-width: 760px; }
+.mail-thread-subject { margin: 0 0 4px; overflow-wrap: anywhere; }
+.mail-day { text-align: center; margin-top: 6px; }
+.mail-row { display: flex; justify-content: flex-start; }
+.mail-row.mine { justify-content: flex-end; }
+.mail-bubble { max-width: min(85%, 600px); }
+.mail-bubble.user { margin-left: 0; }
+.mail-from { margin-bottom: 4px; overflow-wrap: anywhere; }
+.mail-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.mail-original { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.mail-original-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font); font-size: 13px; color: var(--text-2); margin: 0; max-height: 50vh; overflow-y: auto; }
+.mail-bubble .meta button { min-height: 0; padding: 0 4px; font-size: 12px; }
+.mail-bubble > .warn { margin-bottom: 4px; }
+
 /* Wiki: sources and pages beside the page being read. */
 .wiki-side h1 { margin-bottom: 10px; }
 .wiki-project { margin: 4px 0 14px; }

@@ -57,6 +57,7 @@ const Films = screen(() => import("./views/Films").then((m) => m.Films));
 const Calc = screen(() => import("./views/Calc").then((m) => m.Calc));
 const Memory = screen(() => import("./views/Memory").then((m) => m.Memory));
 const Reference = screen(() => import("./views/Reference").then((m) => m.Reference));
+const Mail = screen(() => import("./views/Mail").then((m) => m.Mail));
 const Assistant = screen(() => import("./views/Assistant").then((m) => m.Assistant));
 const Search = screen(() => import("./views/Search").then((m) => m.Search));
 const Status = screen(() => import("./views/Status").then((m) => m.Status));
@@ -199,6 +200,7 @@ export function App() {
   else if (p.startsWith("/calc")) view = <Calc />;
   else if (p.startsWith("/memory")) view = <Memory />;
   else if (p === "/reference" || p.startsWith("/reference/")) view = <Reference path={p} params={route.params} />;
+  else if (p === "/mail") view = <Mail id={route.params.get("c")} />;
   else if (p.startsWith("/assistant")) view = <Assistant id={route.parts[1]} />;
   else if (p.startsWith("/search")) view = <Search q={route.params.get("q") ?? ""} />;
   else if (p.startsWith("/status")) view = <Status />;

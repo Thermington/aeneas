@@ -13,6 +13,8 @@ import { icloudSource, linkICloud, unlinkICloud } from "../imports/icloud.js";
 import { guideFor, parseGuideService } from "../guides.js";
 import { hubAddress } from "../setup.js";
 import { mailboxLabel, mailReading, mailSchedule, readMailNow } from "../mail-filer.js";
+import { deleteMailbox, refreshMail } from "../mail-chat.js";
+import { StoreError } from "../store.js";
 import { importKeepass, installPasswordManager, keepass, keepassEntries, linkPasswordManager, passwordManagerStatus, passwordManagerView, PROVIDERS, putKeepassEntry, removeKeepassEntry, searchItems, setAccess, setAllowed, signInPasswordManager, unlinkPasswordManager, type Provider } from "../secrets.js";
 import { KEEPASS_FILE } from "../keepass.js";
 import { errCode } from "../logsafe.js";
@@ -75,10 +77,25 @@ export function importRoutes() {
   // iCloud Mail (icloud.ts): an app-specific password, checked with iCloud once and kept sealed; never returned.
   r.put("/connections/icloud", async (c) => {
     const hub = c.get("hub");
-    return c.json(await linkICloud(hub, await readJsonObject(c), (account) => { void icloudSource.list(hub, account).catch((e) => console.error(`[mail] ${mailboxLabel(hub, account)}: ${errCode(e)}`)); }));
+    // The path answers while Mail receipts or the Mail screen is on: a new link starts only the ones that are on.
+    return c.json(await linkICloud(hub, await readJsonObject(c), (account) => {
+      if (hub.modules.on("mail")) void icloudSource.list(hub, account).catch((e) => console.error(`[mail] ${mailboxLabel(hub, account)}: ${errCode(e)}`));
+      if (hub.modules.on("mail_chat")) void refreshMail(hub).catch((e) => console.error(`[mail-chat] ${errCode(e)}`));
+    }));
   });
-  r.post("/connections/icloud/sync", async (c) => c.json(await readMailNow(c.get("hub"))));
-  r.delete("/connections/icloud/:email", (c) => c.json(unlinkICloud(c.get("hub"), decodeURIComponent(c.req.param("email")).toLowerCase())));
+  r.post("/connections/icloud/sync", async (c) => {
+    const hub = c.get("hub");
+    if (!hub.modules.on("mail")) throw new StoreError(404, "Mail receipts is off. Turn it on in Settings, Modules.");
+    return c.json(await readMailNow(hub));
+  });
+  r.delete("/connections/icloud/:email", (c) => {
+    const hub = c.get("hub");
+    const email = decodeURIComponent(c.req.param("email")).toLowerCase();
+    const view = unlinkICloud(hub, email);
+    // The Mail screen's messages from it go at once, whichever modules are on.
+    deleteMailbox(hub.mailDb, `icloud:${email}`);
+    return c.json(view);
+  });
 
   // Password manager (secrets.ts): which one and where its CLI runs, sign-in, and the items the assistant may use.
   r.get("/connections/password-manager", (c) => c.json(passwordManagerView(c.get("hub"))));

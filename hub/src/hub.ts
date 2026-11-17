@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { type Config } from "./config.js";
 import { moveChatTables, openChatDb, openDb, type DB } from "./db.js";
+import { deleteAllMail, openMailDb } from "./mail-chat.js";
 import { Bus } from "./bus.js";
 import { Store } from "./store.js";
 import { Vault } from "./vault.js";
@@ -51,6 +52,8 @@ export interface Hub {
   db: DB;
   /** chats.sqlite: sessions, ai_calls, ai_actions. Not backed up. */
   chatDb: DB;
+  /** mail.sqlite: the Mail screen's cleaned mail, kept briefly (mail-chat.ts). Not backed up, not synced. */
+  mailDb: DB;
   bus: Bus;
   store: Store;
   vault: Vault;
@@ -136,6 +139,7 @@ export function createHub(cfg: Config): Hub {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   const db = openDb(cfg.dbPath);
   const chatDb = openChatDb(cfg.chatDbPath);
+  const mailDb = openMailDb(path.join(cfg.dataDir, "mail.sqlite"));
   const mv = moveChatTables(db, chatDb);
   if (Object.keys(mv.moved).length) console.log(`[db] moved chat tables out of the main database: ${JSON.stringify(mv.moved)}`);
   const bus = new Bus();
@@ -150,8 +154,13 @@ export function createHub(cfg: Config): Hub {
   const map = new KnowledgeMap(store);
   vault.linkDeriver = (id, body, title, related) => map.deriveLinks(id, body, title, related);
   const devices = new DeviceTracker(store);
-  const hub: Hub = { cfg, db, chatDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); } };
+  const hub: Hub = { cfg, db, chatDb, mailDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); mailDb.close(); } };
   keepSeqMark(store, path.join(cfg.dataDir, "sync-mark.json"));
+  // The Mail screen switched off: its mail goes at once (its data is not kept for later, unlike other modules').
+  hub.modules.onChange((_, off) => {
+    if (!off.includes("mail_chat")) return;
+    try { const n = deleteAllMail(mailDb); if (n) console.log(`[mail-chat] module off: deleted ${n} message(s)`); } catch (e) { console.error(`[mail-chat] ${errCode(e)}`); }
+  });
   try { if (hub.connections.sealIfPlain()) console.log("[secrets] connections.json sealed"); } catch (e) { console.error(`[secrets] connections.json not sealed: ${errCode(e)}`); }
   // Machines are only the ones the person adds (hosts.json); a hub already using its SSH hosts keeps them, once.
   try {

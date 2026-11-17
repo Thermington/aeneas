@@ -1,0 +1,140 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { makeHub } from "./helpers.js";
+import { ACCOUNT, ago, done, EMAIL, fake, FOLDERS, linked, type Msg } from "./fake-icloud-chat.js";
+import { CHAT_MAX, chatFolders, headerValue, listChatICloud, messageIds, originalICloud, REFUSED } from "../src/imports/icloud.js";
+import { readingText } from "../src/imports/mail-text.js";
+
+test("icloud chat: reads Sent but not Junk, Trash or Drafts, every folder read-only", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    const seen = fake([
+      { uid: 1, folder: "INBOX", at: ago(1), subject: "Gutters", from: { name: "Alex", address: "alex@example.com" }, messageId: "a1@example.com", plain: "Saturday?" },
+      { uid: 2, folder: "Sent Messages", at: ago(1), subject: "Re: Gutters", from: { name: "Robin", address: EMAIL }, messageId: "r1@icloud.example", inReplyTo: "a1@example.com", references: "<a1@example.com>", plain: "Yes!" },
+      { uid: 3, folder: "Junk", at: ago(1), subject: "You won", from: { address: "spam@example.com" }, plain: "x" },
+      { uid: 4, folder: "Drafts", at: ago(1), subject: "unsent", from: { address: EMAIL }, plain: "x" },
+    ]);
+    const { mails, more } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.equal(more, false);
+    assert.deepEqual(seen.opened.map((o) => o.path), ["INBOX", "Archive", "Sent Messages"]);
+    assert.ok(seen.opened.every((o) => o.readOnly === true), "EXAMINE, never SELECT");
+    assert.deepEqual(mails.map((m) => [m.subject, m.mine]), [["Gutters", false], ["Re: Gutters", true]]);
+    const reply = mails[1];
+    assert.equal(reply.id, "7:2:Sent Messages");
+    assert.equal(reply.message_id, "r1@icloud.example", "angle brackets off");
+    assert.equal(reply.in_reply_to, "a1@example.com");
+    assert.deepEqual(reply.references, ["a1@example.com"]);
+    assert.equal(reply.reply_to, null, "Reply-To that is the From address is no warning");
+    // Only the calls the read-only client type has, every connection closed.
+    assert.equal(seen.connects, 1);
+    assert.equal(seen.logouts, 1);
+    assert.deepEqual([...new Set(seen.calls)].sort(), ["connect", "download", "fetchOne", "list", "logout", "mailboxOpen", "search"]);
+    assert.deepEqual(seen.fetches[0], { query: { envelope: true, bodyStructure: true, internalDate: true, headers: ["references"] }, o: { uid: true } });
+  } finally { done(t); }
+});
+
+test("icloud chat: a message from the owner's own address is the owner's wherever it is", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([{ uid: 9, folder: "Archive", at: ago(2), subject: "Note to self", from: { address: "Robin@iCloud.example" }, plain: "milk" }]);
+    const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.equal(mails[0].mine, true, "addresses compared without case");
+    assert.equal(mails[0].from.address, EMAIL);
+  } finally { done(t); }
+});
+
+test("icloud chat: a Reply-To that differs from From is kept for the warning", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([{ uid: 5, folder: "INBOX", at: ago(1), subject: "Your account", from: { name: "Your Bank", address: "alerts@bank.example" }, replyTo: { address: "help@b4nk-support.example" }, plain: "Please confirm." }]);
+    const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.equal(mails[0].reply_to, "help@b4nk-support.example");
+  } finally { done(t); }
+});
+
+test("icloud chat: only mail since the kept window, only what is not kept yet, newest first, at most CHAT_MAX", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    const many: Msg[] = Array.from({ length: CHAT_MAX + 20 }, (_, i) => ({ uid: i + 1, folder: "INBOX", at: ago(1), subject: `m${i + 1}`, from: { address: "a@example.com" }, plain: "hi" }));
+    many.push({ uid: 999, folder: "INBOX", at: ago(30), subject: "old", from: { address: "a@example.com" }, plain: "old" });
+    const seen = fake(many);
+    const since = ago(7);
+    const { mails, more } = await listChatICloud(t.hub, ACCOUNT, since, (id) => id === "7:320:INBOX");
+    assert.equal(seen.searches[0].since, since, "the search starts at the kept window");
+    assert.equal(more, true);
+    assert.equal(mails.length, CHAT_MAX);
+    assert.equal(mails[0].subject, "m319", "newest first; 320 was kept already");
+    assert.ok(!mails.some((m) => m.subject === "old"));
+  } finally { done(t); }
+});
+
+test("icloud chat: the text part is read as written, the HTML only when there is no text part", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    fake([
+      { uid: 1, folder: "INBOX", at: ago(1), subject: "both", from: { address: "a@example.com" }, plain: "Short.\n\n-- \nAlex", html: "<p>Short.</p>" },
+      { uid: 2, folder: "INBOX", at: ago(1), subject: "html", from: { address: "a@example.com" }, html: "<p>First</p><p>Second &amp; last</p><script>alert(1)</script>" },
+    ]);
+    const { mails } = await listChatICloud(t.hub, ACCOUNT, ago(7), () => false);
+    assert.equal(mails.find((m) => m.subject === "both")!.text, "Short.\n\n--\nAlex", "the signature marker is still there for the cleaner");
+    assert.equal(mails.find((m) => m.subject === "html")!.text, "First\nSecond & last");
+  } finally { done(t); }
+});
+
+test("icloud chat: a refused password pauses the mailbox; only the owner's Refresh tries again", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    let seen = fake([], { password: "zzzz-zzzz-zzzz-zzzz" });
+    await assert.rejects(listChatICloud(t.hub, ACCOUNT, ago(7), () => false), (e: any) => e.status === 422);
+    const a = t.hub.connections.get().icloud![0];
+    assert.ok(a.refused_at);
+    assert.equal(a.last_error, REFUSED);
+    seen = fake([]);
+    await assert.rejects(listChatICloud(t.hub, ACCOUNT, ago(7), () => false), (e: any) => e.status === 409);
+    await assert.rejects(originalICloud(t.hub, ACCOUNT, "7:1:INBOX"), (e: any) => e.status === 409);
+    assert.equal(seen.connects, 0, "no sign-in on its own after a refusal");
+    await listChatICloud(t.hub, ACCOUNT, ago(7), () => false, { owner: true });
+    assert.equal(seen.connects, 1);
+    assert.equal(t.hub.connections.get().icloud![0].refused_at, null, "a password that works again unpauses it");
+  } finally { done(t); }
+});
+
+test("icloud chat: Show original fetches one message's whole text, and says when it is gone", async () => {
+  const t = makeHub();
+  try {
+    linked(t);
+    const seen = fake([{ uid: 4, folder: "Archive", at: ago(3), subject: "Lease", from: { name: "Pat", address: "pat@example.com" }, replyTo: { address: "other@example.com" }, plain: "Hi Robin,\n\nSign by Friday.\n\nPat\n\n> old quote" }]);
+    const o = await originalICloud(t.hub, ACCOUNT, "7:4:Archive");
+    assert.equal(o!.text, "Hi Robin,\n\nSign by Friday.\n\nPat\n\n> old quote", "nothing taken off");
+    assert.equal(o!.reply_to, "other@example.com");
+    assert.equal(o!.from.name, "Pat");
+    assert.deepEqual(seen.fetches.at(-1), { query: { envelope: true, bodyStructure: true, internalDate: true }, o: { uid: true } });
+    assert.equal(await originalICloud(t.hub, ACCOUNT, "8:4:Archive"), null, "UIDVALIDITY changed");
+    assert.equal(await originalICloud(t.hub, ACCOUNT, "7:4:Gone folder"), null);
+    assert.equal(await originalICloud(t.hub, ACCOUNT, "7:5:Archive"), null);
+    assert.equal(await originalICloud(t.hub, ACCOUNT, "not an id"), null);
+    assert.equal(seen.connects, seen.logouts, "every connection closed");
+  } finally { done(t); }
+});
+
+test("icloud chat: header helpers take only what they should from hostile headers", () => {
+  assert.deepEqual(messageIds("<a@x> <b@y>\r\n <c@z>"), ["a@x", "b@y", "c@z"]);
+  assert.deepEqual(messageIds("no ids here"), []);
+  assert.equal(messageIds(Array.from({ length: 500 }, (_, i) => `<id${i}@x>`).join(" ")).length, 50, "at most 50");
+  assert.deepEqual(messageIds("<has space@x> <ok@x>"), ["ok@x"]);
+  assert.equal(headerValue(Buffer.from("References: <a@x>\r\n\t<b@y>\r\nX-Other: 1\r\n"), "references"), "<a@x> <b@y>", "folded lines unfolded");
+  assert.equal(headerValue(Buffer.from("X-References: <evil@x>\r\n"), "references"), "", "only the header named");
+  assert.equal(headerValue(undefined, "references"), "");
+  assert.deepEqual(chatFolders(FOLDERS).map((f) => f.path), ["INBOX", "Archive", "Sent Messages"]);
+});
+
+test("mail-text: readingText keeps paragraphs, drops invisible padding, prefers the text part", () => {
+  assert.equal(readingText(["One\r\n\r\n\r\n\r\nTwo​  "], ["<p>ignored</p>"]), "One\n\nTwo");
+  assert.equal(readingText(["  "], ["<div>Only&nbsp;HTML</div>"]), "Only HTML");
+});
