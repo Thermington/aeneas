@@ -11,7 +11,9 @@ import { docSections, HELP_DOCS, moduleSections, searchHelp, splitMarkdown } fro
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 test("help: every doc it reads exists and is published (none is on the private list)", () => {
-  const priv = fs.readFileSync(path.join(ROOT, "tools/public-release/private-paths.txt"), "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  // The private list is itself private: the public repository has no copy, and holds only published docs anyway.
+  const listFile = path.join(ROOT, "tools/public-release/private-paths.txt");
+  const priv = fs.existsSync(listFile) ? fs.readFileSync(listFile, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
   for (const d of HELP_DOCS) {
     assert.ok(fs.existsSync(path.join(ROOT, d)), `${d} is missing`);
     assert.ok(!priv.some((p) => d === p || (p.endsWith("/") && d.startsWith(p))), `${d} is private`);
