@@ -1,0 +1,100 @@
+# Using Aeneas
+
+How to do the common things, and where each one lives. The assistant reads this page (and the other docs and the
+module list) to answer questions about the app, so ask it too: "how do I get my calendar in?"
+
+## The parts
+
+- **The hub** is the computer at home that keeps everything and runs the models. Every app is a window onto it.
+- **The apps**: iPhone, iPad and Mac (one Apple app), Apple Watch (through the iPhone app), Windows, Android, and the
+  web app in a browser. They show the same data; what differs is what each device can read from itself (only the
+  Apple apps can read Apple Calendar, Reminders, Contacts and Health).
+- **Modules**: everything outside the core (Today, Assistant, Capture, Search, Unsorted Info, Tasks, Week, Notes,
+  Memory, People, Lists) is a module you switch on or off in Settings, Modules. The setting is the same on every device.
+
+## Add another device (pair a new phone, tablet or computer)
+
+On a device that is already paired, open Settings, Connection, Pair another device. It shows a code (and a QR code)
+that works once, for 10 minutes. On the new device, install Aeneas, open it and scan the QR code or type the code
+and the hub's address. Reinstalling the app on a device means pairing it again the same way.
+
+## Calendars
+
+There are two directions, and they are set up in different places.
+
+### Your calendars into Aeneas
+
+Calendars come in through the Apple apps, which read Apple Calendar on the device (so any account Apple Calendar
+has: iCloud, Google, Exchange and others). Switch on the Apple Calendar module in Settings, Modules, then on the
+iPhone, iPad or Mac open Settings, Calendar and work:
+
+- **Where app events go**: the calendars that events made in Aeneas (by you or the assistant) are copied into.
+  Changes made to them in Apple Calendar come back; single events made in those calendars come in both ways, and
+  repeating ones come in as read-only occurrences.
+- **Work meetings to import**: calendars you mark as work. Only the title and time of each meeting are read, from
+  7 days back to 30 days ahead. They show as Work in Today and Week and count as busy time.
+
+The Mac app copies at once; the iPhone after about two minutes. The Windows, Android and web apps do not read any
+calendar themselves: a hub with no Apple device gets no calendar events.
+
+### Your plan out to any calendar app
+
+Settings, Connections, Calendar has **Subscribe in calendar app** and **Copy link**. This goes the other way: it
+publishes your scheduled tasks, events, reminders and renewal dates as a calendar feed that Apple Calendar, Google
+Calendar or Outlook keeps up to date by itself. It does not bring any calendar into Aeneas. Work items stay out. The
+link's key reads only this feed; New link ends the old one. On a computer, Subscribe asks which calendar app to open;
+Copy link and adding it as a subscribed calendar by URL works in any calendar app.
+
+## Mail
+
+Mail is read on the hub, not on the devices: Settings, Connections, Gmail or iCloud Mail, with the Mail receipts
+module on. The hub reads only mail that looks like receipts, renewal notices or vet mail, files them as renewals and
+pet visits, and does not keep the mail itself. It does not show mail in Week or anywhere else.
+
+- **iCloud Mail** needs an app-specific password you make at account.apple.com; the guide in Settings, Connections
+  takes you through it. The password is kept only on the hub. Apple's app-specific passwords also open iCloud
+  Contacts and Calendars, but Aeneas uses it only to read mail.
+- **Gmail** needs your own Google app, allowed only to read mail, and the hub reached through Tailscale (Google
+  returns only to an https name). The steps are in [gmail-setup.md](gmail-setup.md) and in the guide in Settings,
+  Connections.
+
+## Reminders, Contacts and Health
+
+These are read on the Apple devices: the Apple Reminders and Contacts modules (Settings, Modules), and Apple Health,
+turned on in the iPhone app under Settings, Connections. Health works both ways: readings come in, and what you log
+in Aeneas goes to Health.
+
+## Capture
+
+Capture takes a thought, task or note by voice or text, from the Capture screen, the Watch, or the Mac menu bar.
+Each capture goes into the day's diary and the assistant files it where it belongs (a plan on the calendar, a to-do,
+a fact in memory, a tagged note, a song idea, a film to watch), or nowhere when it is only a passing thought (the
+diary has it). One it could not file after three tries waits in Unsorted Info.
+
+## Hum Song
+
+Music module. Press Hum Song (in Capture, Music, or on the Watch) and hum, sing, tap or beatbox for up to 2 minutes.
+The hub hears every recording both as a melody and as a rhythm. Afterwards, on the idea in Music, choose Melody,
+Rhythm or Both; playback and the MIDI download follow that choice.
+
+## Apple Watch
+
+The Watch reaches the hub through the Aeneas app on the paired iPhone (over Bluetooth or Wi-Fi), not on its own.
+Its first page has Ask, Capture and Hum Song, all by voice. Complications (add them by editing a watch face):
+Ask, Capture, Hum Song, Now and Next up. When the Watch shows Offline, tap Offline, then Try now; opening the iPhone
+app helps it reconnect.
+
+## The assistant
+
+The assistant runs on your hub's own model. It reads and changes your data with tools (adding tasks, reminders,
+notes, events), and it says what it changed. Switch modules off and their tools go with them. Ask it about the app
+itself too: it answers from these docs.
+
+## Updates, backups and the hub
+
+- **Updates**: Settings, About shows the hub's version and updates it. Apple apps update from the App Store or
+  TestFlight; Windows and Android apps say when a newer one is out, with a link to the release.
+- **Backups, restore, moving to a new machine, other people on the same computer**: see
+  [running-your-hub.md](running-your-hub.md) and [multi-person.md](multi-person.md).
+- **How devices reach the hub** (Direct link, Tailscale or home Wi-Fi only): [connections.md](connections.md).
+- **What goes where on the network**: [privacy-network.md](privacy-network.md).
