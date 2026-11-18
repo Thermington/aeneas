@@ -81,13 +81,21 @@ struct WorkCalendarSection: View {
 /// on every device and the assistant can change it too.
 struct AppEventsCalendarSection: View {
     @EnvironmentObject var engine: SyncEngine
+    @EnvironmentObject var model: AppModel
     @ObservedObject var importer = CalendarImporter.shared
     @ObservedObject var mirror = EventMirrorSync.shared
 
     var body: some View {
         SwiftUI.Section {
+            // While the hub keeps the iCloud calendars in step, personal events are its to write: this device copies
+            // only work events, or every personal event would be made twice.
+            let hubKeeps = SharedConfig.hubKeepsCalendars(model.modules)
+            if hubKeeps {
+                Text("Your hub keeps your iCloud calendars in step (Settings, Connections, iCloud Calendar), so this device leaves personal events to it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             if importer.access == .full, !importer.calendars.isEmpty {
-                picker("Personal events", space: .personal, none: "Default calendar")
+                if !hubKeeps { picker("Personal events", space: .personal, none: "Default calendar") }
                 picker("Work events", space: .work, none: "Do not copy")
                 if let s = mirror.lastSummary, let d = mirror.lastRun {
                     Text("Last copy \(d.shortDateTime): \(s)").font(.caption).foregroundStyle(.secondary)

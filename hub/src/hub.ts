@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { calendarSyncActive } from "./calendar-sync.js";
 import { createRequire } from "node:module";
 import { type Config } from "./config.js";
 import { moveChatTables, openChatDb, openDb, type DB } from "./db.js";
@@ -166,6 +167,7 @@ export function createHub(cfg: Config): Hub {
   ai.owner = () => hub.profile.get().name;
   ai.pet = () => hub.profile.get().pet;
   ai.moduleOn = hub.modules.check;
+  hub.modules.activeProbe = (id) => (id === "calendars" ? calendarSyncActive(hub) : undefined);
   // A module switched on gets its starter content (monitors, snippets, music sheets, food) now, once. The reminders
   // the hub makes for a module's items (a renewal, a vet visit, a job follow-up) are set aside on every device while
   // it is off and made again from the items when it comes back on.

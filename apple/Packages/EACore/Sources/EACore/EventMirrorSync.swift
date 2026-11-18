@@ -92,7 +92,9 @@ public final class EventMirrorSync: ObservableObject {
         var seen = Set<String>()
         // With the work space turned off, work items are being erased; nothing is copied for them.
         let workOff = UserDefaults.standard.bool(forKey: CalendarImporter.workOffKey)
-        let all = (engine.list(.event) + deleted).filter { seen.insert($0.id).inserted && EventMirror.mirrors($0) && !(workOff && $0.space == .work) }
+        // While the hub keeps the calendars in step itself, personal events are its to write: only work ones are copied here.
+        let hubKeeps = SharedConfig.shared.hubKeepsCalendars
+        let all = EventMirror.mirrored(engine.list(.event) + deleted, hubKeepsCalendars: hubKeeps).filter { seen.insert($0.id).inserted && !(workOff && $0.space == .work) }
         // Look up only the Apple events the app already knows about.
         var apple: [String: AppleEvent] = [:]
         var ekById: [String: EKEvent] = [:]
@@ -183,7 +185,14 @@ public final class EventMirrorSync: ObservableObject {
         // behind the hub lacks an event made in the app whose copy the Mac already put in the calendar, and took
         // that copy for a new event (a second one in the app).
         var adopted = 0, repeating = 0
-        if engine.hubInReach, let cal = personalCal, !work.contains(cal), let ekCal = store.calendar(withIdentifier: cal) {
+        if hubKeeps {
+            // The hub brings the calendars in now: this device's own copies of repeating events go (an empty choice
+            // deletes what it imported before), and nothing new is brought in from here.
+            if engine.hubInReach {
+                let r = await CalendarImportRunner(engine: engine, source: EventKitSource(store: store), space: .personal, include: \.recurring).run(selected: [], now: now)
+                repeating = r.deleted
+            }
+        } else if engine.hubInReach, let cal = personalCal, !work.contains(cal), let ekCal = store.calendar(withIdentifier: cal) {
             let events = engine.list(.event) + ((try? await engine.store.all(kind: .event, includeDeleted: true)) ?? []).filter { $0.isDeleted }
             #if os(macOS)
             let settled: (AppleEvent) -> Bool = { _ in true }

@@ -158,6 +158,13 @@ public final class SharedConfig: @unchecked Sendable {
     /// said so. Counted as on before the list came, a phone paired to a hub with those modules off copied its
     /// calendar and reminders into it in the first seconds after pairing.
     public func moduleSaidOn(_ m: AppModule) -> Bool { modules?.first { $0.id == m.rawValue }?.on ?? false }
+    /// The hub keeps the owner's calendars in step itself (Calendar accounts on and a calendar chosen there): this
+    /// device then leaves personal events to it and copies none into Apple Calendar, or the same event is made twice.
+    public var hubKeepsCalendars: Bool { Self.hubKeepsCalendars(modules) }
+    public static func hubKeepsCalendars(_ modules: [ModuleInfo]?) -> Bool {
+        guard let m = modules?.first(where: { $0.id == AppModule.calendars.rawValue }) else { return false }
+        return m.on && m.active == true
+    }
     /// Feel changes made while the hub could not be reached, sent before the next fetch.
     public var feelPending: [String: JSONValue] {
         get { defaults.data(forKey: "feel.pending").flatMap { try? JSONCoding.decode([String: JSONValue].self, from: $0) } ?? [:] }

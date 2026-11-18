@@ -54,11 +54,25 @@ public struct EventMirrorPlan: Equatable, Sendable {
 /// calendar. Work events imported from Apple Calendar are not copied back. Single events made in the personal calendar
 /// come into the app the same way (`adopt`); its repeating events come in as imported occurrences.
 public enum EventMirror {
-    /// Events that belong in Apple Calendar: made in the app rather than imported from somewhere.
+    /// Events that belong in Apple Calendar: made in the app rather than imported from somewhere. One the hub keeps in
+    /// step with a calendar server itself (`caldav`, calendar sync on the hub) is the hub's: this device leaves it alone.
     public static func mirrors(_ e: Entity) -> Bool {
-        guard e.kind == .event else { return false }
+        guard e.kind == .event, hubSynced(e) == false else { return false }
         let source = e.str("source")
         return source.isEmpty || source == "manual"
+    }
+
+    /// Linked to a calendar-server event by the hub's calendar sync.
+    public static func hubSynced(_ e: Entity) -> Bool {
+        guard let v = e.fields["caldav"] else { return false }
+        return v != .null
+    }
+
+    /// The events this device mirrors in a run: while the hub keeps the owner's calendars in step
+    /// (`SharedConfig.hubKeepsCalendars`) only work events, since the hub writes the personal ones itself and a second
+    /// writer would make every event twice.
+    public static func mirrored(_ events: [Entity], hubKeepsCalendars: Bool) -> [Entity] {
+        events.filter { mirrors($0) && !(hubKeepsCalendars && $0.space == .personal) }
     }
 
     /// Memory keys naming the calendar for each space, by address or calendar name (`calendar:personal` =

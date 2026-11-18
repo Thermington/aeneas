@@ -34,6 +34,8 @@ struct ConnectionsSettingsView: View {
             } else if let c {
                 if let g = c.google { gmail(g) }
                 if model.isOn(.mail), let i = c.icloud { icloudMail(i, reading: c.google?.reading == true, times: c.google?.times) }
+                // Calendar accounts: the hub keeps iCloud calendars in step itself (hub calendar-sync.ts).
+                if model.isOn(.calendars) { ICloudCalendarSection(mailAddresses: c.icloud?.accounts.map(\.email) ?? []) }
                 // Each link feeds one module; while that module is off its link is hidden and the hub pauses its sync.
                 if model.isOn(.games) { steam(c.steam) }
                 if model.isOn(.wiki), let a = c.atlassian { confluence(a) }

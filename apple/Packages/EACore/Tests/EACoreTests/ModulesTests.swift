@@ -98,4 +98,40 @@ final class ModulesTests: XCTestCase {
         XCTAssertNil(AppModule.of(kind: .task))
         XCTAssertNil(AppModule.of(kind: .note))
     }
+
+    func testTheHubKeepingCalendarsIsReadFromTheCalendarsModule() throws {
+        let json = """
+        {"modules": [{"id": "calendars", "title": "Calendar accounts", "summary": "", "group": "Plan", "on": true, "active": true},
+                     {"id": "mail", "title": "Mail receipts", "summary": "", "group": "Life admin", "on": true}]}
+        """
+        let m = try JSONCoding.decode(ModulesResponse.self, from: json).modules
+        XCTAssertEqual(m[0].active, true)
+        XCTAssertNil(m[1].active, "a module the hub says nothing about has no active")
+        XCTAssertEqual(AppModule(rawValue: "calendars"), .calendars)
+        XCTAssertTrue(SharedConfig.hubKeepsCalendars(m))
+        var off = m; off[0].on = false
+        XCTAssertFalse(SharedConfig.hubKeepsCalendars(off), "switched off, the devices take personal events back")
+        var idle = m; idle[0].active = false
+        XCTAssertFalse(SharedConfig.hubKeepsCalendars(idle), "on but no calendar chosen yet: the devices go on as before")
+        XCTAssertFalse(SharedConfig.hubKeepsCalendars(nil))
+        XCTAssertFalse(SharedConfig.hubKeepsCalendars([ModuleInfo(id: "renewals", title: "R", on: true)]), "an older hub without the module")
+        // Kept in the cache with active, so a launch before the hub answers decides the same way.
+        let back = try JSONCoding.decode([ModuleInfo].self, from: try JSONCoding.data(m))
+        XCTAssertEqual(back[0].active, true)
+    }
+
+    func testTheCalendarsViewDecodes() throws {
+        let json = """
+        {"accounts": [{"email": "you@icloud.com", "mail": false, "calendars": [{"url": "https://p42-caldav.icloud.com/1/calendars/home/", "name": "Home", "color": "#FF2968", "writable": true, "chosen": true},
+          {"url": "https://p42-caldav.icloud.com/1/calendars/holidays/", "name": "Holidays", "writable": false, "chosen": false}],
+          "target": "https://p42-caldav.icloud.com/1/calendars/home/", "last_sync": "2026-11-18T22:00:00.000Z", "last_error": null}], "active": true, "results": []}
+        """
+        let v = try JSONCoding.decode(HubCalendars.self, from: json)
+        XCTAssertTrue(v.active)
+        XCTAssertEqual(v.accounts.first?.calendars.map(\.name), ["Home", "Holidays"])
+        XCTAssertEqual(v.accounts.first?.calendars[1].writable, false)
+        XCTAssertNil(v.accounts.first?.last_error)
+        XCTAssertEqual(try JSONCoding.decode(HubCalendars.self, from: "{}"), HubCalendars())
+    }
 }
+

@@ -32,7 +32,7 @@ test("help: questions find the right section, the module list says what is on, a
   const sub = searchHelp("what does subscribe in calendar app do", { root: ROOT });
   assert.match(sub.sections[0].heading, /Your plan out to any calendar app/);
   const ical = searchHelp("how do I get my iCloud calendar into the week view", { root: ROOT });
-  assert.ok(ical.sections.slice(0, 2).some((s) => /Your calendars into Aeneas/.test(s.heading)), JSON.stringify(ical.sections.map((s) => s.heading)));
+  assert.ok(ical.sections.slice(0, 2).some((s) => /Your iCloud calendars, on the hub/.test(s.heading)), JSON.stringify(ical.sections.map((s) => s.heading)));
   const pair = searchHelp("pair a new phone", { root: ROOT });
   assert.match(pair.sections[0].heading, /Add another device/);
   const mods = moduleSections([{ id: "music", on: true }, { id: "mail", on: false }]);

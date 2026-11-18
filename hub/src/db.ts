@@ -85,6 +85,21 @@ CREATE TABLE IF NOT EXISTS mail_keys (
   at TEXT NOT NULL,
   entity_id TEXT
 );
+-- Calendar sync (calendar-sync.ts): each event the hub keeps in step with a calendar server, with the server's copy as
+-- last read (its address, etag and text) and the fields both sides agreed on then. recurring = 1 for an occurrence of
+-- a repeating event, which is only read.
+CREATE TABLE IF NOT EXISTS caldav_events (
+  entity_id TEXT PRIMARY KEY,
+  account TEXT NOT NULL,
+  calendar TEXT NOT NULL,
+  url TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  etag TEXT,
+  data TEXT,
+  snap TEXT NOT NULL,
+  recurring INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS caldav_events_account ON caldav_events(account, uid);
 -- The note linker: the text it last read for each note (a hash of title, folder and text), so a note is read again
 -- only when it changes, and the tries on a version it could not read.
 CREATE TABLE IF NOT EXISTS note_analysis (

@@ -22,20 +22,42 @@ and the hub's address. Reinstalling the app on a device means pairing it again t
 
 There are two directions, and they are set up in different places.
 
-### Your calendars into Aeneas
+### Your iCloud calendars, on the hub (every device)
 
-Calendars come in through the Apple apps, which read Apple Calendar on the device (so any account Apple Calendar
-has: iCloud, Google, Exchange and others). Switch on the Apple Calendar module in Settings, Modules, then on the
-iPhone, iPad or Mac open Settings, Calendar and work:
+The Calendar accounts module keeps your iCloud calendars in step with Aeneas on the hub, both ways, so every device
+has them: Windows, Android and the web as well as the Apple apps. Switch it on in Settings, Modules, then open
+Settings, Connections, iCloud Calendar:
+
+1. Make an app-specific password at account.apple.com (Sign-In and Security, App-Specific Passwords). An address
+   already linked for iCloud Mail needs no new one: it is the same password.
+2. Enter the address and the password, and choose Link. The hub checks them with iCloud and lists your calendars.
+3. Tick the calendars to keep in step, and pick where events made in Aeneas go.
+
+Single events in those calendars, from 30 days back to a year ahead, come in as your events; edits and deletions
+made either in Aeneas or in iCloud reach the other side within about 5 minutes (10 seconds after a change in the
+app). When both sides changed the same event, the newer change wins. Repeating events come in as their occurrences,
+7 days back to 90 days ahead, and are changed in iCloud. Only the title, times and place are synced; notes, alerts and
+invitees stay as they are in iCloud. Work events never leave the hub. A read-only calendar (a subscribed holiday
+calendar) only comes in. Sync now syncs at once; Stop syncing keeps the events in Aeneas and deletes the password
+from the hub unless iCloud Mail still uses it.
+
+While the hub keeps a calendar in step, the iPhone, iPad and Mac leave personal events to it, so nothing is copied
+twice. Google and Exchange calendars are not synced by the hub yet: for those, use the Apple apps below.
+
+### Calendars through the Apple apps
+
+The Apple apps can also read Apple Calendar on the device (so any account Apple Calendar has: iCloud, Google,
+Exchange and others). Switch on the Apple Calendar module in Settings, Modules, then on the iPhone, iPad or Mac open
+Settings, Calendar and work:
 
 - **Where app events go**: the calendars that events made in Aeneas (by you or the assistant) are copied into.
   Changes made to them in Apple Calendar come back; single events made in those calendars come in both ways, and
-  repeating ones come in as read-only occurrences.
+  repeating ones come in as read-only occurrences. While the hub syncs iCloud calendars, this part is off.
 - **Work meetings to import**: calendars you mark as work. Only the title and time of each meeting are read, from
-  7 days back to 30 days ahead. They show as Work in Today and Week and count as busy time.
+  7 days back to 30 days ahead. They show as Work in Today and Week and count as busy time. This is the way in for an
+  employer's Exchange calendar, which often does not allow other apps to sign in.
 
-The Mac app copies at once; the iPhone after about two minutes. The Windows, Android and web apps do not read any
-calendar themselves: a hub with no Apple device gets no calendar events.
+The Mac app copies at once; the iPhone after about two minutes.
 
 ### Your plan out to any calendar app
 
@@ -53,7 +75,7 @@ pet visits, and does not keep the mail itself. It does not show mail in Week or 
 
 - **iCloud Mail** needs an app-specific password you make at account.apple.com; the guide in Settings, Connections
   takes you through it. The password is kept only on the hub. Apple's app-specific passwords also open iCloud
-  Contacts and Calendars, but Aeneas uses it only to read mail.
+  Contacts and Calendars; Aeneas uses it for mail, and for calendars only when Calendar accounts is on.
 - **Gmail** needs your own Google app, allowed only to read mail, and the hub reached through Tailscale (Google
   returns only to an https name). The steps are in [gmail-setup.md](gmail-setup.md) and in the guide in Settings,
   Connections.

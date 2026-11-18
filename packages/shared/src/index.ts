@@ -134,10 +134,12 @@ export const EventFields = z.object({
   start: iso,
   end: iso,
   all_day: z.boolean().optional(),
-  source: z.enum(["manual", "m365", "eventkit"]).optional(),
+  source: z.enum(["manual", "m365", "eventkit", "caldav"]).optional(),
   external_id: z.string().optional(),
   location: z.string().optional(),
   apple: z.object({ id: z.string(), calendar: z.string().optional(), from_apple: z.boolean().optional() }).optional(),
+  /** The calendar-server event the hub keeps it in step with (calendar sync, `calendars` module). */
+  caldav: z.object({ account: z.string(), calendar: z.string(), uid: z.string(), from_caldav: z.boolean().optional() }).optional(),
 });
 
 export const LogFields = z.object({

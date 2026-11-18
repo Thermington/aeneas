@@ -193,6 +193,45 @@ final class EventMirrorTests: XCTestCase {
         XCTAssertEqual(EventMirror.fields(of: e)["end"], "2026-11-10")
     }
 
+
+    // MARK: Calendar sync on the hub
+
+    func testAnEventTheHubKeepsInStepIsNeverMirroredHere() {
+        var linked = event("h", "Dentist", "2026-11-02T14:00:00.000Z", "2026-11-02T15:00:00.000Z", apple: "X")
+        linked.fields["caldav"] = .object(["account": "you@icloud.com", "calendar": "https://p42-caldav.icloud.com/1/calendars/home/", "uid": "X"])
+        XCTAssertFalse(EventMirror.mirrors(linked))
+        XCTAssertTrue(EventMirror.hubSynced(linked))
+        var cleared = linked; cleared.fields["caldav"] = .null
+        XCTAssertTrue(EventMirror.mirrors(cleared), "a link the hub cleared (sync stopped) is the device's again")
+        let occurrence = event("o", "Standup", "2026-11-02T14:00:00.000Z", "2026-11-02T14:15:00.000Z", source: "caldav")
+        XCTAssertFalse(EventMirror.mirrors(occurrence))
+        let p = EventMirror.plan(events: [linked, occurrence], apple: [:], state: ["h": SyncedEvent(appleId: "X", fields: [:])]) { _ in true }
+        XCTAssertEqual(p, EventMirrorPlan(), "the plan ignores the hub's events: no delete because Apple lacks it")
+    }
+
+    func testWhileTheHubKeepsTheCalendarsOnlyWorkEventsAreMirrored() {
+        let personal = event("p", "Climbing", "2026-11-03T22:00:00.000Z", "2026-11-04T00:00:00.000Z")
+        let linkedPersonal = event("q", "Dinner", "2026-11-03T22:00:00.000Z", "2026-11-04T00:00:00.000Z", apple: "Y")
+        let work = event("w", "Review", "2026-11-03T15:00:00.000Z", "2026-11-03T16:00:00.000Z", space: .work)
+        let all = [personal, linkedPersonal, work]
+        XCTAssertEqual(EventMirror.mirrored(all, hubKeepsCalendars: false).map(\.id), ["p", "q", "w"])
+        let kept = EventMirror.mirrored(all, hubKeepsCalendars: true)
+        XCTAssertEqual(kept.map(\.id), ["w"])
+        // Nothing personal is created, written, moved or deleted, even with Apple's copy gone.
+        let p = EventMirror.plan(events: kept, apple: [:], state: ["q": SyncedEvent(appleId: "Y", fields: [:])], now: now, target: { _ in "home-cal" }) { _ in true }
+        XCTAssertEqual(p.creates.map(\.entityId), ["w"])
+        XCTAssertTrue(p.entityDeletes.isEmpty && p.appleDeletes.isEmpty && p.writes.isEmpty && p.moves.isEmpty)
+    }
+
+    func testAnEmptyChoiceRemovesThisDevicesOwnPersonalOccurrences() {
+        let window = (from: ISO.date("2026-10-23T00:00:00.000Z")!, to: ISO.date("2026-11-30T00:00:00.000Z")!)
+        let prev = ["E|2026-11-02T14:00:00.000Z": ImportedOccurrence(entity_id: "occ-1", start: "2026-11-02T14:00:00.000Z", calendar_id: "home-cal", event_id: "E")]
+        let e = event("occ-1", "Standup", "2026-11-02T14:00:00.000Z", "2026-11-02T14:15:00.000Z", source: "eventkit")
+        let plan = CalendarDiff.plan(previous: prev, existing: { $0 == "occ-1" ? e : nil }, occurrences: [], selected: [], window: window, now: now, space: .personal)
+        XCTAssertEqual(plan.deleted, 1)
+        XCTAssertEqual(plan.patches.first?.id, "occ-1")
+    }
+
 }
 
 @MainActor

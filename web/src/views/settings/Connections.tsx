@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { engine } from "../../sync/engine";
-import type { AtlassianConnection, AtlassianSpace, Connections as ConnectionsView, GmailAccount, GoogleConnection, ICloudConnection, KeePassEntry, PasswordManagerProvider, PasswordManagerStatus, PasswordManagerView } from "../../sync/api";
+import type { AtlassianConnection, AtlassianSpace, CalendarSyncView, Connections as ConnectionsView, GmailAccount, GoogleConnection, ICloudConnection, KeePassEntry, PasswordManagerProvider, PasswordManagerStatus, PasswordManagerView } from "../../sync/api";
 import { spacesChanged } from "../../lib/wiki";
 import { fmtDateTime } from "../../lib/time";
 import { META } from "../../sync/db";
@@ -467,6 +467,96 @@ function Health({ c }: { c: ConnectionsView["health"] }) {
   );
 }
 
+/**
+ * Calendar sync on the hub (Calendar accounts): an iCloud address's calendars kept in step with the app, both ways, so
+ * every device has them. The password is the same app-specific one iCloud Mail uses, so an address linked there needs
+ * none here.
+ */
+function ICloudCalendar({ mailAccounts }: { mailAccounts: string[] }) {
+  const client = engine.client;
+  const ready = useHubReady();
+  const [v, setV] = useState<CalendarSyncView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<Msg>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const load = useCallback(() => { void engine.client?.calendarSync().then(setV, (e) => setMsg({ ok: false, text: errorText(e) })); }, []);
+  useEffect(load, [load, ready]);
+  const run = async (f: () => Promise<string | void>) => {
+    setBusy(true);
+    setMsg(null);
+    try { const t = await f(); if (t) setMsg({ ok: true, text: t }); } catch (e) { setMsg({ ok: false, text: errorText(e) }); } finally { setBusy(false); }
+  };
+  if (!v) return null;
+  const known = mailAccounts.includes(email.trim().toLowerCase());
+  return (
+    <section className="card col">
+      <h2>iCloud Calendar</h2>
+      <div className="muted small">
+        Your iCloud calendars kept in step with Aeneas by the hub, both ways, so every device shows them: Windows, Android and the web too. Events from the calendars you choose come in, events you or the assistant add go to the calendar you pick, and edits and deletions travel both ways. Repeating events come in too; change those in iCloud. Work events never leave the hub.
+      </div>
+      {v.accounts.map((a) => {
+        const chosen = a.calendars.filter((c) => c.chosen);
+        const toggle = (url: string, on: boolean) => void run(async () => {
+          const next = on ? [...chosen.map((c) => c.url), url] : chosen.map((c) => c.url).filter((u) => u !== url);
+          setV(await client!.chooseCalendars(a.email, { chosen: next, ...(!on && a.target === url ? { target: null } : {}) }));
+        });
+        return (
+          <div key={a.email} className="col" style={{ gap: 4 }}>
+            <div><strong>{a.email}</strong></div>
+            <div className="col" role="group" aria-label={`Calendars of ${a.email}`} style={{ gap: 0 }}>
+              <div className="muted small">Calendars to keep in step</div>
+              {a.calendars.map((c) => (
+                <label key={c.url} className="toggle-row">
+                  <input type="checkbox" checked={c.chosen} disabled={busy} onChange={(e) => toggle(c.url, e.target.checked)} />
+                  <span>
+                    {c.color && <span aria-hidden="true" style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: c.color, marginRight: 6 }} />}
+                    {c.name}{!c.writable && <span className="muted small"> read only</span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <label className="col small" style={{ gap: 2 }}>
+              New events made in Aeneas go to
+              <select value={a.target ?? ""} disabled={busy} onChange={(e) => void run(async () => { setV(await client!.chooseCalendars(a.email, { target: e.target.value || null })); })}>
+                <option value="">Keep them in the app</option>
+                {a.calendars.filter((c) => c.writable).map((c) => <option key={c.url} value={c.url}>{c.name}</option>)}
+              </select>
+            </label>
+            <div className="muted small">Last synced {when(a.last_sync)}; it syncs every 5 minutes, and soon after you change an event.</div>
+            {a.last_error && <div className="error small">{a.last_error}</div>}
+            <div className="row wrap">
+              <button type="button" disabled={busy || !chosen.length} onClick={() => void run(async () => { const r = await client!.syncCalendarsNow(); setV(r); const err = r.results.find((x) => x.error)?.error; if (err) throw new Error(err); return "Synced."; })}>
+                {busy ? "Syncing" : "Sync now"}
+              </button>
+              <button type="button" className="ghost danger" disabled={busy} onClick={() => confirm(`Stop keeping ${a.email}'s calendars in step? Its events stay in the app as they are; repeating ones are taken out.`) && void run(async () => { const r = await client!.stopCalendars(a.email); setV(r); return r.message; })}>
+                Stop syncing
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {!v.accounts.length && (
+        <form className="col" onSubmit={(e) => { e.preventDefault(); void run(async () => { setV(await client!.linkCalendars(email.trim(), password.trim() || undefined)); setPassword(""); return "Linked. Choose the calendars to keep in step."; }); }}>
+          <div className="muted small">
+            Apple has no sign-in for calendars, so the hub uses an app-specific password: at <a href="https://account.apple.com" target="_blank" rel="noreferrer">account.apple.com</a>, open Sign-In and Security, App-Specific Passwords, and make one named Aeneas. It is kept only on your hub and opens iCloud Mail, Contacts and Calendars; the hub uses it only for what you switch on. {mailAccounts.length > 0 && "An address already linked for iCloud Mail needs no new password."}
+          </div>
+          <label className="col small" style={{ gap: 2 }}>
+            Apple Account address
+            <input type="email" autoComplete="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@icloud.com" />
+          </label>
+          <label className="col small" style={{ gap: 2 }}>
+            {known ? "App-specific password (not needed: iCloud Mail has it)" : "App-specific password"}
+            <input type="password" autoComplete="off" spellCheck={false} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="abcd-efgh-ijkl-mnop" />
+          </label>
+          <div><button type="submit" className="primary" disabled={busy || !email.trim() || (!known && !password.trim())}>{busy ? "Checking" : "Link"}</button></div>
+        </form>
+      )}
+      <Status msg={msg} />
+    </section>
+  );
+}
+
 /** The plan as a calendar any app can subscribe to: task blocks, events, reminders and renewals. */
 function CalendarFeed() {
   const hubUrl = useMeta<string>(META.hubUrl) ?? "";
@@ -824,6 +914,7 @@ export function ConnectionsPage() {
           {on("films") && <Letterboxd c={c.letterboxd} reload={reload} />}
           {on("wiki") && c.atlassian && <Confluence c={c.atlassian} reload={reload} />}
           {on("homelab") && c.password_manager && <PasswordManager c={c.password_manager} reload={reload} />}
+          {on("calendars") && <ICloudCalendar mailAccounts={(c.icloud?.accounts ?? []).map((a) => a.email)} />}
           {on("health") && <Health c={c.health} />}
           <CalendarFeed />
         </>

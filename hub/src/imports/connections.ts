@@ -100,7 +100,7 @@ export class ConnectionStore {
       },
       // Each field named on its own, so the password can never ride along.
       icloud: {
-        accounts: (c.icloud ?? []).map((a) => ({ email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null })),
+        accounts: (c.icloud ?? []).filter((a) => a.mail !== false).map((a) => ({ email: a.email, linked_at: a.linked_at, last_sync: a.last_sync ?? null, last_error: a.last_error ?? null })),
       },
     };
   }

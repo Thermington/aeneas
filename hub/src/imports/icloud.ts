@@ -46,6 +46,10 @@ export interface ICloudAccount {
    * an Apple Account locked) until the mailbox is linked again or the owner presses Read now, which tries once.
    */
   refused_at?: string | null;
+  /** Whether its mail is read (Mail receipts). Absent is yes: accounts linked before calendars were. */
+  mail?: boolean;
+  /** Its calendars, when calendar sync uses this account (calendar-sync.ts). */
+  calendar?: import("../calendar-sync.js").CalendarConf;
 }
 
 /** Said when iCloud refused a mailbox's password and the hub stopped signing in. */
@@ -172,7 +176,7 @@ export async function linkICloud(hub: Hub, body: Record<string, unknown>, read: 
   hub.connections.update((c) => {
     const list = (c.icloud ??= []);
     const prev = list.find((a) => a.email === email);
-    if (prev) Object.assign(prev, { password, last_error: null, refused_at: null });
+    if (prev) Object.assign(prev, { password, last_error: null, refused_at: null, mail: true });
     else list.push({ email, password, linked_at: nowIso() });
   });
   read(accountName(email));
@@ -183,6 +187,11 @@ export async function linkICloud(hub: Hub, body: Record<string, unknown>, read: 
 export function unlinkICloud(hub: Hub, email: string) {
   account(hub, email);
   hub.db.prepare("DELETE FROM mail WHERE account = ?").run(accountName(email));
+  // Calendar sync may still use the account: then only its mail stops, and the password stays for the calendars.
+  if (account(hub, email).calendar) {
+    hub.connections.update((c) => { const a = c.icloud?.find((x) => x.email === email); if (a) a.mail = false; });
+    return { ...hub.connections.view().icloud, message: "The hub stopped reading this mailbox. Its app-specific password stays on the hub because calendar sync uses it; stop calendar sync too to delete it." };
+  }
   hub.connections.update((c) => { c.icloud = (c.icloud ?? []).filter((x) => x.email !== email); });
   return { ...hub.connections.view().icloud, message: "The mailbox is unlinked and its password deleted from the hub. To end the password itself, revoke it at account.apple.com, under Sign-In and Security, App-Specific Passwords." };
 }
@@ -319,7 +328,7 @@ export function icloudLink(ref: MailRef): string {
 /** iCloud Mail as a mail source. */
 export const icloudSource: MailSource = {
   kind: "icloud",
-  accounts: (hub) => (hub.connections.get().icloud ?? []).map((a) => accountName(a.email)),
+  accounts: (hub) => (hub.connections.get().icloud ?? []).filter((a) => a.mail !== false).map((a) => accountName(a.email)),
   list: (hub, accountKey, opts) => listICloud(hub, accountKey, new Date(), opts),
   read: (hub, accountKey, id) => readICloud(hub, accountKey, id),
   link: icloudLink,

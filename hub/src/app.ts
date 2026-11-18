@@ -35,6 +35,7 @@ import { layoutRoutes } from "./routes/layouts.js";
 import { backupRoutes } from "./routes/backup.js";
 import { hubsRoutes } from "./routes/hubs.js";
 import { referenceRoutes } from "./routes/reference.js";
+import { calendarRoutes } from "./routes/calendars.js";
 import { BEFORE_YOU_INSTALL } from "./disclosure.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
@@ -453,6 +454,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.route("/", backupRoutes());
   app.route("/", hubsRoutes());
   app.route("/", referenceRoutes());
+  app.route("/", calendarRoutes());
   // Assistant tools call this same app in-process, with the hub's own token, so they get the routes' validation and hooks.
   hub.ai.setApi(async (method, path, body) => {
     const refused = refuseToolCall(method, path);

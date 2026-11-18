@@ -11,7 +11,7 @@ import { errCode } from "./logsafe.js";
 export const MODULE_IDS = [
   "voice", "notifications", "apple_reminders", "apple_calendar", "contacts",
   "renewals", "dashboard", "homelab", "projects", "music", "wiki", "images", "quiz",
-  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "web", "reference",
+  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "web", "reference", "calendars",
 ] as const;
 export type ModuleId = (typeof MODULE_IDS)[number];
 
@@ -60,6 +60,7 @@ export const MODULES: ModuleDef[] = [
   { id: "notifications", title: "Reminder alerts", summary: "Reminders and the morning summary show up on your devices at their time.", example: "At 8 in the morning your phone shows today's plan, and at 3 it nudges you about the renewal you set a reminder for.", reads: "Nothing: it only shows alerts.", permissions: ["notifications"], group: "On your devices", default: true, wasCore: true, prefixes: [], kinds: [] },
   { id: "apple_reminders", title: "Apple Reminders", summary: "Your tasks also show in Apple Reminders, and what you change there comes back.", example: "You tick off \"buy filters\" in Apple Reminders on your Mac, and it's done in Aeneas too.", reads: "The Reminders lists on your iPhone, iPad or Mac.", permissions: ["reminders"], group: "On your devices", default: false, wasCore: true, prefixes: [], kinds: [] },
   { id: "apple_calendar", title: "Apple Calendar", summary: "Events from the calendars you pick, so the planner works around them, and your plan back in Calendar.", example: "You have a dentist appointment at 2. When you ask for a plan for the afternoon, the assistant works around it.", reads: "Event titles and times from the calendars you pick on your iPhone, iPad or Mac.", permissions: ["calendar"], group: "On your devices", default: false, wasCore: true, prefixes: [], kinds: [] },
+  { id: "calendars", title: "Calendar accounts", summary: "Your iCloud calendars kept in step with the app on the hub, both ways, so every device has them: Windows, Android and the web too.", example: "You add a dentist appointment in iCloud Calendar on your laptop. It shows in Week on your Android phone a few minutes later, and a dinner the assistant plans goes into your iCloud calendar.", reads: "The title, times and place of events in the iCloud calendars you choose, read and written by the hub with an app-specific password kept only on the hub (the same one Mail receipts uses for that address). Events made in Aeneas go to the calendar you pick for them; work events never leave the hub. Apple's passwords of this kind also open iCloud Mail and Contacts; calendar sync uses it only for calendars.", setup: { minutes: "5", needs: "an app-specific password you make at account.apple.com" }, group: "Plan", default: false, prefixes: ["/calendars"], kinds: [] },
   { id: "contacts", title: "Contacts", summary: "Names, birthdays and details from your contacts, kept with People.", example: "You ask \"when is Sam's birthday?\" and the assistant knows, because it came in from your contacts.", reads: "Your contacts on your iPhone, iPad or Mac.", permissions: ["contacts"], group: "On your devices", default: false, wasCore: true, prefixes: [], kinds: [] },
   { id: "renewals", title: "Renewals and bills", summary: "Things to renew or that charge you (domains, memberships, subscriptions), with a reminder before each.", example: "Your domain renews on March 3 for $15. You get a reminder a week before, and the assistant can tell you what you pay each year.", group: "Plan", default: true, prefixes: ["/watches", "/finance"], kinds: ["watch"] },
   { id: "dashboard", title: "Dashboard", summary: "Charts of anything you track, on one board shared by your devices.", example: "You log your weight and sleep. One board shows both as charts, on your phone and your computer.", group: "Plan", default: false, prefixes: ["/prefs/dashboard"], kinds: [] },
@@ -103,7 +104,11 @@ export function moduleOfPath(p: string): ModuleId | null {
 }
 
 export type ModuleCheck = (id: ModuleId) => boolean;
-export interface ModuleView { id: ModuleId; title: string; summary: string; example?: string; group: string; on: boolean; reads?: string; permissions?: Permission[]; setup?: AdvancedSetup }
+/**
+ * `active`, for a module whose work also needs setting up: whether it is set up and working on this hub (calendars: a
+ * calendar is kept in step). Devices read it: the Apple apps leave personal events to the hub while calendars is active.
+ */
+export interface ModuleView { id: ModuleId; title: string; summary: string; example?: string; group: string; on: boolean; active?: boolean; reads?: string; permissions?: Permission[]; setup?: AdvancedSetup }
 
 /**
  * `<data>/modules.json`: `{ "<id>": true|false }`. A module missing from the file has its default. The file is written
@@ -163,9 +168,18 @@ export class ModuleStore {
   /** A checker bound to this store, for code that only needs to ask. */
   readonly check: ModuleCheck = (id) => this.on(id);
 
+  /** Set by the hub: whether a module's work is set up and running (`active` in the list). */
+  activeProbe: (id: ModuleId) => boolean | undefined = () => undefined;
+
+  /** Tell connected devices the list changed when only `active` did (a calendar chosen, a password refused). */
+  notify(): void {
+    for (const f of this.listeners) f([], []);
+  }
+
   list(): ModuleView[] {
     return MODULES.map((m) => ({
       id: m.id, title: m.title, summary: m.summary, example: m.example, group: m.group, on: this.on(m.id),
+      ...((a) => (a === undefined ? {} : { active: a }))(this.activeProbe(m.id)),
       ...(m.reads ? { reads: m.reads } : {}), ...(m.permissions ? { permissions: m.permissions } : {}), ...(m.setup ? { setup: m.setup } : {}),
     }));
   }

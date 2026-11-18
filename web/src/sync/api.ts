@@ -188,6 +188,18 @@ export interface ICloudConnection {
   accounts: GmailAccount[];
 }
 
+/** Calendar sync on the hub (Calendar accounts): an iCloud address, its calendars and the one new events go to. */
+export interface CalendarAccount {
+  email: string;
+  /** Mail receipts reads this address too. */
+  mail: boolean;
+  calendars: { url: string; name: string; color?: string; writable: boolean; chosen: boolean }[];
+  target: string | null;
+  last_sync: string | null;
+  last_error: string | null;
+}
+export interface CalendarSyncView { accounts: CalendarAccount[]; active: boolean }
+
 /** A linked mailbox and what its mail came to: messages listed, still to read, and the records filed from them. */
 export interface GmailAccount {
   email: string;
@@ -576,6 +588,24 @@ export class HubClient {
   /** Unlink an iCloud mailbox: the hub deletes its password; `message` says to revoke it at account.apple.com. */
   disconnectICloud(email: string) {
     return this.req<ICloudConnection & { message: string }>("DELETE", `/connections/icloud/${encodeURIComponent(email)}`);
+  }
+
+  /** Calendar sync on the hub. */
+  calendarSync() {
+    return this.req<CalendarSyncView>("GET", "/calendars");
+  }
+  /** Keep an iCloud address's calendars in step; the password may be left out when Mail receipts already has it. */
+  linkCalendars(email: string, password?: string) {
+    return this.req<CalendarSyncView>("PUT", "/calendars/icloud", { email, ...(password ? { password } : {}) });
+  }
+  chooseCalendars(email: string, choice: { chosen?: string[]; target?: string | null }) {
+    return this.req<CalendarSyncView>("PUT", `/calendars/icloud/${encodeURIComponent(email)}`, choice);
+  }
+  syncCalendarsNow() {
+    return this.req<CalendarSyncView & { results: { account: string; error?: string }[] }>("POST", "/calendars/sync", {});
+  }
+  stopCalendars(email: string) {
+    return this.req<CalendarSyncView & { message: string }>("DELETE", `/calendars/icloud/${encodeURIComponent(email)}`);
   }
 
   /** The machines the hub runs commands on. */

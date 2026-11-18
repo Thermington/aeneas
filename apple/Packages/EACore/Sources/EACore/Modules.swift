@@ -16,15 +16,18 @@ public struct ModuleInfo: Codable, Equatable, Hashable, Sendable, Identifiable {
     public var permissions: [String]?
     /// Set when part of it needs the person's own key or app.
     public var setup: AdvancedSetup?
+    /// For a module whose work also needs setting up on the hub: whether it is set up and working there (since
+    /// 2026-11-18, only `calendars`: the hub keeps at least one calendar in step). Nil when the hub does not say.
+    public var active: Bool?
 
     public struct AdvancedSetup: Codable, Equatable, Hashable, Sendable {
         public var minutes: String
         public var needs: String
     }
 
-    public init(id: String, title: String, summary: String = "", group: String = "", on: Bool, reads: String? = nil, permissions: [String]? = nil, setup: AdvancedSetup? = nil) {
+    public init(id: String, title: String, summary: String = "", group: String = "", on: Bool, reads: String? = nil, permissions: [String]? = nil, setup: AdvancedSetup? = nil, active: Bool? = nil) {
         self.id = id; self.title = title; self.summary = summary; self.group = group; self.on = on
-        self.reads = reads; self.permissions = permissions; self.setup = setup
+        self.reads = reads; self.permissions = permissions; self.setup = setup; self.active = active
     }
 
     // Only id and on are needed to hide things; the rest falls back so a thinner answer still decodes.
@@ -38,6 +41,7 @@ public struct ModuleInfo: Codable, Equatable, Hashable, Sendable, Identifiable {
         reads = try? c.decodeIfPresent(String.self, forKey: .reads)
         permissions = try? c.decodeIfPresent([String].self, forKey: .permissions)
         setup = try? c.decodeIfPresent(AdvancedSetup.self, forKey: .setup)
+        active = try? c.decodeIfPresent(Bool.self, forKey: .active)
     }
 }
 
@@ -56,6 +60,8 @@ public enum AppModule: String, CaseIterable, Sendable {
     case reference
     case appleReminders = "apple_reminders"
     case appleCalendar = "apple_calendar"
+    /// Calendar accounts: the hub keeps iCloud calendars in step with the app, both ways (since 2026-11-18).
+    case calendars
 
     /// The module an entity kind belongs to, nil for the core. Mirrors the hub's `kinds` in modules.ts.
     public static func of(kind: Kind) -> AppModule? {
