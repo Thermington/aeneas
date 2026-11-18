@@ -229,10 +229,10 @@ function Bubble({ m }: { m: MailMessage }) {
         )}
         <div className="meta row" style={{ gap: 10 }}>
           <span>{fmtTime(m.at)}</span>
-          {/* What the text is (key lines, a summary): a word beside Show original, the explanation on hover. */}
-          {kind && <span className="mail-kind" title={kind.title}>{kind.label}</span>}
           <button type="button" className="ghost small" onClick={() => void toggle()} aria-expanded={open}>{open ? "Hide original" : "Show original"}</button>
           {link && <a href={link} className="small">Open in Apple Mail</a>}
+          {/* What the text is (key lines, a summary): a word at the far end, the explanation on hover. */}
+          {kind && <span className="mail-kind" title={kind.title}>{kind.label}</span>}
         </div>
       </div>
     </div>
