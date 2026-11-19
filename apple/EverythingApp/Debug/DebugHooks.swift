@@ -22,6 +22,20 @@ enum DebugHooks {
         if let s = d.string(forKey: "EASetupURL"), let url = URL(string: s) { model.handle(url: url) }
         referenceRequests(model)
         if d.bool(forKey: "EAHumSample") { await humSample(model) }
+        if let name = d.string(forKey: "EAWatchCaptureFile") { watchCaptureFile(name) }
+    }
+
+    /// A spoken capture as if it had come from the Watch: `-EAWatchCaptureFile <name>` takes that file from this app's
+    /// temporary folder (copied in from the Mac), so the speech model and the reply to the Watch can be checked in the
+    /// simulator, whose WatchConnectivity does not deliver file transfers.
+    static func watchCaptureFile(_ name: String) {
+        let src = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + name)
+        try? FileManager.default.removeItem(at: copy)
+        guard (try? FileManager.default.copyItem(at: src, to: copy)) != nil else { return }
+        let c = WatchVoiceCapture(seconds: 10, format: src.pathExtension.lowercased())
+        guard (try? WatchCaptureQueue.local.add(c, moving: copy)) == true else { return }
+        WatchCaptureRelay.shared.kick()
     }
 
     /// A hummed idea as the hub leaves it after hearing it both ways, for screenshots of Melody, Rhythm and Both.

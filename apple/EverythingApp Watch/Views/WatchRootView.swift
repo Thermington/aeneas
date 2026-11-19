@@ -6,7 +6,7 @@ struct WatchRootView: View {
 
     var body: some View {
         TabView(selection: $model.page) {
-            NavigationStack { WatchVoiceView(ask: model.ask, hum: model.hum) }.tag(WatchPage.voice)
+            NavigationStack { WatchVoiceView(ask: model.ask, hum: model.hum, capture: model.capture) }.tag(WatchPage.voice)
             NavigationStack { WatchNowView() }.tag(WatchPage.now)
             NavigationStack { WatchTodayView() }.tag(WatchPage.today)
             // Health off: no health logging here (`AppModel.shows`).

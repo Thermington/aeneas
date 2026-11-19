@@ -36,6 +36,7 @@ import { backupRoutes } from "./routes/backup.js";
 import { hubsRoutes } from "./routes/hubs.js";
 import { referenceRoutes } from "./routes/reference.js";
 import { calendarRoutes } from "./routes/calendars.js";
+import { appUpdateRoutes, outlookOf } from "./routes/appupdates.js";
 import { BEFORE_YOU_INSTALL } from "./disclosure.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
@@ -423,7 +424,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.get("/devices", (c) => {
     const paired = hub.deviceKeys.pairedAt();
     const me = c.get("device_id");
-    return c.json({ devices: hub.devices.list().map((d) => ({ ...d, paired_at: paired.get(d.id) ?? null, own_key: paired.has(d.id), current: d.id === me })) });
+    return c.json({ devices: hub.devices.list().map((d) => ({ ...d, outlook: outlookOf(d), paired_at: paired.get(d.id) ?? null, own_key: paired.has(d.id), current: d.id === me })) });
   });
   // Removing a device ends its key now; its entity is marked deleted so every list drops it.
   app.delete("/devices/:id", (c) => {
@@ -455,6 +456,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.route("/", hubsRoutes());
   app.route("/", referenceRoutes());
   app.route("/", calendarRoutes());
+  app.route("/", appUpdateRoutes());
   // Assistant tools call this same app in-process, with the hub's own token, so they get the routes' validation and hooks.
   hub.ai.setApi(async (method, path, body) => {
     const refused = refuseToolCall(method, path);

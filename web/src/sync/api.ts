@@ -49,7 +49,32 @@ export interface HubRequest {
   pairing?: Partial<PairingLinks>;
 }
 /** GET /devices. */
-export interface DeviceRow { id: string; name: string; platform: string; last_seen: string | null; paired_at: string | null; own_key: boolean; current: boolean }
+export interface DeviceRow {
+  id: string; name: string; platform: string; last_seen: string | null; paired_at: string | null; own_key: boolean; current: boolean;
+  /** What app and version it runs, once it has said (apps from 1.0.5 on); older hubs leave these out. */
+  app?: DeviceApp | null;
+  app_update?: AppUpdateAsk | null;
+  outlook?: UpdateOutlook;
+}
+
+/** CONTRACT, App updates. */
+export type AppKind = "windows" | "android" | "web" | "ios" | "ipados" | "macos" | "watchos";
+export interface DeviceApp { kind: AppKind; version: string; build?: string }
+export interface AppUpdateAsk { requested_at: string; version: string; by?: string; declined_at?: string }
+/** current, self (installs the hub's copy), store (App Store or TestFlight), reload (a browser), unknown (sends no version). */
+export type UpdateOutlook = "current" | "self" | "store" | "reload" | "unknown";
+export type AppPlatform = "windows" | "android";
+export interface HubAppFile {
+  platform: AppPlatform; version: string; state: "missing" | "fetching" | "ready" | "unpublished" | "failed"; file: string;
+  size?: number; sha256?: string; signature?: string; error?: string; at?: string;
+}
+export interface AppUpdatesView {
+  version: string;
+  repo: string;
+  apps: Record<AppPlatform, HubAppFile>;
+  devices: (DeviceRow & { outlook: UpdateOutlook })[];
+  you: { device_id: string; app: DeviceApp | null; request: AppUpdateAsk | null } | null;
+}
 /** The services with a guided setup (hub/src/guides.ts). */
 export type OwnKeyService = "google" | "atlassian" | "steam" | "icloud";
 /**
@@ -232,6 +257,9 @@ export interface ConfluenceSync {
   images: number;
 }
 
+/** Half a megabyte: the size of each piece of an app installer passed on as it downloads. */
+const PIECE = 512 * 1024;
+
 export class HubClient {
   cfg: HubConfig;
   fetchImpl: FetchLike;
@@ -298,6 +326,63 @@ export class HubClient {
   }
   devices() {
     return this.req<{ devices: DeviceRow[] }>("GET", "/devices");
+  }
+  /** Which app and version this is, once a start (PUT /devices/me/app); 404 on hubs before 1.0.5. */
+  reportApp(app: DeviceApp) {
+    return this.req<{ app: DeviceApp; hub_version: string }>("PUT", "/devices/me/app", app);
+  }
+  /** The hub's copy of the Windows and Android apps, every device's app and version, and an update asked of this one. */
+  appUpdates(signal?: AbortSignal) {
+    return this.req<AppUpdatesView>("GET", "/app-updates", undefined, signal);
+  }
+  /** Has the hub fetch this platform's installer from its release, when it has not yet. */
+  prepareApp(platform: AppPlatform) {
+    return this.req<HubAppFile>("POST", `/app-updates/${platform}/prepare`);
+  }
+  /** The installer, as the hub keeps it, handed to `onPiece` as it arrives (never held whole). Returns the bytes read. */
+  async appFile(platform: AppPlatform, onPiece: (bytes: Uint8Array) => Promise<void>): Promise<number> {
+    const res = await this.fetchImpl(this.url(`/app-updates/${platform}/file`), { headers: this.headers() });
+    if (!res.ok) {
+      let msg = `${res.status}`;
+      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not JSON */ }
+      throw new HubError(res.status, msg);
+    }
+    const reader = res.body?.getReader?.();
+    if (!reader) {
+      const all = new Uint8Array(await res.arrayBuffer());
+      for (let i = 0; i < all.length; i += PIECE) await onPiece(all.subarray(i, i + PIECE));
+      return all.length;
+    }
+    // Small network reads are gathered into pieces of about half a megabyte before they go on.
+    let held: Uint8Array[] = [];
+    let heldBytes = 0;
+    let total = 0;
+    const pass = async () => {
+      if (!heldBytes) return;
+      const piece = new Uint8Array(heldBytes);
+      let at = 0;
+      for (const p of held) { piece.set(p, at); at += p.byteLength; }
+      held = []; heldBytes = 0;
+      await onPiece(piece);
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      held.push(value);
+      heldBytes += value.byteLength;
+      total += value.byteLength;
+      if (heldBytes >= PIECE) await pass();
+    }
+    await pass();
+    return total;
+  }
+  /** Ask devices to update (every device when `ids` is left out); each one is answered with what happens. */
+  requestAppUpdates(ids?: string[]) {
+    return this.req<{ version: string; devices: { id: string; name: string; app: DeviceApp | null; result: UpdateOutlook | "requested" }[] }>("POST", "/app-updates/request", ids ? { devices: ids } : {});
+  }
+  /** This device's Not now to an update asked of it. */
+  declineAppUpdate() {
+    return this.req<{ declined: boolean }>("POST", "/app-updates/request/decline");
   }
   /** Remove a device: its key stops working at once. */
   removeDevice(id: string) {

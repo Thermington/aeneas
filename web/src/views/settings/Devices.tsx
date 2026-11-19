@@ -86,6 +86,15 @@ export function DevicesList() {
     setBusy(d.id);
     try { await engine.client!.removeDevice(d.id); if (!d.current) load(); else await engine.cycle(); } catch (e) { setMsg({ ok: false, text: errorText(e) }); } finally { setBusy(""); }
   };
+  // Another device's Windows or Android app behind the hub: it installs the update the next time it reaches the hub.
+  const update = async (d: DeviceRow) => {
+    setBusy(d.id);
+    try {
+      await engine.client!.requestAppUpdates([d.id]);
+      setMsg({ ok: true, text: `${d.name} updates the next time it reaches the hub${d.app?.kind === "android" ? " (Android asks there before it installs)" : ""}.` });
+      load();
+    } catch (e) { setMsg({ ok: false, text: errorText(e) }); } finally { setBusy(""); }
+  };
   if (!list) return msg ? <div className="error small">{msg.text}</div> : <div className="muted small">Asking the hub for its devices.</div>;
   return (
     <div className="col">
@@ -94,9 +103,13 @@ export function DevicesList() {
           <div className="grow col" style={{ gap: 2 }}>
             <strong>{d.name}{d.current ? " (this device)" : ""}</strong>
             <span className="muted small">
-              {platformLabel(d.platform)}{d.last_seen ? `, last seen ${fmtDateTime(d.last_seen)}` : ""}{d.own_key ? "" : ", still on the hub's main key"}
+              {d.app?.kind === "android" ? "Android" : platformLabel(d.platform)}{d.last_seen ? `, last seen ${fmtDateTime(d.last_seen)}` : ""}{d.own_key ? "" : ", still on the hub's main key"}
             </span>
+            {d.app && <span className="muted small">{appVersionLine(d)}</span>}
           </div>
+          {!d.current && d.outlook === "self" && !(d.app_update && !d.app_update.declined_at) && (
+            <button type="button" className="small" disabled={busy === d.id} onClick={() => void update(d)}>Update</button>
+          )}
           <button type="button" className="ghost small" disabled={busy === d.id} onClick={() => void remove(d)}>{d.current ? "Remove this device" : "Remove"}</button>
         </div>
       ))}
@@ -104,4 +117,20 @@ export function DevicesList() {
       {msg && <div className={msg.ok ? "ok small" : "error small"}>{msg.text}</div>}
     </div>
   );
+}
+
+/** "App 1.0.4 (build 202611181809), update asked for" in words, from what the device last told the hub. */
+function appVersionLine(d: DeviceRow): string {
+  if (!d.app) return "";
+  const build = d.app.build ? ` (build ${d.app.build})` : "";
+  const ask = d.app_update;
+  const state =
+    ask && ask.declined_at ? `, update to ${ask.version} put off on the device`
+    : ask ? `, update to ${ask.version} asked for`
+    : d.outlook === "current" ? ", up to date"
+    : d.outlook === "store" ? ", newer one in the App Store or TestFlight"
+    : d.outlook === "reload" ? ", reload the page for the newer one"
+    : d.outlook === "self" ? ", a newer app is on the hub"
+    : "";
+  return `App ${d.app.version}${build}${state}`;
 }

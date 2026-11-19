@@ -19,7 +19,8 @@ import { refuseToolCall } from "../src/ai/api-guard.js";
 import { hubSecretValues } from "../src/secrets.js";
 
 const MEETING = { title: "1:1 with Dana", start: "2026-10-28T14:00:00.000Z", end: "2026-10-28T14:30:00.000Z", all_day: false, location: "Zephyr room" };
-const OLD = new Date("2026-10-20T03:00:00Z");
+/** A copy from 10 days ago: inside the 30 days backups are kept (a fixed date here ran past them on 2026-11-19). */
+const OLD = new Date(Date.now() - 10 * 86_400_000);
 
 const bytesOf = (f: string) => fs.readFileSync(f).toString("latin1");
 const keyLine = (f: string) => fs.readFileSync(f, "utf8").split("\n").find((l) => l.startsWith("AGE-SECRET-KEY-1"))!;

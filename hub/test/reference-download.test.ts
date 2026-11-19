@@ -10,7 +10,7 @@ import { httpGet, NetError, type GetOptions } from "../src/reference/net.js";
 import type { Metalink } from "../src/reference/metalink.js";
 import { setDiskSpaceOverride } from "../src/diskspace.js";
 import { startReference, referenceFor } from "../src/reference/index.js";
-import { makeHub } from "./helpers.js";
+import { makeHub, roomyDisk } from "./helpers.js";
 import { fakeReader, waitFor } from "./reference-helpers.js";
 
 const PIECE = 16_384;
@@ -207,7 +207,7 @@ test("reference downloads: one at a time, waiting for a game, the disk and the n
     await new Promise((r) => setTimeout(r, 150));
     assert.equal((await status()).downloads[0]?.reason, "disk", "6 GB free is not room for the file and 7 GB more");
     assert.equal((await status()).plan.fits, false);
-    setDiskSpaceOverride(null);
+    roomyDisk();
     // A first download goes at once, even at noon with updates kept to the night.
     await waitFor(async () => (await status()).books.some((b) => b.name === "archlinux_en_all" && b.state === "ready"), 15_000, "the book");
     await waitFor(async () => (await status()).reader.state === "ready", 15_000, "the reader");
@@ -243,7 +243,7 @@ test("reference downloads: one at a time, waiting for a game, the disk and the n
     const saved = JSON.parse(fs.readFileSync(path.join(t.hub.cfg.referenceDir, "state.json"), "utf8")) as { books: { file: string; old_file: string | null }[] };
     assert.deepEqual(saved.books.map((b) => [b.file, b.old_file]), [["archlinux_en_all_maxi_2026-11.zim", null]]);
     assert.ok(k.asked.every((u) => u.startsWith("https://library.kiwix.org/") || u.startsWith("https://lb.download.kiwix.org/")), "only Kiwix's own addresses");
-  } finally { setDiskSpaceOverride(null); stop(); await svc.stop(); await m.close(); t.cleanup(); }
+  } finally { roomyDisk(); stop(); await svc.stop(); await m.close(); t.cleanup(); }
 });
 
 test("reference downloads: a cut download goes on after the hub restarts; a file that fails its checks is failed, the book in use kept", async () => {

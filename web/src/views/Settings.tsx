@@ -31,6 +31,7 @@ import { listedKeys } from "../lib/keys";
 import { refusedSentence, refusedValues } from "../lib/errors";
 import { localDate } from "../lib/planner";
 import { APP_VERSION, RELEASES_URL, versionNotice } from "../lib/appUpdate";
+import { installFromHub, selfPlatform, type InstallStep } from "../lib/appInstall";
 
 /** This app's own version, from the build (the hub's comes from the hub). */
 
@@ -586,6 +587,7 @@ function About() {
   const hubName = hubLabel(useHubIdentity());
   const [appMsg, setAppMsg] = useState("");
   const notice = versionNotice(APP_VERSION, hubVersion, isTauri);
+  const [appInstall, setAppInstall] = useState<InstallStep | null>(null);
 
   useEffect(() => subscribePwa(setPwa), []);
   useEffect(() => {
@@ -657,11 +659,20 @@ function About() {
           {notice && <div role="status">{notice.text}</div>}
           {notice?.kind === "app-older" && (
             <div className="row">
-              <button className="primary" onClick={() => void openExternal(RELEASES_URL)}>
-                Get the new app
-              </button>
+              {selfPlatform() ? (
+                <button className="primary" disabled={!!appInstall && ["preparing", "downloading", "installing"].includes(appInstall.state)}
+                  onClick={() => engine.client && void installFromHub(engine.client, setAppInstall)}>
+                  Update app
+                </button>
+              ) : (
+                <button className="primary" onClick={() => void openExternal(RELEASES_URL)}>
+                  Get the new app
+                </button>
+              )}
+              {appInstall?.state === "unavailable" && <button onClick={() => void openExternal(RELEASES_URL)}>Release page</button>}
             </div>
           )}
+          {appInstall && <div className="muted small" role="status">{appInstall.text}</div>}
         </div>
       )}
       <Keyboard />

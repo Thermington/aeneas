@@ -21,6 +21,8 @@ struct HumTake: Equatable, Identifiable {
 /// Records a hum for the hub: linear PCM WAV, 22,050 Hz, mono, 16 bit, to a temporary file, up to two minutes
 /// (one on the Watch). The microphone is on only from `start()` until `stop()`, `cancel()` or the limit; permission
 /// is asked at the first press, not when a screen opens. Used by Music and Capture, and by the Watch's Hum.
+/// With `speech`, it records a spoken capture on the Watch instead: compressed speech (AAC, 16 kHz) up to its own
+/// limit, for the iPhone to turn into text.
 @MainActor
 final class HumRecorder: NSObject, ObservableObject {
     @Published private(set) var recording = false
@@ -34,11 +36,35 @@ final class HumRecorder: NSObject, ObservableObject {
     static let maxSeconds = HubClient.humMaxSeconds
     /// Where this recorder stops on its own.
     let limit: TimeInterval
+    /// Records speech for the iPhone to hear, not a hum for the hub.
+    let speech: Bool
 
-    init(limit: TimeInterval = HubClient.humMaxSeconds) {
-        self.limit = min(limit, Self.maxSeconds)
+    /// `speech`: the hub's hum limit does not apply, since the recording never goes to the hub.
+    init(limit: TimeInterval = HubClient.humMaxSeconds, speech: Bool = false) {
+        self.limit = speech ? limit : min(limit, Self.maxSeconds)
+        self.speech = speech
         super.init()
     }
+
+    /// Speech for the speech model: 16 kHz is what it hears at, and AAC keeps five minutes to about a megabyte, a
+    /// few seconds over Bluetooth instead of half a minute or more.
+    static let speechSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatMPEG4AAC,
+        AVSampleRateKey: 16_000.0,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderBitRateKey: 32_000,
+    ]
+
+    /// Speech where AAC could not start: plain 16 kHz WAV, larger but readable by the same speech model.
+    static let speechFallbackSettings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVSampleRateKey: 16_000.0,
+        AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+    ]
 
     /// The format the hub asks for: small, and plenty for a voice.
     static let settings: [String: Any] = [
@@ -74,21 +100,25 @@ final class HumRecorder: NSObject, ObservableObject {
         // Complete unless open: a take still recording when the device locks (the Watch keeps recording with the
         // wrist down) can be finished; once closed it is unreadable while the device is locked.
         let folder = DataProtection.folder(FileManager.default.temporaryDirectory.appendingPathComponent("hum-takes", isDirectory: true), .completeUnlessOpen)
-        let url = folder.appendingPathComponent("hum-\(UUID().uuidString).wav")
+        let name = (speech ? "capture-" : "hum-") + UUID().uuidString
+        var url = folder.appendingPathComponent(name + (speech ? ".m4a" : ".wav"))
         do {
             #if os(iOS) || os(watchOS)
-            // Measurement mode leaves out automatic gain, which would flatten the hits of a tapped rhythm.
+            // Measurement mode leaves out automatic gain, which would flatten the hits of a tapped rhythm. Speech keeps
+            // it: a voice at arm's length comes out louder for the speech model.
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [])
+            try session.setCategory(.record, mode: speech ? .default : .measurement, options: [])
             try session.setActive(true)
             #endif
-            let r = try AVAudioRecorder(url: url, settings: Self.settings)
-            r.delegate = self
-            r.isMeteringEnabled = true
-            guard r.prepareToRecord(), r.record(forDuration: limit) else {
-                throw NSError(domain: "Hum", code: 1, userInfo: [NSLocalizedDescriptionKey: "the microphone did not start"])
+            if !speech {
+                recorder = try startRecorder(url, settings: Self.settings)
+            } else if let aac = try? startRecorder(url, settings: Self.speechSettings) {
+                recorder = aac
+            } else {
+                try? FileManager.default.removeItem(at: url)
+                url = folder.appendingPathComponent(name + ".wav")
+                recorder = try startRecorder(url, settings: Self.speechFallbackSettings)
             }
-            recorder = r
         } catch {
             try? FileManager.default.removeItem(at: url)
             deactivate()
@@ -113,6 +143,17 @@ final class HumRecorder: NSObject, ObservableObject {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
         }
+    }
+
+    private func startRecorder(_ url: URL, settings: [String: Any]) throws -> AVAudioRecorder {
+        let r = try AVAudioRecorder(url: url, settings: settings)
+        r.delegate = self
+        r.isMeteringEnabled = true
+        guard r.prepareToRecord(), r.record(forDuration: limit) else {
+            r.stop()
+            throw NSError(domain: "Hum", code: 1, userInfo: [NSLocalizedDescriptionKey: "the microphone did not start"])
+        }
+        return r
     }
 
     /// Ends the take and hands it over in `finished`.

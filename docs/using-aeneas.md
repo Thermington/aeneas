@@ -102,7 +102,10 @@ Rhythm or Both; playback and the MIDI download follow that choice.
 ## Apple Watch
 
 The Watch reaches the hub through the Aeneas app on the paired iPhone (over Bluetooth or Wi-Fi), not on its own.
-Its first page has Ask, Capture and Hum Song, all by voice. Complications (add them by editing a watch face):
+Its first page has Ask, Capture and Hum Song, all by voice. Capture records what you say on the Watch (up to 5
+minutes; press Done when you finish) and the iPhone turns it into text on the phone itself, so a long thought is kept
+whole and the recording never goes to Apple. Ask uses Apple's dictation, which shows the words as you speak and suits a
+short question (it keeps only about the last 30 seconds of a long one). Complications (add them by editing a watch face):
 Ask, Capture, Hum Song, Now and Next up. When the Watch shows Offline, tap Offline, then Try now; opening the iPhone
 app helps it reconnect.
 
@@ -114,8 +117,15 @@ itself too: it answers from these docs.
 
 ## Updates, backups and the hub
 
-- **Updates**: Settings, About shows the hub's version and updates it. Apple apps update from the App Store or
-  TestFlight; Windows and Android apps say when a newer one is out, with a link to the release.
+- **Updates**: Settings, About shows the hub's version and updates it. The Windows and Android apps update from
+  the hub: when the hub runs a newer release, a banner and Settings, About have **Update app**, which installs the new
+  app from the hub (Windows closes and opens the new app by itself; Android shows its own install prompt, and the first
+  time asks whether Aeneas may install apps). Apps older than 1.0.5 have no Update app: install the new one once from
+  the release page, and it updates itself after that. Apple apps update from the App Store or TestFlight.
+- **Updating another device's app**: Settings, Connection, Devices shows which app and version each device runs, with
+  Update for a Windows or Android app that is behind; or ask the assistant ("update my Windows app"). That app installs
+  the update the next time it reaches the hub, after 15 seconds with Not now (Android waits until the app is open and
+  shows its prompt there). The hub cannot install the Apple apps.
 - **Backups, restore, moving to a new machine, other people on the same computer**: see
   [running-your-hub.md](running-your-hub.md) and [multi-person.md](multi-person.md).
 - **How devices reach the hub** (Direct link, Tailscale or home Wi-Fi only): [connections.md](connections.md).

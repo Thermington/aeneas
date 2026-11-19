@@ -17,7 +17,7 @@ struct EverythingAppWatchApp: App {
                 .onOpenURL { model.handle(url: $0) }
         }
         .onChange(of: scenePhase) { _, p in if p == .active { Task { await model.start() } } }
-        // The iPhone's complication snapshot (or a hum's result) can wake the app in the background: the model's
+        // The iPhone's complication snapshot (or a hum's or capture's result) can wake the app in the background: the model's
         // handlers are set up, then everything waiting comes in.
         .backgroundTask(.watchConnectivity) {
             await MainActor.run { _ = AppModel.shared }
@@ -37,7 +37,7 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
     let engine: SyncEngine
     @Published var page: WatchPage = .voice
-    /// Set by the Ask and Capture complications: the voice page starts listening.
+    /// Set by the Ask, Capture and Hum complications: the voice page starts listening or recording.
     @Published var listen: VoiceAction?
     /// Today's conversation is pushed over the voice page. Kept here so a complication can close it: the voice page
     /// under it, which starts the dictation, is out of sight until it does.
@@ -59,6 +59,8 @@ final class AppModel: ObservableObject {
     private var modulesFetchedThisLaunch = false
     /// Hums recorded here and how far each has got.
     let hum = WatchHumModel()
+    /// Captures spoken here and how far each has got.
+    let capture = WatchCaptureModel()
     /// Today's conversation with the assistant.
     let ask = WatchAskModel()
 
@@ -81,14 +83,16 @@ final class AppModel: ObservableObject {
         }
         WatchLink.shared.onHumDelivered = { [weak self] id in self?.hum.delivered(id) }
         WatchLink.shared.onHumResult = { [weak self] r in self?.hum.apply(r) }
+        WatchLink.shared.onCaptureDelivered = { [weak self] id in self?.capture.delivered(id) }
+        WatchLink.shared.onCaptureResult = { [weak self] r in self?.capture.apply(r) }
     }
 
     func start() async {
         // The Watch's copy stays out of the iPhone's iCloud Backup.
         BackupExclusion.apply(config: engine.config)
         if started {
-            // A hum whose transfer failed goes again; one WatchConnectivity is still carrying is left to it.
-            WatchLink.shared.sendQueuedHums()
+            // A hum or capture whose transfer failed goes again; one WatchConnectivity is still carrying is left to it.
+            WatchLink.shared.sendQueuedFiles()
             // Not awaited: Siri's question waits behind start, and Siri gives it only 10 s.
             Task { await ask.catchUp(engine: engine) }
             await engine.sync(); await refreshModules()
@@ -116,6 +120,19 @@ final class AppModel: ObservableObject {
         }
         // `-page now|today|log|activity|weight`: open on that page (App Store screenshots without swiping).
         if let i = args.firstIndex(of: "-page"), i + 1 < args.count, let u = URL(string: "everythingapp://" + args[i + 1]) { handle(url: u) }
+        // `-captureFor <seconds>`: a capture started by `-listen capture` ends by itself, as Done would end it.
+        if let i = args.firstIndex(of: "-captureFor"), i + 1 < args.count, let n = Double(args[i + 1]) {
+            Task {
+                while !capture.recorder.recording { try? await Task.sleep(nanoseconds: 200_000_000) }
+                try? await Task.sleep(nanoseconds: UInt64(n * 1_000_000_000))
+                capture.stop()
+            }
+        }
+        // `-captureSaved "words"`: a capture as the iPhone reports it once written down and saved.
+        if let i = args.firstIndex(of: "-captureSaved"), i + 1 < args.count {
+            let text = args[i + 1]
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); capture.debugSaved(text) }
+        }
         // `-ask "question"`: what the Ask tile sends once dictation ends (the simulator has no dictation).
         if let i = args.firstIndex(of: "-ask"), i + 1 < args.count {
             let q = args[i + 1]

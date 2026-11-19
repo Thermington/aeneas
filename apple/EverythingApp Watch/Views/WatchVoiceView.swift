@@ -7,16 +7,15 @@ import EACore
 /// What a tap (or a complication) starts on the voice page.
 enum VoiceAction: Equatable { case ask, capture, hum }
 
-/// The Watch's first page: Ask, Capture and Hum, all by voice. Ask and Capture go straight to dictation, with no
-/// keyboard or scribble; Hum records with the microphone. Reminders and the rest are on the pages below and in
-/// Apple's own apps.
+/// The Watch's first page: Ask, Capture and Hum, all by voice. Ask goes straight to dictation, with no keyboard or
+/// scribble; Capture and Hum record with the microphone (a capture is written down on the iPhone, so a long one is
+/// kept whole). Reminders and the rest are on the pages below and in Apple's own apps.
 struct WatchVoiceView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
     @ObservedObject var ask: WatchAskModel
     @ObservedObject var hum: WatchHumModel
-    @State private var captureLine: String?
-    @State private var saving = false
+    @ObservedObject var capture: WatchCaptureModel
     /// The last result, shown over the bottom for a few seconds: the buttons fill a small Watch, so the lines under
     /// them are out of sight.
     @State private var banner: String?
@@ -26,6 +25,8 @@ struct WatchVoiceView: View {
             VStack(spacing: 8) {
                 if hum.recorder.recording {
                     WatchHumRecordingPanel(hum: hum)
+                } else if capture.recorder.recording {
+                    WatchCaptureRecordingPanel(capture: capture)
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
                         // One question at a time: a second one while the first is answered would be dropped.
@@ -48,14 +49,10 @@ struct WatchVoiceView: View {
                     Text("This Watch was removed from your hub. Pair it again on your iPhone: Settings, Connection, Devices.")
                         .font(.caption2).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
-                if let p = hum.recorder.error ?? hum.problem {
+                if let p = hum.recorder.error ?? hum.problem ?? capture.recorder.error ?? capture.problem {
                     Text(p).font(.caption2).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
-                if saving {
-                    HStack(spacing: 6) { ProgressView().frame(width: 16, height: 16); Text("Saving").font(.caption2).foregroundStyle(.secondary) }
-                } else if let line = captureLine {
-                    Text(line).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(3)
-                }
+                if let c = capture.shown { WatchCaptureRow(status: c) }
                 if ask.asking != nil || !ask.turns.isEmpty {
                     Button { model.conversationOpen = true } label: { conversationPreview }
                         .buttonStyle(.bordered)
@@ -68,7 +65,6 @@ struct WatchVoiceView: View {
         .overlay(alignment: .bottom) {
             if let b = banner {
                 HStack(spacing: 6) {
-                    if saving { ProgressView().frame(width: 14, height: 14) }
                     Text(b).font(.caption2).lineLimit(2).multilineTextAlignment(.leading)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
@@ -81,6 +77,8 @@ struct WatchVoiceView: View {
         .animation(.default, value: banner)
         // Each step of a hum on its way, from "Sent to your iPhone" to the idea's title.
         .onChange(of: hum.recent.first) { _, s in if let s { show(StyleGuard.dashes(s.line)) } }
+        // And each step of a capture, from "Sent to your iPhone" to how it was filed.
+        .onChange(of: capture.recent.first) { _, s in if let s { show(StyleGuard.dashes(s.line)) } }
         .navigationDestination(isPresented: $model.conversationOpen) { WatchConversationView(ask: ask) }
         // Ask, Capture and Hum complications land here and start at once.
         .task(id: model.listen) {
@@ -120,7 +118,6 @@ struct WatchVoiceView: View {
             .frame(maxWidth: .infinity, minHeight: 64)
         }
         .tint(tint)
-        .disabled(saving)
     }
 
     static let voiceOff = "Voice is off. Turn it on in Settings, Modules."
@@ -138,39 +135,16 @@ struct WatchVoiceView: View {
                 await ask.ask(q, engine: engine)
             }
         case .capture:
-            Task {
-                guard let text = await Dictation.listen() else { return }
-                await capture(text)
-            }
+            // Recorded here and written down on the iPhone, then sorted by the hub like a phone capture: a reminder,
+            // task, log or note, not left to file by hand. One recording at a time.
+            guard !hum.recorder.recording, !capture.recorder.recording else { return }
+            Task { await capture.record() }
         case .hum:
             // The Hum Song complication: recording straight away. Hum is part of Music.
             guard model.isOn(.music) else { show("Hum is part of Music, which is off. Turn it on in Settings, Modules."); WKHaptic.failure(); return }
-            guard !hum.recorder.recording else { return }
+            guard !hum.recorder.recording, !capture.recorder.recording else { return }
             record()
         }
-    }
-
-    /// Saved as soon as dictation ends: the dictation screen already showed the words before Done.
-    /// Sorted by the hub like a phone capture: a reminder, task, log or note, not left to file by hand.
-    private func capture(_ text: String) async {
-        saving = true
-        captureLine = nil
-        banner = "Saving"
-        let e = await engine.capture(text, source: .watch)
-        saving = false
-        let what: String
-        if e == nil {
-            what = "Not saved"
-        } else if e?.str("filing") == "pending" {
-            what = "In your diary, filing it"
-        } else if e?.bool("processed") == true, let k = e?.str("suggested_kind"), !k.isEmpty, k != "none" {
-            what = "Saved as a \(k)"
-        } else {
-            what = engine.status == .online ? "Saved, to sort later" : "Saved, will sync"
-        }
-        captureLine = "\(what): \(text)"
-        show(captureLine ?? what)
-        if e == nil { WKHaptic.failure() } else { WKHaptic.success() }
     }
 
     private func show(_ line: String) {
@@ -279,7 +253,8 @@ enum Dictation {
     private static let noticeKey = "ea.watchDictation.noticeAccepted"
 
     /// Said once before the first dictation on this Watch, as the Voice module promises: the Watch's dictation is
-    /// Apple's, and Apple may process the audio on its servers. Not now asks again next time.
+    /// Apple's, and Apple may process the audio on its servers. Only Ask dictates; a capture is recorded and written
+    /// down on the iPhone. Not now asks again next time.
     private static func noticeAccepted(on c: WKInterfaceController) async -> Bool {
         if UserDefaults.standard.bool(forKey: noticeKey) { return true }
         return await withCheckedContinuation { cont in
@@ -289,7 +264,7 @@ enum Dictation {
             }
             let no = WKAlertAction(title: "Not now", style: .cancel) { cont.resume(returning: false) }
             c.presentAlert(withTitle: "Before you talk",
-                           message: "Talking on the Watch uses Apple's dictation, and Apple may turn your voice into text on its servers. Aeneas keeps only the text.",
+                           message: "Asking on the Watch uses Apple's dictation, and Apple may turn your voice into text on its servers. Aeneas keeps only the text. Capture is written down on your iPhone instead.",
                            preferredStyle: .alert, actions: [ok, no])
         }
     }

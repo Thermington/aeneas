@@ -4,9 +4,13 @@ import { engine, type NotifyEvent } from "../sync/engine";
 import { db } from "../sync/db";
 import { stopActivity } from "../sync/planner";
 import { SOURCE } from "../sync/actions";
-import { isTauri, notify, openExternal } from "../tauri/bridge";
-import { APP_VERSION, RELEASES_URL, versionNotice } from "../lib/appUpdate";
+import { isAndroid, isTauri, notify, openExternal } from "../tauri/bridge";
+import { APP_VERSION, RELEASES_URL, compareVersions, versionNotice } from "../lib/appUpdate";
+import { installFromHub, selfPlatform, type InstallStep } from "../lib/appInstall";
 import { useHubVersion } from "../lib/hubIdentity";
+import { useEntity, useMeta } from "../sync/hooks";
+import { META } from "../sync/db";
+import type { AppUpdateAsk } from "../sync/api";
 import { useEscape } from "../lib/keys";
 import { go } from "../lib/router";
 
@@ -296,27 +300,95 @@ export function MonitorBanner() {
   );
 }
 
+/** Seconds an update asked for from another device waits before it starts, with Not now. */
+const ASKED_WAIT_S = 15;
+
 /**
- * A newer Aeneas app is out (the hub runs a later release than this app): the Windows and Android apps update only by
- * installing the new one, so they say so once for each newer version, with a button to its download page.
+ * A newer Aeneas app is out (the hub runs a later release than this app): the Windows and Android apps say so once for
+ * each newer version, with Update app, which installs the hub's copy. An update the owner asked for from another device
+ * (the assistant, or Settings there) starts by itself after 15 seconds unless someone presses Not now; on Android only
+ * while the app is on screen, since Android's own prompt needs someone there.
  */
 export function AppUpdateBanner() {
   const hubVersion = useHubVersion();
   const notice = versionNotice(APP_VERSION, hubVersion, isTauri);
+  const me = useEntity(useMeta<string>(META.deviceId));
+  const ask = (me?.fields.app_update ?? null) as AppUpdateAsk | null;
+  const canSelf = !!selfPlatform();
+  const asked = canSelf && !!ask && !ask.declined_at && compareVersions(ask.version, APP_VERSION) === 1;
   const [dismissed, setDismissed] = useState<string | null>(() => { try { return localStorage.getItem(APP_UPDATE_KEY); } catch { return null; } });
+  const [step, setStep] = useState<InstallStep | null>(null);
+  const [wait, setWait] = useState<number | null>(null);
+  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
+  const [declinedFor, setDeclinedFor] = useState<string | null>(null);
   const shown = notice?.kind === "app-older" && !!hubVersion && dismissed !== hubVersion;
   const dismiss = useCallback(() => {
     if (!hubVersion) return;
     try { localStorage.setItem(APP_UPDATE_KEY, hubVersion); } catch { /* private window */ }
     setDismissed(hubVersion);
   }, [hubVersion]);
-  // Esc closes banners (Settings, Keyboard); for this one that is Dismiss.
-  useEscape(useCallback(() => { if (shown) dismiss(); }, [shown, dismiss]));
+  const run = useCallback(async () => {
+    setWait(null);
+    if (engine.client) await installFromHub(engine.client, setStep);
+  }, []);
+  const notNow = useCallback(async () => {
+    setWait(null);
+    if (ask) setDeclinedFor(ask.requested_at);
+    try { await engine.client?.declineAppUpdate(); } catch { /* offline: the ask stays, and comes back next start */ }
+  }, [ask]);
+
+  useEffect(() => {
+    const on = () => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, []);
+  // An ask arrives: the wait starts (once for each ask).
+  useEffect(() => {
+    if (asked && ask && declinedFor !== ask.requested_at && step === null && wait === null) setWait(ASKED_WAIT_S);
+  }, [asked, ask, declinedFor, step, wait]);
+  useEffect(() => {
+    if (wait === null) return;
+    if (wait <= 0) { void run(); return; }
+    if (isAndroid && !visible) return;
+    const t = setTimeout(() => setWait((w) => (w === null ? null : w - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [wait, visible, run]);
+  // Esc closes banners (Settings, Keyboard); for this one that is Dismiss, or Not now while an asked update waits.
+  useEscape(useCallback(() => {
+    if (wait !== null) void notNow();
+    else if (shown && !step) dismiss();
+  }, [wait, shown, step, notNow, dismiss]));
+
+  const busy = step && (step.state === "preparing" || step.state === "downloading" || step.state === "installing");
+  if (step) {
+    return (
+      <div className="banner sensor" role="status">
+        <div className="grow">{step.text}</div>
+        {step.state === "unavailable" && <button className="small" onClick={() => void openExternal(RELEASES_URL)}>Release page</button>}
+        {step.state === "permission" && <button className="small" onClick={() => void run()}>Update app</button>}
+        {!busy && <button className="small ghost" onClick={() => setStep(null)} aria-label="Close the update notice">Close</button>}
+      </div>
+    );
+  }
+  if (wait !== null && ask) {
+    return (
+      <div className="banner sensor" role="status">
+        <div className="grow">
+          {`Updating Aeneas to ${ask.version}${ask.by ? `, as asked from ${ask.by}` : ""}, `}
+          {isAndroid && !visible ? "when the app is open." : `in ${wait} s.`}
+        </div>
+        <button className="small" onClick={() => void run()}>Update now</button>
+        <button className="small ghost" onClick={() => void notNow()}>Not now</button>
+      </div>
+    );
+  }
   if (!shown || !notice) return null;
   return (
     <div className="banner sensor" role="status">
       <div className="grow">{notice.text}</div>
-      <button className="small" onClick={() => void openExternal(RELEASES_URL)}>Get the new app</button>
+      {canSelf
+        ? <button className="small" onClick={() => void run()}>Update app</button>
+        : <button className="small" onClick={() => void openExternal(RELEASES_URL)}>Get the new app</button>}
       <button className="small ghost" onClick={dismiss} aria-label="Dismiss the notice about a newer app">Dismiss</button>
     </div>
   );

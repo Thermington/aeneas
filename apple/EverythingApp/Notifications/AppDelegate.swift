@@ -10,8 +10,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         ReminderScheduler.shared.registerCategories()
         // The Watch relays every hub call through this process. WatchConnectivity may launch the
         // app in the background for that, so the session is activated here, not from a view.
-        // Hums from the Watch come as file transfers and go on to the hub from here.
+        // Hums from the Watch come as file transfers and go on to the hub from here; spoken captures come the same
+        // way and are written down here first.
         WatchLink.shared.onHumReceived = { WatchHumRelay.shared.kick() }
+        WatchLink.shared.onCaptureReceived = { WatchCaptureRelay.shared.kick() }
         WatchLink.shared.onUnheardAnswer = { q, a, session in AnswerNotice.post(question: q, answer: a, session: session) }
         // Each Watch request goes the way the iPhone's own do (the home network while the internet is down), with the
         // Watch's own key. Until the engine has its routes (the app woken in the background for the Watch), and in

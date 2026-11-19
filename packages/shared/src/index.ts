@@ -510,6 +510,19 @@ export const DeviceFields = z.object({
   push_token: z.string().optional(),
   /** What this device's build understands, for changes old builds would undo: "contacts-merge" (repeated numbers and merged duplicates in Contacts). */
   features: z.array(z.string()).optional(),
+  /** The app and version it runs, from its X-EA-App header (CONTRACT, App updates). Set by the hub. */
+  app: z.object({
+    kind: z.enum(["windows", "android", "web", "ios", "ipados", "macos", "watchos"]),
+    version: z.string(),
+    build: z.string().optional(),
+  }).optional(),
+  /** An app update the owner asked for, until the device runs that version (or says Not now: declined_at). Set by the hub. */
+  app_update: z.object({
+    requested_at: iso,
+    version: z.string(),
+    by: z.string().optional(),
+    declined_at: iso.optional(),
+  }).nullable().optional(),
 });
 
 /**

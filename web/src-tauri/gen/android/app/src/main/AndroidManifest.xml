@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Requested together with the microphone by the web view (granted without asking). -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Updating the app from the hub (Settings, About, Update app): Android asks once whether Aeneas may install apps, and shows its own prompt for each update. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
 
     <application

@@ -671,6 +671,17 @@ public final class SyncEngine: ObservableObject {
         config.deviceRemoved = false
     }
 
+    /// The hub client this app's version was last told to, so it is told once per connection.
+    private var reportedTo: ObjectIdentifier?
+
+    /// Tells the hub which app and version this is (Settings, Devices; the assistant's update_apps), once per connection.
+    private func reportApp(_ c: HubClient) async {
+        let id = ObjectIdentifier(c)
+        guard reportedTo != id, let app = AppReport.current(platform: platform) else { return }
+        reportedTo = id
+        _ = try? await withDeadline(20) { try await c.reportApp(app) }
+    }
+
     /// Register once per device. Concurrent callers wait for the same in-flight registration,
     /// and a stored device id is reused on later launches.
     private func ensureRegistered() async {
@@ -744,6 +755,7 @@ public final class SyncEngine: ObservableObject {
                 }
             }
             await ensureRegistered()
+            await reportApp(c)
             await takeWidgetDones()
             // A push that fails (one bad edit, a hub hiccup) must not stop changes from coming in.
             var pushError: Error?

@@ -2,11 +2,34 @@ import { randomUUID } from "node:crypto";
 import { nowIso, Platform } from "@everythingapp/shared";
 import { StoreError, type Store } from "./store.js";
 
-export interface DeviceSummary { id: string; name: string; platform: string; last_seen: string | null }
+/** Which app a device runs, as each app from 1.0.5 on reports it once a start (PUT /devices/me/app). */
+export const APP_KINDS = ["windows", "android", "web", "ios", "ipados", "macos", "watchos"] as const;
+export type AppKind = typeof APP_KINDS[number];
+export interface DeviceApp { kind: AppKind; version: string; build?: string }
+/** An update the owner asked for (the assistant or Settings): the app installs it the next time it reaches the hub. */
+export interface AppUpdateAsk { requested_at: string; version: string; by?: string; declined_at?: string }
+
+export function parseApp(body: unknown): DeviceApp | null {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const kind = typeof b.kind === "string" && (APP_KINDS as readonly string[]).includes(b.kind) ? b.kind as AppKind : null;
+  const version = typeof b.version === "string" && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(b.version) ? b.version : null;
+  const build = typeof b.build === "string" && /^[\w.-]{1,32}$/.test(b.build) ? b.build : undefined;
+  return kind && version ? { kind, version, ...(build ? { build } : {}) } : null;
+}
+
+export interface DeviceSummary {
+  id: string;
+  name: string;
+  platform: string;
+  last_seen: string | null;
+  app: DeviceApp | null;
+  app_update: AppUpdateAsk | null;
+}
 
 /** Device liveness: last_seen writes throttled to once per minute per device, written silently so the change feed stays quiet. */
 export class DeviceTracker {
   private lastTouch = new Map<string, number>();
+  private lastApp = new Map<string, string>();
 
   constructor(private store: Store, private throttleMs = 60_000) {}
 
@@ -24,6 +47,22 @@ export class DeviceTracker {
     return true;
   }
 
+  /**
+   * What app and version the device runs, written when it changes. An update asked for is done once the device runs
+   * that version or a later one, so the ask is cleared then.
+   */
+  noteApp(deviceId: string, app: DeviceApp): void {
+    const key = `${app.kind} ${app.version} ${app.build ?? ""}`;
+    if (this.lastApp.get(deviceId) === key) return;
+    this.lastApp.set(deviceId, key);
+    const e = this.store.get(deviceId);
+    if (!e || e.kind !== "device" || e.deleted_at) return;
+    const had = e.fields.app as DeviceApp | undefined;
+    if (!had || had.kind !== app.kind || had.version !== app.version || had.build !== app.build) this.store.patchSilent(deviceId, { app });
+    const ask = e.fields.app_update as AppUpdateAsk | null | undefined;
+    if (ask && versionAtLeast(app.version, ask.version)) this.store.patch(deviceId, { app_update: null });
+  }
+
   /** Every registered device entity with its most recent last_seen (entity or devices table, whichever is later). */
   list(): DeviceSummary[] {
     const rows = this.store.db.prepare("SELECT device_id, last_seen FROM devices").all() as { device_id: string; last_seen: string | null }[];
@@ -33,15 +72,24 @@ export class DeviceTracker {
         const a = typeof e.fields.last_seen === "string" ? e.fields.last_seen : null;
         const b = tableSeen.get(e.id) ?? null;
         const last_seen = a && b ? (a > b ? a : b) : a ?? b;
-        return { id: e.id, name: String(e.fields.name ?? ""), platform: String(e.fields.platform ?? ""), last_seen };
+        const app = (e.fields.app as DeviceApp | undefined) ?? null;
+        const app_update = (e.fields.app_update as AppUpdateAsk | null | undefined) ?? null;
+        return { id: e.id, name: String(e.fields.name ?? ""), platform: String(e.fields.platform ?? ""), last_seen, app, app_update };
       })
       .sort((x, y) => String(y.last_seen ?? "").localeCompare(String(x.last_seen ?? "")));
   }
 
   /** Test hook: forget throttle state. */
-  reset(): void { this.lastTouch.clear(); }
+  reset(): void { this.lastTouch.clear(); this.lastApp.clear(); }
 }
 
+/** a is b or later (three-number versions); false when either is not one. */
+function versionAtLeast(a: string, b: string): boolean {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  if (x.length !== 3 || y.length !== 3 || [...x, ...y].some((n) => !Number.isInteger(n))) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return true;
+}
 
 /**
  * Remove a device: its key ends at once, with the key of any Watch it held, and each one's entity is marked deleted

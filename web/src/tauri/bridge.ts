@@ -134,6 +134,34 @@ export async function notificationsAllowed(ask = false): Promise<boolean | null>
   return ok;
 }
 
+/**
+ * Saving a newer app's installer in the app (src-tauri/src/appupdate.rs), piece by piece so a phone never holds the
+ * whole file: begin, then each piece, then finish, which checks it against the release key and starts it. Finish
+ * answers "installing" on Windows (the app quits and the new one opens), "prompted" on Android (Android's own install
+ * prompt is up), or "permission" (Android first asks whether Aeneas may install apps). Each throws with the reason.
+ */
+export const appUpdateFile = {
+  async begin(platform: string, version: string): Promise<void> {
+    if (!isTauri) throw new Error("Only the Windows and Android apps install updates.");
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("update_begin", { platform, version });
+  },
+  async piece(bytes: Uint8Array): Promise<void> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("update_chunk", { b64: toBase64(bytes) });
+  },
+  async finish(signature: string): Promise<string> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string>("update_finish", { signature });
+  },
+};
+
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 /** Open a web page in the system browser (Steam sign-in). In a browser tab it opens a new tab. */
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri) {

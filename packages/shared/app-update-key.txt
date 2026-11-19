@@ -1,0 +1,4 @@
+# The public half of the key that signs the Windows and Android app installers (tools/sign-app-update.mjs). The apps
+# install an update from the hub only when its signature checks out against this key, and the hub serves only
+# installers that do. The private half never leaves the release machine. Lines starting with # are comments.
+UD8cTDZi3sIUZW7cROUMeDAZ0OAqmU/k5Geognq93iA=

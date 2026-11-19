@@ -5,10 +5,20 @@ import { loadConfig } from "../src/config.js";
 import { createHub, type Hub } from "../src/hub.js";
 import { createApp, type App } from "../src/app.js";
 import { restoreBackup } from "../src/backup.js";
+import { setDiskSpaceOverride, type DiskSpace } from "../src/diskspace.js";
 import { fileURLToPath } from "node:url";
 
 /** Invented seed data for tests (the shipped seed is only starter content; the owner's own lives in their data folder). */
 export const SEED_FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "seed");
+
+/**
+ * A disk with room to spare, for every test that imports these helpers: what the hub does on a full disk is tested
+ * with an override of its own, never by the disk of the machine running the tests (on 2026-11-19 a Mac at 97% made
+ * the digest and reference download tests fail).
+ */
+export const ROOMY_DISK: DiskSpace = { free_bytes: 200 * 1024 ** 3, total_bytes: 500 * 1024 ** 3, used_pct: 60, low: false };
+export function roomyDisk(): void { setDiskSpaceOverride(() => ROOMY_DISK); }
+roomyDisk();
 
 export const TOKEN = "test-token-0123456789-0123456789";
 

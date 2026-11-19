@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU32, Ordering};
+mod appupdate;
 mod home;
 mod link;
 use std::sync::Mutex;
@@ -262,6 +263,21 @@ fn on_second_start<R: Runtime>(app: &AppHandle<R>, args: Vec<String>) {
     }
 }
 
+/// Android's package installer, reached through ApkInstallPlugin.kt (the app's own Kotlin plugin).
+#[cfg(target_os = "android")]
+pub struct ApkInstaller<R: Runtime>(pub tauri::plugin::PluginHandle<R>);
+
+#[cfg(target_os = "android")]
+fn apk_installer<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("apkinstall")
+        .setup(|app, api| {
+            let handle = api.register_android_plugin("com.gnomecannon.everythingapp", "ApkInstallPlugin")?;
+            app.manage(ApkInstaller(handle));
+            Ok(())
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -279,11 +295,17 @@ pub fn run() {
         .manage(Mutex::new(NotifyTarget::default()))
         .manage(std::sync::Arc::new(link::Links::default()))
         .manage(std::sync::Arc::new(home::Home::default()))
+        .manage(appupdate::Updates::default())
         .invoke_handler(tauri::generate_handler![
             set_widget, get_widget, show_main_window, open_capture_window, open_window, set_notify_target, set_capture_shortcut, get_capture_shortcut,
             link::link_fetch, link::link_cancel, link::link_state,
-            home::home_fetch, home::home_cancel, home::home_probe, home::home_browse
+            home::home_fetch, home::home_cancel, home::home_probe, home::home_browse,
+            appupdate::update_begin, appupdate::update_chunk, appupdate::update_finish
         ]);
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(apk_installer());
+    }
 
     #[cfg(desktop)]
     {

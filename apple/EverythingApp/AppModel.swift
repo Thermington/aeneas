@@ -314,8 +314,9 @@ final class AppModel: ObservableObject {
             await ContactsSync.shared.runNow(reason: "foreground")
             #if os(iOS)
             await sendPendingShares()
-            // Hums from the Watch that could not reach the hub before go now.
+            // Hums from the Watch that could not reach the hub before go now, and captures not written down yet.
             WatchHumRelay.shared.kick()
+            WatchCaptureRelay.shared.kick()
             await healthImportIfDue()
             #endif
             return
@@ -347,6 +348,7 @@ final class AppModel: ObservableObject {
         #if os(iOS)
         await sendPendingShares()
         WatchHumRelay.shared.kick()
+        WatchCaptureRelay.shared.kick()
         #endif
     }
 

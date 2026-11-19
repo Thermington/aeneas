@@ -4,12 +4,13 @@ import os from "node:os";
 import { Bus, type NotifyEvent } from "../src/bus.js";
 import { diskSpace, setDiskSpaceOverride, spaceLeft, startDiskWatch, type DiskSpace } from "../src/diskspace.js";
 import { todayView } from "../src/planner.js";
-import { makeHub } from "./helpers.js";
+import { makeHub, roomyDisk } from "./helpers.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const GB = 1024 ** 3;
 
 test("disk: the data folder's disk is measured, and low means 95% used or under 2 GB free", () => {
+  setDiskSpaceOverride(null); // the real disk here; the helpers give every other test a roomy one
   const d = diskSpace(os.tmpdir())!;
   assert.ok(d.total_bytes > 0 && d.free_bytes >= 0 && d.used_pct >= 0 && d.used_pct <= 100);
   assert.equal(diskSpace("/no/such/folder/at/all"), null);
@@ -54,5 +55,5 @@ test("disk: the morning digest and Today say so while the data disk is low", () 
     assert.match(todayView(t.hub).digest, /^Hub disk: 1\.5 GB left; when it is full the hub cannot save edits or make backups$/m);
     setDiskSpaceOverride(() => ({ free_bytes: 80 * GB, total_bytes: 500 * GB, used_pct: 84, low: false }));
     assert.doesNotMatch(todayView(t.hub).digest, /Hub disk/);
-  } finally { setDiskSpaceOverride(null); t.cleanup(); }
+  } finally { roomyDisk(); t.cleanup(); }
 });

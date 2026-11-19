@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { engine } from "../sync/engine";
+import { reportAppVersion } from "./appInstall";
 
 /**
  * Which hub this device is paired with, by the name and color the hub gives itself (EA_HUB_NAME, EA_HUB_COLOR). Several
@@ -43,6 +44,8 @@ export async function refreshHubIdentity(): Promise<void> {
     const h = await c.health();
     if (h.version === undefined) return; // not accepted with this key: say nothing new
     setVersion(typeof h.version === "string" ? h.version : null);
+    // The hub learns which app and version this is (Settings, Devices; the assistant's update_apps).
+    reportAppVersion(c);
     set(h.hub && (h.hub.name || h.hub.color) ? { name: h.hub.name ?? null, color: h.hub.color ?? null } : null);
   } catch { /* offline: keep what we had */ }
 }

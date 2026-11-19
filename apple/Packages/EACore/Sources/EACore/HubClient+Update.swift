@@ -47,3 +47,39 @@ extension HubClient {
 }
 
 private struct Empty: Codable {}
+
+/// Which app and version this is (CONTRACT, App updates): Settings, Devices and the assistant's update_apps show it,
+/// and say how each device updates. `kind` is ios, ipados, macos or watchos; `build` the bundle's build number.
+public struct AppReport: Codable, Equatable, Sendable {
+    public var kind: String
+    public var version: String
+    public var build: String?
+
+    public init(kind: String, version: String, build: String?) {
+        self.kind = kind
+        self.version = version
+        self.build = build
+    }
+
+    /// This app, from its bundle, for a device of `platform`; nil when the bundle has no plain version (tests).
+    public static func current(platform: Platform, info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> AppReport? {
+        guard let version = info["CFBundleShortVersionString"] as? String,
+              version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil else { return nil }
+        let kind: String
+        switch platform {
+        case .watch: kind = "watchos"
+        case .mac: kind = "macos"
+        case .ipad: kind = "ipados"
+        default: kind = "ios"
+        }
+        let build = (info["CFBundleVersion"] as? String).flatMap { $0.range(of: #"^[\w.-]{1,32}$"#, options: .regularExpression) != nil ? $0 : nil }
+        return AppReport(kind: kind, version: version, build: build)
+    }
+}
+
+extension HubClient {
+    /// Says which app and version this is. Hubs before 1.0.5 answer 404, and the hub's main key 400: both are fine.
+    public func reportApp(_ app: AppReport) async throws {
+        _ = try await send("PUT", "devices/me/app", body: try JSONCoding.data(app))
+    }
+}

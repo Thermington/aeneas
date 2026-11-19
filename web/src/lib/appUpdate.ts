@@ -1,7 +1,8 @@
 /**
- * The Windows and Android apps update only when a new installer is installed: they carry their own copy of the screens,
- * and the hub's Check for updates updates the hub alone. Since the hub and every app share one version (CONTRACT,
- * Health), the version the hub reports says when a newer app is out, with no call to anyone but the hub.
+ * The Windows and Android apps carry their own copy of the screens, so they update by installing the new app, which
+ * the hub keeps for them (appInstall.ts; the hub's Check for updates updates the hub alone). Since the hub and every app
+ * share one version (CONTRACT, Health), the version the hub reports says when a newer app is out, with no call to
+ * anyone but the hub.
  * A browser loads the hub's own copy of the app, and the App Store updates the Apple apps, so neither needs this.
  */
 
@@ -29,7 +30,7 @@ export interface VersionNotice { kind: "app-older" | "hub-older"; text: string }
 export function versionNotice(appVersion: string, hubVersion: string | null, app: boolean): VersionNotice | null {
   if (!app || !hubVersion) return null;
   const c = compareVersions(appVersion, hubVersion);
-  if (c === -1) return { kind: "app-older", text: `A newer Aeneas app is out. This app is ${appVersion} and your hub runs ${hubVersion}; install the new app to get its screens and fixes.` };
+  if (c === -1) return { kind: "app-older", text: `A newer Aeneas app is out. This app is ${appVersion} and your hub runs ${hubVersion}; Update app installs the new one from your hub.` };
   if (c === 1) return { kind: "hub-older", text: `Your hub runs ${hubVersion}, older than this app (${appVersion}). Update the hub in Hub software, above, so everything this app shows works.` };
   return null;
 }

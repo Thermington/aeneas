@@ -10,8 +10,8 @@ import WidgetKit
 /// iPhone: answers relayed hub requests from the Watch with the phone's own hub URL and token.
 /// Watch: sends `RelayRequest` envelopes and awaits `RelayResponse`. Relayed requests are not queued on
 /// the phone side; the Watch keeps its own outbox and retries. Answers too big for one message come back
-/// compressed, in parts (see `RelayParts`). Hums are the exception: they go as file transfers and wait in
-/// `WatchHumQueue` on each side (see `WatchHum`).
+/// compressed, in parts (see `RelayParts`). Hums and spoken captures are the exception: they go as file transfers
+/// and wait in `WatchHumQueue` and `WatchCaptureQueue` on each side (see `WatchHum` and `WatchVoiceCapture`).
 public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     public static let shared = WatchLink()
     private static let log = Logger(subsystem: SharedConfig.logSubsystem, category: "watchlink")
@@ -24,11 +24,17 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     public var onHumDelivered: ((String) -> Void)?
     /// Watch side, on the main thread: how the iPhone and the hub got on with a hum.
     public var onHumResult: ((WatchHumResult) -> Void)?
+    /// Watch side, on the main thread: the iPhone has the spoken capture with this id.
+    public var onCaptureDelivered: ((String) -> Void)?
+    /// Watch side, on the main thread: what the iPhone heard in a spoken capture and how it was saved.
+    public var onCaptureResult: ((WatchCaptureResult) -> Void)?
     #endif
 
     #if os(iOS)
     /// Phone side, on the main thread: a hum from the Watch is in `WatchHumQueue.local`, ready to send to the hub.
     public var onHumReceived: (() -> Void)?
+    /// Phone side, on the main thread: a spoken capture from the Watch is in `WatchCaptureQueue.local`, ready to hear.
+    public var onCaptureReceived: (() -> Void)?
     /// iPhone, main thread: the hub answered a question the Watch asked from its screen after the Watch app left it
     /// (the wrist went down while the assistant worked), so the reply may never be shown there. The app posts it as a
     /// notification, which the Watch shows while the iPhone is locked.
@@ -201,40 +207,61 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// iPhone is in reach, even after this app has closed. Call on the main thread.
     public func queueHum(_ hum: WatchHum, file: URL) throws {
         try WatchHumQueue.local.add(hum, moving: file)
-        sendQueuedHums()
+        sendQueuedFiles()
     }
 
-    /// Hands every kept recording that WatchConnectivity is not carrying already to it again: after a failed
-    /// transfer, a relaunch, or activation finishing after the recording. Call on the main thread.
-    public func sendQueuedHums() {
+    /// The same for a spoken capture: kept in the Watch's queue until WatchConnectivity has delivered it.
+    public func queueCapture(_ capture: WatchVoiceCapture, file: URL) throws {
+        try WatchCaptureQueue.local.add(capture, moving: file)
+        sendQueuedFiles()
+    }
+
+    /// Hands every kept recording (hums and spoken captures) that WatchConnectivity is not carrying already to it
+    /// again: after a failed transfer, a relaunch, or activation finishing after the recording. Call on the main thread.
+    public func sendQueuedFiles() {
         guard let s = session else { return }
         guard s.activationState == .activated else { activate(); return }
-        let queue = WatchHumQueue.local
-        let carrying = Set(s.outstandingFileTransfers.compactMap { WatchHum(metadata: $0.file.metadata)?.id })
-        for e in queue.all() where !carrying.contains(e.hum.id) {
-            guard queue.hasAudio(e.hum.id) else { queue.remove(e.hum.id); continue }
+        let carrying = Set(s.outstandingFileTransfers.compactMap {
+            WatchHum(metadata: $0.file.metadata)?.id ?? WatchVoiceCapture(metadata: $0.file.metadata)?.id
+        })
+        let hums = WatchHumQueue.local
+        for e in hums.all() where !carrying.contains(e.hum.id) {
+            guard hums.hasAudio(e.hum.id) else { hums.remove(e.hum.id); continue }
             Self.log.notice("hum transfer queued \(e.hum.id, privacy: .public) reachable=\(s.isReachable)")
-            s.transferFile(queue.audioURL(e.hum.id), metadata: e.hum.metadata)
+            s.transferFile(hums.audioURL(e.hum.id), metadata: e.hum.metadata)
+        }
+        let captures = WatchCaptureQueue.local
+        for e in captures.all() where !carrying.contains(e.capture.id) {
+            guard captures.hasAudio(e.capture) else { captures.remove(e.capture.id); continue }
+            Self.log.notice("capture transfer queued \(e.capture.id, privacy: .public) reachable=\(s.isReachable)")
+            s.transferFile(captures.audioURL(e.capture), metadata: e.capture.metadata)
         }
     }
 
     public func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
-        guard let hum = WatchHum(metadata: fileTransfer.file.metadata) else { return }
+        let metadata = fileTransfer.file.metadata
         if let error {
             // Kept, and sent again at the next launch or when the iPhone comes back in reach rather than at once,
             // so an error that lasts (no iPhone app) does not spin.
-            recordError("hum transfer: \(error.localizedDescription)")
+            if WatchHum(metadata: metadata) != nil || WatchVoiceCapture(metadata: metadata) != nil {
+                recordError("recording transfer: \(error.localizedDescription)")
+            }
             return
         }
-        WatchHumQueue.local.remove(hum.id)
-        DispatchQueue.main.async { self.onHumDelivered?(hum.id) }
+        if let hum = WatchHum(metadata: metadata) {
+            WatchHumQueue.local.remove(hum.id)
+            DispatchQueue.main.async { self.onHumDelivered?(hum.id) }
+        } else if let capture = WatchVoiceCapture(metadata: metadata) {
+            WatchCaptureQueue.local.remove(capture.id)
+            DispatchQueue.main.async { self.onCaptureDelivered?(capture.id) }
+        }
     }
 
     public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         if let s = ComplicationSnapshot(message: userInfo) { receivedComplications(s); return }
-        receivedHumResult(userInfo)
+        receivedResult(userInfo)
     }
-    public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receivedHumResult(message) }
+    public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receivedResult(message) }
 
     /// The iPhone's view of what the complications show: kept where they read it, and they are drawn again. They
     /// used to change only when this app synced.
@@ -256,10 +283,15 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         while s.hasContentPending, Date() < deadline, !Task.isCancelled { try? await Task.sleep(nanoseconds: 200_000_000) }
     }
 
-    private func receivedHumResult(_ m: [String: Any]) {
-        guard let r = WatchHumResult(message: m) else { return }
-        Self.log.notice("hum result \(r.id, privacy: .public) \(r.state.rawValue, privacy: .public)")
-        DispatchQueue.main.async { self.onHumResult?(r) }
+    /// How a hum or a spoken capture went, from the iPhone.
+    private func receivedResult(_ m: [String: Any]) {
+        if let r = WatchHumResult(message: m) {
+            Self.log.notice("hum result \(r.id, privacy: .public) \(r.state.rawValue, privacy: .public)")
+            DispatchQueue.main.async { self.onHumResult?(r) }
+        } else if let r = WatchCaptureResult(message: m) {
+            Self.log.notice("capture result \(r.id, privacy: .public) \(r.state.rawValue, privacy: .public)")
+            DispatchQueue.main.async { self.onCaptureResult?(r) }
+        }
     }
     #endif
 
@@ -321,6 +353,18 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     }
 
     public func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        if let capture = WatchVoiceCapture(metadata: file.metadata) {
+            // WatchConnectivity deletes the file when this returns, so it moves into the queue first.
+            do {
+                let added = try WatchCaptureQueue.local.add(capture, moving: file.fileURL)
+                Self.log.notice("capture received \(capture.id, privacy: .public) new=\(added)")
+            } catch {
+                recordError("capture from Watch: \(error.localizedDescription)")
+                return
+            }
+            DispatchQueue.main.async { self.onCaptureReceived?() }
+            return
+        }
         guard let hum = WatchHum(metadata: file.metadata) else { return }
         // WatchConnectivity deletes the file when this returns, so it moves into the queue first.
         do {
@@ -335,13 +379,21 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     /// Tells the Watch how a hum went: at once when it is in reach, else queued by WatchConnectivity for when it is.
     public func sendHumResult(_ r: WatchHumResult) async {
+        await sendToWatch(r.message, what: "hum result \(r.id) \(r.state.rawValue)")
+    }
+
+    /// Tells the Watch what was heard in a spoken capture and how it was saved, the same way.
+    public func sendCaptureResult(_ r: WatchCaptureResult) async {
+        await sendToWatch(r.message, what: "capture result \(r.id) \(r.state.rawValue)")
+    }
+
+    private func sendToWatch(_ m: [String: Any], what: String) async {
         await waitForActivation()
         guard let s = session, s.activationState == .activated, s.isPaired, s.isWatchAppInstalled else {
-            Self.log.error("hum result \(r.id, privacy: .public) not sent: no Watch session")
+            Self.log.error("\(what, privacy: .public) not sent: no Watch session")
             return
         }
-        let m = r.message
-        Self.log.notice("hum result \(r.id, privacy: .public) \(r.state.rawValue, privacy: .public) reachable=\(s.isReachable)")
+        Self.log.notice("\(what, privacy: .public) reachable=\(s.isReachable)")
         if s.isReachable {
             s.sendMessage(m, replyHandler: nil) { _ in s.transferUserInfo(m) }
         } else {
@@ -394,7 +446,7 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         #endif
         DispatchQueue.main.async {
             #if os(watchOS)
-            if activationState == .activated { self.sendQueuedHums() }
+            if activationState == .activated { self.sendQueuedFiles() }
             #endif
             self.onStateChanged?()
         }
@@ -404,7 +456,7 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         Self.log.notice("reachability changed reachable=\(session.isReachable)")
         DispatchQueue.main.async {
             #if os(watchOS)
-            if session.isReachable { self.sendQueuedHums() }
+            if session.isReachable { self.sendQueuedFiles() }
             #endif
             self.onStateChanged?()
         }
