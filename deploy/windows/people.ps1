@@ -27,11 +27,13 @@
 .DESCRIPTION
   Linux's people.sh rests on four things, and this script makes the Windows version of each:
   - One account per person, so one hub cannot read another's files: a local account aeneas-<name> with a long random
-    password that is never stored or shown, hidden from the sign-in screen, refused sign-in at the screen, over Remote
-    Desktop and from the network, and allowed only to run as a batch job. Its hub lives in
+    password that nobody is shown and no file holds, hidden from the sign-in screen, refused sign-in at the screen, over
+    Remote Desktop and from the network, and allowed only to run as a batch job. Its hub lives in
     %ProgramData%\Aeneas\people\<account>, open to that account, SYSTEM and Administrators only.
-  - Each person's hub starts at boot with nobody signed in: a scheduled task per person, run as that account without a
-    stored password (S4U), like the owner's own "\Aeneas\Aeneas hub". deploy\windows\hub-service.ps1 keeps it running.
+  - Each person's hub starts at boot with nobody signed in: a scheduled task per person, run as that account. Windows 11
+    registers a task without a stored password (S4U) only for the account that registers it, so this one is given the
+    account's password, which Task Scheduler keeps in Windows' own credential store (Register-PersonTask).
+    deploy\windows\hub-service.ps1 keeps it running.
   - The owner's hub never runs anything as an administrator: it drops a request (a person's name, nothing else) into
     %ProgramData%\Aeneas\requests, which only the owner's account and SYSTEM can write to, and the SYSTEM task
     "\Aeneas\Aeneas people" runs the copy of this script in %ProgramFiles%\Aeneas for it. That copy changes only when
@@ -102,10 +104,18 @@ if ($env:EA_PEOPLE_RESULT) {
   } catch { }
 }
 
+# Written beside it and swapped in, so a reader (the owner's hub polls results) never finds it missing or half
+# written. Move-Item -Force deletes the old file first, and a read in that moment found none ("no such request",
+# 2026-11-19); [IO.File]::Replace swaps in one step.
 function Write-Text([string]$file, [string]$text) {
   $tmp = "$file.tmp"
   [IO.File]::WriteAllText($tmp, $text, $Utf8)
-  Move-Item -Force -LiteralPath $tmp -Destination $file
+  for ($i = 0; ; $i++) {
+    try {
+      if ([IO.File]::Exists($file)) { [IO.File]::Replace($tmp, $file, [NullString]::Value) } else { [IO.File]::Move($tmp, $file) }
+      return
+    } catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 50 }
+  }
 }
 
 function Set-Result([string]$state, [hashtable]$fields = @{}) {
@@ -294,6 +304,12 @@ function Set-OnlyAccess([string]$path, [string[]]$grants) {
   if ($LASTEXITCODE -ne 0) { Die "could not set who may open $path (icacls $LASTEXITCODE)" }
 }
 
+# The folder of everyone's hubs: SYSTEM and administrators, and every account may list it (this folder only, nothing
+# below it). Node checks each folder on the way to its program, and a person's hub stopped at this one (EPERM, lstat;
+# read attributes alone did not do). The names in it are the accounts' own, listed for everyone in people.json beside
+# it; each person's folder inside stays open to that person alone.
+function Lock-PeopleRoot { Set-OnlyAccess $PeopleRoot @("*${SidSystem}:(OI)(CI)F", "*${SidAdmins}:(OI)(CI)F", "*${SidUsers}:RX") }
+
 function Add-LsaType {
   if ('AeneasLsa' -as [type]) { return }
   Add-Type -Language CSharp -TypeDefinition @'
@@ -350,7 +366,7 @@ public static class AeneasLsa {
 '@
 }
 
-# The person's account: a password nobody knows (S4U tasks need none), allowed to run as a batch job (its hub's task)
+# The person's account: a password nobody knows (Register-PersonTask sets another), allowed to run as a batch job (its hub's task)
 # and nothing else: no sign-in at the screen, over Remote Desktop or from the network, and not on the sign-in screen.
 function New-PersonAccount([string]$account, [string]$pName) {
   $secure = New-Object Security.SecureString
@@ -368,9 +384,10 @@ function New-PersonAccount([string]$account, [string]$pName) {
 }
 
 # A task that starts at boot and starts again after a minute when it stops, as the owner's own hub task does. Logon
-# type 2 is S4U (as that account, no stored password), 5 is a service account (SYSTEM). `$sddl` says who may see,
-# run and stop it besides SYSTEM and Administrators.
-function Register-BootTask([string]$taskName, [string]$userName, [int]$logonType, [string]$arguments, [string]$description, [string]$readerSid = '') {
+# type 2 is S4U (as that account, no stored password; Windows 11 takes it only from that account itself), 1 is with
+# the account's password (Task Scheduler keeps it), 5 is a service account (SYSTEM). `$sddl` says who may see, run and
+# stop it besides SYSTEM and Administrators.
+function Register-BootTask([string]$taskName, [string]$userName, [int]$logonType, [string]$arguments, [string]$description, [string]$readerSid = '', [string]$password = '') {
   $svc = New-Object -ComObject Schedule.Service
   $svc.Connect()
   $rootFolder = $svc.GetFolder('\')
@@ -396,7 +413,20 @@ function Register-BootTask([string]$taskName, [string]$userName, [int]$logonType
   $d.Principal.RunLevel = 0
   $sddl = 'D:(A;;FA;;;SY)(A;;FA;;;BA)'
   if ($readerSid) { $sddl += "(A;;GRGWGX;;;$readerSid)" }
-  $null = $folder.RegisterTaskDefinition($taskName, $d, 6, $userName, $null, $logonType, $sddl)
+  $null = $folder.RegisterTaskDefinition($taskName, $d, 6, $userName, $(if ($logonType -eq 1) { $password } else { $null }), $logonType, $sddl)
+}
+
+# A person's hub task. Windows 11 refuses an S4U task for any account but the caller's own, to administrators and
+# SYSTEM alike (Access is denied; seen on build 26300, 2026-11-19), and this runs as an administrator or as SYSTEM. So
+# the account gets a new random password here, handed only to Task Scheduler, which keeps it in Windows' own credential
+# store to start the task. Nobody is shown it and no file holds it, and the account still may not sign in at the
+# screen, over Remote Desktop or from the network.
+function Register-PersonTask([string]$account, [string]$arguments, [string]$description) {
+  $plain = (New-Secret 40) + 'aA1!'
+  $secure = New-Object Security.SecureString
+  foreach ($ch in $plain.ToCharArray()) { $secure.AppendChar($ch) }
+  Set-LocalUser -Name $account -Password $secure
+  Register-BootTask (Person-Task $account) $account 1 $arguments $description '' $plain
 }
 
 function Find-Task([string]$taskName) { Get-ScheduledTask -TaskPath $TaskFolder -TaskName $taskName -ErrorAction SilentlyContinue | Select-Object -First 1 }
@@ -429,7 +459,30 @@ function Copy-Code([string]$account) {
   }
   $skipFiles = @('.env', 'hub\.env') | ForEach-Object { Join-Path $ownerApp $_ }
   Mirror $ownerApp (Join-Path $root 'app') @($skipDirs) @($skipFiles) $account
+  Link-Workspaces $ownerApp (Join-Path $root 'app')
   Mirror (Join-Path $o.root 'node') (Join-Path $root 'node') @() @() $account
+}
+
+# npm links the workspace packages (@everythingapp/shared and the others) into node_modules as junctions to the
+# owner's own folders. Mirror leaves junctions out (/XJ), and the person's account could not open the owner's folders
+# anyway, so each one is made again in their copy, pointing at the same folder in it. Without them their hub stopped at
+# once (Cannot find package '@everythingapp/shared').
+function Link-Workspaces([string]$ownerApp, [string]$personApp) {
+  $nm = Join-Path $ownerApp 'node_modules'
+  $top = @(Get-ChildItem -LiteralPath $nm -Directory -Force -ErrorAction SilentlyContinue)
+  $scoped = @($top | Where-Object { $_.Name.StartsWith('@') -and -not $_.LinkType } | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory -Force -ErrorAction SilentlyContinue })
+  foreach ($d in @($top + $scoped)) {
+    if ($d.LinkType -ne 'Junction' -and $d.LinkType -ne 'SymbolicLink') { continue }
+    $target = ([string]@($d.Target)[0]).TrimEnd('\')
+    if (-not $target.StartsWith($ownerApp + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+    $link = Join-Path $personApp $d.FullName.Substring($ownerApp.Length + 1)
+    $to = Join-Path $personApp $target.Substring($ownerApp.Length + 1)
+    $cur = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+    if ($cur -and -not $cur.LinkType) { Note "left as it is (a folder, not a link): $link"; continue }
+    if ($cur) { [IO.Directory]::Delete($link) }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $link) | Out-Null
+    $null = New-Item -ItemType Junction -Path $link -Target $to
+  }
 }
 
 # One folder made the same as another. /XJ: junctions are not followed; /MIR: files gone from the source go here too;
@@ -509,7 +562,7 @@ function Do-Setup {
   Set-OnlyAccess $Base @("*${SidSystem}:(OI)(CI)F", "*${SidAdmins}:(OI)(CI)F", "*${SidUsers}:(OI)(CI)RX")
   Set-OnlyAccess $RequestDir @("*${SidSystem}:(OI)(CI)F", "*${SidAdmins}:(OI)(CI)F", "*${ownerSid}:(OI)(CI)M")
   Set-OnlyAccess $ResultDir @("*${SidSystem}:(OI)(CI)F", "*${SidAdmins}:(OI)(CI)F", "*${ownerSid}:(OI)(CI)RX")
-  Set-OnlyAccess $PeopleRoot @("*${SidSystem}:(OI)(CI)F", "*${SidAdmins}:(OI)(CI)F")
+  Lock-PeopleRoot
 
   Say "Model gate on 127.0.0.1:$GatePort in front of $upstream"
   $gateRoot = Join-Path $root 'gate'
@@ -586,6 +639,8 @@ function Do-Add([string]$pName, [string]$pColor) {
   Set-Result 'working' @{ name = $pName; color = $pColor; address = $address; account = $account }
 
   Say "Making an account for $pName"
+  # A machine set up before the people folder could be listed (Lock-PeopleRoot) gets it now.
+  Lock-PeopleRoot
   $sid = New-PersonAccount $account $pName
   New-Item -ItemType Directory -Force -Path $root | Out-Null
   # Their folder is theirs: that account, SYSTEM and administrators, nobody else (not the owner's account either).
@@ -618,8 +673,14 @@ function Do-Add([string]$pName, [string]$pColor) {
   Say "Starting $pName's hub"
   # Listed first, so Hub-Call finds the port; taken off again if it does not start.
   Add-PersonEntry $pName $account $port $pColor $false $address
-  Register-BootTask (Person-Task $account) $account 2 (Service-Arguments (Join-Path $root 'app\deploy\windows\hub-service.ps1') $root) "Runs $pName's Aeneas hub from boot. Made by deploy\windows\people.ps1."
-  Start-Task (Person-Task $account)
+  try {
+    Register-PersonTask $account (Service-Arguments (Join-Path $root 'app\deploy\windows\hub-service.ps1') $root) "Runs $pName's Aeneas hub from boot. Made by deploy\windows\people.ps1."
+    Start-Task (Person-Task $account)
+  } catch {
+    # Not listed as a hub that is down: the list is for hubs that were made.
+    Remove-PersonEntry $account
+    Die "$pName's hub could not be set to start ($($_.Exception.Message)); the account $account is left as it is (people.ps1 remove-account $account -Erase $account to start over)"
+  }
   if (-not (Wait-Health $port 90)) {
     Remove-PersonEntry $account
     Die "$pName's hub did not start (see $root\data\logs\hub.log); the account $account is left as it is (people.ps1 remove-account $account -Erase $account to start over)"
@@ -780,7 +841,7 @@ function Do-ServeRequests {
     if (-not $req) { Remove-Item -Force -LiteralPath $f.FullName -ErrorAction SilentlyContinue; continue }
     $result = Join-Path $ResultDir "$($req.id).json"
     # The result exists before the request goes, so the hub never sees neither.
-    [IO.File]::WriteAllText($result, (ConvertTo-Json -InputObject ([ordered]@{ state = 'working'; op = $req.op; name = $req.name }) -Compress), $Utf8)
+    Write-Text $result (ConvertTo-Json -InputObject ([ordered]@{ state = 'working'; op = $req.op; name = $req.name }) -Compress)
     Remove-Item -Force -LiteralPath $f.FullName
     $env:EA_PEOPLE_RESULT = $result
     $env:EA_PEOPLE_OP = $req.op; $env:EA_PEOPLE_NAME = $req.name; $env:EA_PEOPLE_COLOR = $req.color
@@ -796,7 +857,7 @@ function Do-ServeRequests {
 }
 
 function Set-ResultAt([string]$file, [string]$state, [string]$err) {
-  try { [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject ([ordered]@{ state = $state; error = $err }) -Compress), $Utf8) } catch { }
+  try { Write-Text $file (ConvertTo-Json -InputObject ([ordered]@{ state = $state; error = $err }) -Compress) } catch { }
 }
 
 # One request, already checked, as the SYSTEM task hands it over (Do-ServeRequests).

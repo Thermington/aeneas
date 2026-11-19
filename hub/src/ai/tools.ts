@@ -1417,7 +1417,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "run_command", writes: true, maxChars: 9000, cutMiddle: true,
     available: (cfg) => cfg.hostActions,
-    description: "Run a shell command on one of {{owner}}'s machines (list_hosts). Windows hosts take PowerShell. Read-only commands (status, logs, listing, df, ping, Get-*) run at once. Anything that changes the system is held for {{owner}}'s approval: after calling, show them the exact command and why, then stop and wait. Never use sudo unless they say it works without a password. Always give purpose, and rollback for a change.",
+    description: "Run a shell command on one of {{owner}}'s machines (list_hosts). Windows hosts take PowerShell. Read-only commands (status, logs, listing, df, ping, Get-*) run at once. On Windows a read runs at once only as cmdlets joined by pipes: calculated columns that do arithmetic are fine (Select-Object Name,@{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}), but setting variables, $( ), ( ).Property and other script blocks make it wait for approval like a change. Anything that changes the system is held for {{owner}}'s approval: after calling, show them the exact command and why, then stop and wait. Never use sudo unless they say it works without a password. Always give purpose, and rollback for a change.",
     parameters: { type: "object", properties: { host: { type: "string" }, command: { type: "string" }, purpose: { type: "string", description: "one line: why" }, rollback: { type: "string", description: "how to undo it, for changes" } }, required: ["host", "command", "purpose"] },
     run: async (_api, a, ctx) => {
       if (!ctx.hosts) return { error: "host commands are off" };
@@ -1434,11 +1434,13 @@ export const TOOLS: ToolDef[] = [
       // and an "ok" to that result would approve it unseen. It is proposed in a later reply.
       const turn = turnOf(ctx);
       if (turn.ran.length) return { error: "a change already ran in this reply: tell {{owner}} its result first; propose the next change in a later reply, after they answer" };
+      // One held command per reply: another would replace the card {{owner}} is already shown.
+      if (turn.proposed.size) return { error: "a command already waits for {{owner}}'s yes in this reply, and it has not run, so there is no output from it. Nothing else is proposed until they answer. Answer now from the output of the commands that ran." };
       const action = ctx.hosts.propose(ctx.sessionId, host, command, purpose, str(a.rollback) ?? null);
       turn.proposed.add(action.id);
       const approval = approvalOf({ id: action.id, host: host.name, command, purpose });
       ctx.onApproval?.(approval);
-      return { status: "waiting_for_approval", action_id: action.id, host: host.name, command, risk: approval.risk, ...(approval.preflight ? { preflight: approval.preflight } : {}), instruction: "Not run yet. Tell {{owner}} exactly what this will do, then stop. It runs only after they approve." };
+      return { status: "waiting_for_approval", action_id: action.id, host: host.name, command, risk: approval.risk, ...(approval.preflight ? { preflight: approval.preflight } : {}), instruction: "Not run yet, so there is no output from it: say nothing about what it would find. Tell {{owner}} exactly what this will do and why, then stop. It runs only after they approve." };
     },
   },
   {
@@ -1583,7 +1585,7 @@ function cloudWorkWrite(args: Record<string, unknown>, ctx: ToolContext): string
   return null;
 }
 
-export async function runTool(api: ApiCall, call: ToolCall, ctx: ToolContext, tools: ToolDef[] = TOOLS): Promise<{ text: string; ok: boolean; writes: boolean }> {
+export async function runTool(api: ApiCall, call: ToolCall, ctx: ToolContext, tools: ToolDef[] = TOOLS): Promise<{ text: string; ok: boolean; writes: boolean; waiting?: boolean }> {
   const t = tools.find((x) => x.name === call.name);
   if (!t) return { text: JSON.stringify({ error: `no tool named ${call.name}; available: ${tools.map((x) => x.name).join(", ")}` }), ok: false, writes: false };
   let args = call.arguments as unknown;
@@ -1598,7 +1600,7 @@ export async function runTool(api: ApiCall, call: ToolCall, ctx: ToolContext, to
     const waiting = !!(out && typeof out === "object" && (out as { status?: string }).status === "waiting_for_approval");
     // Text that carries them with no mark on it (the digest's "Calendar:" line, a person's notes) is scrubbed too.
     const text = renderResult(out, t.maxChars, t.cutMiddle);
-    return { text: ctx.cloud ? cloudScrubber(cloudSecrets(ctx.store))(text) : text, ok, writes: t.writes && !waiting };
+    return { text: ctx.cloud ? cloudScrubber(cloudSecrets(ctx.store))(text) : text, ok, writes: t.writes && !waiting, ...(waiting ? { waiting } : {}) };
   } catch (e) {
     return { text: JSON.stringify({ error: (e as Error).message }), ok: false, writes: t.writes };
   }

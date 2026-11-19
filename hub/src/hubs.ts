@@ -71,8 +71,11 @@ export function setupCommand(p: NodeJS.Platform = platform(), repo: string = REP
 export const SETUP_COMMAND = setupCommand();
 
 /** What everyone who is added should hear first, shown before and after adding someone. */
-export const ADMIN_NOTE =
-  "Each person's notes, chats and everything else are kept in their own account on this machine, apart from yours and from everyone else's. Anyone with admin (root or sudo) rights on this machine, you included, can still open them. Tell the people you add before they start.";
+/** Said before and after someone is added: the machine's admin can open every account's files (docs/multi-person.md). */
+export function adminNote(p: NodeJS.Platform = platform()): string {
+  const who = p === "win32" ? "Anyone with administrator rights on this PC" : "Anyone with admin (root or sudo) rights on this machine";
+  return `Each person's notes, chats and everything else are kept in their own account on this machine, apart from yours and from everyone else's. ${who}, you included, can still open them. Tell the people you add before they start.`;
+}
 
 export const NAME_RE = /^[A-Za-z][A-Za-z '.-]{0,29}$/;
 const ACCOUNT_RE = /^aeneas-[a-z0-9]{1,20}$/;
@@ -187,10 +190,8 @@ export function personHub(account: string): { name: string; account: string; por
 export function requestResult(id: string): Record<string, unknown> {
   if (!ID_RE.test(id)) throw new StoreError(404, "no such request");
   if (fs.existsSync(path.join(REQUESTS(), `${id}.json`))) return { state: "queued" };
-  try {
-    const r = JSON.parse(fs.readFileSync(path.join(RESULTS(), `${id}.json`), "utf8")) as Record<string, unknown>;
-    return r;
-  } catch {
-    throw new StoreError(404, "no such request");
-  }
+  let text: string;
+  try { text = fs.readFileSync(path.join(RESULTS(), `${id}.json`), "utf8"); } catch { throw new StoreError(404, "no such request"); }
+  // Read while the script rewrites it: the request is under way, not gone.
+  try { return JSON.parse(text.replace(/^\uFEFF/, "")) as Record<string, unknown>; } catch { return { state: "working" }; }
 }

@@ -105,8 +105,10 @@ export function helperRoutes() {
     helper(c);
     return c.json({ forgotten: c.get("hub").helpers.forgetHostKey(c.req.param("ip")) });
   });
+  // Stop helping, or take back an offer they have not answered (only this route takes an offered helper's key).
   r.delete("/warden/me", (c) => {
-    const h = helper(c);
+    const h = c.get("auth") === "helper" ? c.get("hub").helpers.get(c.get("helper_id") ?? "") : null;
+    if (!h || (h.state !== "active" && h.state !== "offered")) throw new StoreError(403, "only for a helper");
     c.get("hub").helpers.stop(h.id, "helper");
     return c.json({ stopped: true });
   });

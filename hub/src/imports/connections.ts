@@ -23,7 +23,7 @@ export interface Connections { steam_key?: string; steam?: SteamConn; letterboxd
   /** People this hub's owner helps with their devices (helping.ts): each one's hub on this machine and the key to it. */
   helping?: HelpingEntry[];
 }
-export interface HelpingEntry { account: string; name: string; port: number; key: string; offered_at: string }
+export interface HelpingEntry { account: string; name: string; port: number; key: string; offered_at: string; request_id?: string }
 
 export class ConnectionStore {
   constructor(private file: string, private box?: SecretBox) {}

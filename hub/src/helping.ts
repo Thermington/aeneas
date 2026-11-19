@@ -1,6 +1,6 @@
 import type { Hub } from "./hub.js";
 import { StoreError } from "./store.js";
-import { listHubs, personHub, wardPerson } from "./hubs.js";
+import { listHubs, personHub, requestResult, wardPerson } from "./hubs.js";
 import { newHelperKey } from "./helpers.js";
 import type { HelpingEntry } from "./imports/connections.js";
 import type { Host, HostOs, RunResult } from "./ai/hosts.js";
@@ -59,7 +59,7 @@ export async function helpingView(hub: Hub): Promise<HelpView[]> {
         return { ...base, state: "helping" as const, computers: (r.data.computers ?? []).map(comp), scan: r.data.scan ?? null, passwords: r.data.passwords ?? [] };
       }
       cacheComputers(e, []);
-      const state = r.data?.state === "offered" ? "waiting" as const : r.data?.state === "stopped" ? "stopped" as const : r.status === 401 ? "not_sent" as const : "unreachable" as const;
+      const state = r.data?.state === "offered" ? "waiting" as const : r.data?.state === "stopped" ? "stopped" as const : r.status === 401 ? (delivering(e) ? "waiting" as const : "not_sent" as const) : "unreachable" as const;
       return { ...base, state };
     } catch {
       return { ...base, state: "unreachable" as const };
@@ -67,17 +67,30 @@ export async function helpingView(hub: Hub): Promise<HelpView[]> {
   }));
 }
 
+/**
+ * The offer is still on its way: the machine's root service (Windows: the SYSTEM task) has not finished the request
+ * that hands it to their hub. Until then their hub does not know the key, which is not "not sent" (it read so for a
+ * few seconds after every offer on Windows, 2026-11-19).
+ */
+function delivering(e: HelpingEntry): boolean {
+  if (!e.request_id) return false;
+  try { const st = requestResult(e.request_id).state; return st === "queued" || st === "working"; } catch { return false; }
+}
+
 const comp = (c: Record<string, unknown>): HelpComputer => ({ device_id: String(c.device_id), name: String(c.name ?? "Computer"), os: (c.os as HostOs) ?? "windows", listening: !!c.listening });
 
 /** Offer to help: a key made here, its hash to the person's hub through the root service; they say yes in their app. */
 export function offerHelp(hub: Hub, account: string): { request_id: string } {
   const p = personHub(account);
-  const helper = (hub.profile.get().name || (hub.cfg.ownerName !== "the owner" ? hub.cfg.ownerName : "") || "").trim();
+  // The name they see: the owner's own (Welcome, Settings), else the hub's name from setup (people.sh/people.ps1 setup
+  // --name), never the stand-in a hub has before it is named: "the owner" reached a person as "the" (2026-11-19).
+  const own = hub.profile.named() ? hub.profile.get().name : "";
+  const helper = (own || hub.cfg.hubName || (hub.cfg.ownerName !== "the owner" ? hub.cfg.ownerName : "")).trim();
   if (!helper) throw new StoreError(409, "set your name first (Settings, Set up): it is how they will see you");
   const { key, hash } = newHelperKey();
   const r = wardPerson(account, helper.split(/\s+/)[0].slice(0, 30), hash);
   hub.connections.update((c) => {
-    c.helping = [...(c.helping ?? []).filter((x) => x.account !== account), { account, name: p.name, port: p.port, key, offered_at: new Date().toISOString() }];
+    c.helping = [...(c.helping ?? []).filter((x) => x.account !== account), { account, name: p.name, port: p.port, key, offered_at: new Date().toISOString(), request_id: r.request_id }];
   });
   return r;
 }

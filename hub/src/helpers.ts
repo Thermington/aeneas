@@ -142,11 +142,12 @@ export class Helpers {
     const h = d.helpers.find((x) => x.id === id);
     if (!h) throw new StoreError(404, "no such helper");
     if (h.state !== "stopped") {
+      const wasOffer = h.state === "offered";
       h.state = "stopped";
       h.stopped_at = now();
       h.stopped_by = by;
       this.save(d);
-      this.record(h, "stopped", null, by === "person" ? `You stopped ${h.name} from helping.` : `${h.name} stopped helping.`);
+      this.record(h, "stopped", null, by === "person" ? (wasOffer ? `You said no to ${h.name}'s offer to help.` : `You stopped ${h.name} from helping.`) : wasOffer ? `${h.name} took back the offer to help.` : `${h.name} stopped helping.`);
     }
     return h;
   }

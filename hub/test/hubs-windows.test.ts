@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addPerson, hubsState, listHubs, peopleSupported, requestResult, setupCommand, updatedWithOwner, wardPerson } from "../src/hubs.js";
+import { addPerson, adminNote, hubsState, listHubs, peopleSupported, requestResult, setupCommand, updatedWithOwner, wardPerson } from "../src/hubs.js";
 
 /**
  * People on this machine on a Windows hub (deploy/windows/people.ps1): the same hub code with the Windows layout,
@@ -44,6 +44,12 @@ test("windows people: the setup line asks Windows for permission and names the o
   assert.equal(setupCommand("linux", "/x", "sam"), "sudo bash ~/everythingapp/deploy/people.sh setup --name <your name>");
 });
 
+test("windows people: the note about the admin speaks of administrators on Windows, root or sudo on Linux", () => {
+  assert.match(adminNote("win32"), /administrator rights on this PC/);
+  assert.doesNotMatch(adminNote("win32"), /root|sudo/);
+  assert.match(adminNote("linux"), /root or sudo/);
+});
+
 test("windows people: the owner file and list live in ProgramData; the owner is matched without regard to case", async () => {
   const { root, base } = windowsMachine(null);
   try {
@@ -65,6 +71,11 @@ test("windows people: the owner file and list live in ProgramData; the owner is 
     fs.rmSync(path.join(base, "requests", `${request_id}.json`));
     fs.writeFileSync(path.join(base, "results", `${request_id}.json`), JSON.stringify({ state: "done", name: "Mary O'Neil" }));
     assert.equal(requestResult(request_id).state, "done");
+    // Read while the script rewrites it (empty, or cut short): under way, not "no such request".
+    fs.writeFileSync(path.join(base, "results", `${request_id}.json`), "");
+    assert.equal(requestResult(request_id).state, "working");
+    fs.writeFileSync(path.join(base, "results", `${request_id}.json`), '\uFEFF{"state":"done"}');
+    assert.equal(requestResult(request_id).state, "done", "a byte order mark is not in the way");
 
     const ward = wardPerson("aeneas-mom", "Robin", "a".repeat(64));
     const w = JSON.parse(fs.readFileSync(path.join(base, "requests", `${ward.request_id}.json`), "utf8"));

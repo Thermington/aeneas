@@ -136,6 +136,27 @@ const ASKS_RECAP = /\b(recap|summar(y|ise|ize)|so far|what (did|have|has) (you|i
 /** A reply line that opens by saying something was saved or changed. */
 const CLAIMS_CHANGE = /^\W*(?:done(?=[.!,:\s]|$)|(?:logged|saved|added|deleted|removed|moved|marked|snoozed|renamed|parked|scheduled|blocked|stopped|updated|changed|created|cancell?ed)\b)/im;
 
+/**
+ * A command held for the owner's yes has not run, so nothing came back from it. Some models went on to report what it
+ * "found" anyway (2026-11-19: three held checks on a helped person's laptop, then 16 GB of RAM and a full 232 GB disk
+ * on a computer with 8 GB and 80 GB). This goes to the model right after the round that held one.
+ */
+const HELD_NOTE = "[Check from Aeneas, not typed by {{owner}}] The command that waits for {{owner}}'s yes has not run, so there is no output from it. Answer now: what the commands that did run showed (if their output holds no numbers, say so), then what the waiting command would do and why. Give no number or finding that no command output above shows.";
+
+/** A number with a unit, as a reply about a machine gives one: 97.7%, 5.2 GB, 2 cores. */
+const UNIT_NUMBER = /(\d+(?:[.,]\d+)?)\s?(?:%|percent\b|[KMGTP]i?B\b|[KMG]Hz\b|cores?\b|threads?\b|°C|RPM\b)/gi;
+
+/** The numbers with units in a reply that appear in none of the messages (the owner's, earlier replies, tool output). */
+export function unshownNumbers(reply: string, messages: AiMessage[]): string[] {
+  const seen = messages.filter((m) => m.role !== "system").map((m) => m.content ?? "").join("\n");
+  const out: string[] = [];
+  for (const m of reply.matchAll(UNIT_NUMBER)) {
+    const shown = new RegExp(`(?<![\\d.,])${m[1].replace(/[.,]/g, "[.,]")}(?![\\d])`).test(seen);
+    if (!shown && !out.includes(m[0])) out.push(m[0]);
+  }
+  return out;
+}
+
 /** The owner's message is about sleep or the hour: then a reply may talk about going to bed. */
 const SLEEP_ASKED = /\b(sleep|slept|bed|tired|rest|nap|late|insomnia|awake)\b/i;
 /**
@@ -231,6 +252,9 @@ export class Gateway {
     const usage: Usage = { prompt_tokens: 0, completion_tokens: 0 };
     const add = (u: Usage) => { usage.prompt_tokens = (usage.prompt_tokens ?? 0) + (u.prompt_tokens ?? 0); usage.completion_tokens = (usage.completion_tokens ?? 0) + (u.completion_tokens ?? 0); };
     let checked = false;
+    // A command held for the owner's yes in this reply: the model is told it has no output, and its answer is checked.
+    let held = false;
+    let numbersChecked = false;
     // A local model reads only its context: tool results that would push the request past it are cut to fit. The
     // window of earlier turns left TOOL_RESULT_ROOM of this free for them.
     const specTokens = estimateTokens(JSON.stringify(specs));
@@ -247,6 +271,13 @@ export class Gateway {
           messages.push({ role: "assistant", content: r.text }, { role: "user", content: "[Check from Aeneas, not typed by {{owner}}] Your reply says something was saved or changed, but no tool call in this reply did it. If {{owner}} asked for a change, make the tool call now; otherwise answer again without saying anything changed." });
           continue;
         }
+        // Numbers about a machine that no output shows, in a reply that held a command: once, answer from the output.
+        const unseen = held && !numbersChecked ? unshownNumbers(r.text, messages) : [];
+        if (unseen.length) {
+          numbersChecked = true;
+          messages.push({ role: "assistant", content: r.text }, { role: "user", content: `[Check from Aeneas, not typed by {{owner}}] Your reply gives ${unseen.slice(0, 6).join(", ")}, which no command output here shows. The command that waits for approval has not run. Answer again with only what the output of the commands that ran shows; for a number you worked out from it, say what it came from.` });
+          continue;
+        }
         if (r.text.trim() || !actions.length) return { text: r.text, usage };
         // Some models stop silently after a tool call; make them say what happened.
         messages.push({ role: "assistant", content: "" }, { role: "user", content: "Tell {{owner}} in one or two sentences what you did and the result, including anything that failed." });
@@ -256,13 +287,17 @@ export class Gateway {
         return { text: said.text, usage };
       }
       messages.push({ role: "assistant", content: r.text, tool_calls: r.tool_calls });
+      let heldNow = false;
       for (const tc of r.tool_calls) {
         const out = await runTool(this.api!, { name: tc.function.name, arguments: tc.function.arguments }, ctx, tools);
         const items = out.ok && out.writes ? touchedItems(tc.function.name, out.text) : [];
         actions.push({ tool: tc.function.name, ok: out.ok, writes: out.writes, ...(items.length ? { items } : {}) });
         onEvent?.({ type: "tool", tool: tc.function.name, ok: out.ok, writes: out.writes });
         messages.push({ role: "tool", tool_name: tc.function.name, content: out.text });
+        if (out.waiting) heldNow = true;
       }
+      // After this round's tool results, so they still follow the call that asked for them.
+      if (heldNow && !held) { held = true; messages.push({ role: "user", content: HELD_NOTE }); }
       // Pictures a tool fetched (phone photos) go to the model as a message it can see.
       for (const m of ctx.drainModelImages?.() ?? []) messages.push({ role: "user", content: m.note, images: m.images });
     }

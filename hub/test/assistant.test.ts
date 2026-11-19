@@ -239,6 +239,13 @@ test("hosts: the ways around the read-only check found in the 2026-11-05 review 
     "Get-Content \\\\evil.example.com\\share\\x", "dir //evil.example.com/share", "gpresult /h C:\\a.html", "Test-ComputerSecureChannel -Repair",
     "Get-Service | Where-Object { $_.Status -eq (Remove-Item C:\\x) }", "Get-Service | Where-Object { $_.Status -eq 'x'; Remove-Item C:\\x }",
     "Get-Process | Where-Object { $_.Kill() }", "Get-Service | Where-Object { $_.Status -eq \"$(Remove-Item x)\" }", "Get-Item x | Where-Object { & rm x }",
+    // Calculated columns run their block: only arithmetic on $_'s properties counts as a read (2026-11-19).
+    "Get-Process | Select-Object @{n='x';e={$_.Kill()}}", "Get-Process | Select-Object @{n='x';e={$_.Kill ()}}", "Get-Process | Select-Object @{n='x';e={Remove-Item C:\\x}}",
+    "Get-Process | Select-Object @{n='x';e={& rm x}}", "Get-Process | Select-Object @{n='x';e={[IO.File]::Delete('C:\\x')}}", "Get-Process | Select-Object @{n='x';e={$env:GITHUB_TOKEN}}",
+    "Get-Process | Select-Object @{n='x';s={Remove-Item x}}", "Get-Process | Select-Object @{n='x';e={1}} ; Remove-Item C:\\x", "Get-Process | Select-Object @{n=(Remove-Item x);e={1}}",
+    "Get-Process | Select-Object @{n='x';e={$_.Path | Remove-Item}}", "Get-Process | Select-Object @{n='x';e={[math]::Round((Remove-Item x),1)}}", "Get-Process | Select-Object @{n='x';e={% 'Kill'}}",
+    "Get-Process | Select-Object @{n='x';e={$_.CPU}}.GetType()", "Get-Process | Select-Object @{n='x';e={$_.CPU}; e={rm x}}", "Get-Process | Select-Object @{n='x';e={\"$($_.CPU)\"}}",
+    "Get-Process | Select-Object @{n='}';e={rm x}}", "Stop-Process -Name x | Select-Object @{n='x';e={1}}",
   ];
   for (const c of windows) assert.equal(isReadOnly(c, "windows"), false, c);
   const linuxReads = [
@@ -258,6 +265,9 @@ test("hosts: the ways around the read-only check found in the 2026-11-05 review 
     "Get-Service | Where-Object { $_.Status -eq 'Running' }", "Get-Process | Where-Object { $_.CPU -gt 10 -and $_.Name -like 'ollama*' } | Sort-Object CPU",
     "Get-ChildItem C:\\logs | Where-Object { -not $_.PSIsContainer }",
     "Get-Content \\\\core\\share\\x.txt", "Get-ChildItem C:\\Users -Filter *.log", "Get-Process | Sort-Object CPU -Descending | Select-Object -First 5", "Select-String -Path 'C:\\logs\\a (1).log' -Pattern error",
+    "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name,Id,@{n='CPU_s';e={[math]::Round($_.CPU,1)}},@{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}},@{n='Threads';e={$_.Threads.Count}} | Format-Table -AutoSize",
+    "Get-Volume | Where-Object DriveType -eq 'Fixed' | Select-Object DriveLetter,@{Name='Free (GB)';Expression={'{0:N1}' -f ($_.SizeRemaining/1GB)}}",
+    "Get-PhysicalDisk | Select-Object FriendlyName,MediaType,@{n='Size_GB';e={[int]($_.Size/1GB)}},HealthStatus", "Get-Process | Sort-Object @{e={$_.WorkingSet64};Descending=$true} | Select-Object -First 5 Name",
   ];
   for (const c of windowsReads) assert.equal(isReadOnly(c, "windows"), true, c);
   assert.equal(isPrivateHost("core.example-tailnet.ts.net"), true);
@@ -374,6 +384,38 @@ test("host actions: reads run at once; a change waits, runs only after the owner
     assert.equal(journal.fields.host, "storage");
     assert.equal(journal.fields.rollback, "systemctl stop smbd");
     assert.equal(t.hub.ai.hosts.get(approval.id)?.status, "done");
+  } finally { setBackendOverride(null); t.cleanup(); }
+});
+
+test("host actions: a held command is never reported as if it ran, and one reply holds only one", async () => {
+  const t = makeHub();
+  fs.writeFileSync(path.join(t.dir, "hosts.json"), JSON.stringify([{ name: "laptop", ssh: "robin@10.0.0.17", os: "windows" }]));
+  const ran: string[] = [];
+  t.hub.ai.hosts.runner = async (h: Host, cmd: string): Promise<RunResult> => { ran.push(`${h.name}: ${cmd}`); return { exit_code: 0, output: "CounterSamples : {_total, , _total}", timed_out: false, ms: 5 }; };
+  const held = "$os=Get-CimInstance Win32_OperatingSystem; \"RAM: $($os.TotalVisibleMemorySize)\"";
+  const b = scripted([
+    () => ({ calls: [{ name: "run_command", arguments: { host: "laptop", command: "Get-Counter '\\Memory\\Available MBytes'", purpose: "sample memory" } }] }),
+    () => ({ calls: [{ name: "run_command", arguments: { host: "laptop", command: held, purpose: "memory totals" } }] }),
+    () => ({ calls: [{ name: "run_command", arguments: { host: "laptop", command: "$d=Get-Volume; $d", purpose: "disk space" } }] }),
+    // What a model wrote on 2026-11-19 with nothing to go on.
+    () => ({ text: "15.97 GB of RAM, 13.4 GB free, and the disk is 97.7% full." }),
+    () => ({ text: "The memory sample came back without numbers. I want to run a command that reads the memory totals; it waits for your yes." }),
+  ]);
+  setBackendOverride(b);
+  try {
+    const events = sse(await (await t.api("/ai/chat/stream", { method: "POST", json: { session_id: "slow", message: "Robin's laptop is slow, check it" } })).text());
+    const approvals = events.filter((e) => e.event === "approval");
+    assert.equal(approvals.length, 1, "one held command per reply");
+    assert.equal(approvals[0].data.action.command, held);
+    assert.equal(t.hub.ai.hosts.get(approvals[0].data.action.id)?.status, "pending", "a second proposal did not replace the first");
+    assert.deepEqual(ran, ["laptop: Get-Counter '\\Memory\\Available MBytes'"], "only the read ran");
+    // The model was told the held command has no output, right after the round that held it.
+    assert.match(b.seen[2].at(-1)!.content, /has not run, so there is no output from it/);
+    assert.match(b.seen[3].at(-1)!.content, /already waits for/, "the second proposal was refused");
+    // The made-up numbers were sent back once; the answer is the one from the output.
+    assert.match(b.seen[4].at(-1)!.content, /15\.97 GB, 13\.4 GB, 97\.7%/);
+    const done = events.find((e) => e.event === "done")!.data as ChatOutput;
+    assert.match(done.reply, /came back without numbers/);
   } finally { setBackendOverride(null); t.cleanup(); }
 });
 

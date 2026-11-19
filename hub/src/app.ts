@@ -296,10 +296,12 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
       return next();
     }
     // A helper's key (helpers.ts): the helper's own routes only, sent in the header from this machine (the helper's
-    // hub is the machine owner's, next to this one). Before the person says yes, and after Stop helping, it opens nothing.
+    // hub is the machine owner's, next to this one). Before the person says yes, and after Stop helping, it opens nothing,
+    // except that before their yes it can take its own offer back (DELETE /warden/me), so the offer leaves their app.
     if (given?.startsWith(HELPER_KEY_PREFIX)) {
       const h = fromHeader && c.req.path.startsWith("/warden/") && mainKeyAllowed(c, []) ? hub.helpers.lookup(given) : null;
-      if (h?.state === "active") { c.set("auth", "helper"); c.set("helper_id", h.id); return next(); }
+      const withdraw = h?.state === "offered" && c.req.method === "DELETE" && c.req.path === "/warden/me";
+      if (h?.state === "active" || withdraw) { c.set("auth", "helper"); c.set("helper_id", h!.id); return next(); }
       if (h?.state === "offered") return c.json({ error: "waiting for them to say yes in their app", state: "offered" }, 403);
       if (h?.state === "stopped") return c.json({ error: "they stopped your help", state: "stopped" }, 401);
       await slowDown(caller(c));

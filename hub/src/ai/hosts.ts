@@ -1040,6 +1040,88 @@ const PS_VALUE = String.raw`(?:'[^']*'|"[^"$\x60]*"|\$(?:true|false|null)|-?[\w.
 const PS_TEST = String.raw`(?:-not\s+)?\$_(?:\.\w+)*(?:\s+-(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|ceq|cne|ilike|clike)\s+${PS_VALUE})?`;
 const PS_FILTER_BLOCK = new RegExp(String.raw`\{\s*${PS_TEST}(?:\s+-(?:and|or)\s+${PS_TEST})*\s*\}`, "gi");
 
+/**
+ * Calculated columns, as Select-Object, Format-Table and Sort-Object take them: @{n='RAM (MB)';e={[math]::Round($_.WS/1MB)}}.
+ * Their script block runs code, so a column counts as a read only when the block does arithmetic on $_'s properties:
+ * numbers (1MB), + - * /, -f, ( ), [math]::Round and its kin, [int] and the like, and quoted text without $. A
+ * method ($_.Kill()), a command, a pipe or any variable but $_ leaves the column in, and the command waits for approval.
+ * Not % either: at the start of a block it is ForEach-Object, whose % 'Kill' calls that method.
+ */
+const PS_CALC_KEY = /^(n|name|l|label|e|expression|f|formatstring|w|width|a|alignment|ascending|descending)$/i;
+const PS_ARITH = /\s+|\$(?:_|PSItem)(?:\.\w+)*(?![\w.]|\s*\()|\d+(?:\.\d+)?(?:kb|mb|gb|tb|pb)?(?![\w.])|\[math\]::(?:Round|Floor|Ceiling|Truncate|Abs|Max|Min)(?=\()|\[(?:int|long|double|decimal)\]|-f(?!\w)|[-+*/(),]|'[^']*'|"[^"$]*"/iy;
+const PS_PLAIN_VALUE = new RegExp(`^(?:${PS_VALUE})$`, "i");
+
+/** Index of the } that closes the { at `open`, past quoted text; -1 when nothing closes it. */
+function closingBrace(c: string, open: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < c.length; i++) {
+    const ch = c[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** The entries of a hashtable body, split at ; and line ends outside quotes, braces and parentheses. */
+function hashEntries(body: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  let quote: string | null = null;
+  for (const ch of body) {
+    if (quote) { cur += ch; if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "{" || ch === "(") depth++;
+    else if (ch === "}" || ch === ")") depth--;
+    else if ((ch === ";" || ch === "\n") && depth === 0) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((e) => e.trim()).filter(Boolean);
+}
+
+function psArithmetic(expr: string): boolean {
+  if (!expr.trim()) return false;
+  for (let i = 0; i < expr.length;) {
+    PS_ARITH.lastIndex = i;
+    const m = PS_ARITH.exec(expr);
+    if (!m || !m[0]) return false;
+    i += m[0].length;
+  }
+  return true;
+}
+
+function calcColumnReads(body: string): boolean {
+  const entries = hashEntries(body);
+  return entries.length > 0 && entries.every((e) => {
+    const m = /^([A-Za-z]+)\s*=\s*([\s\S]+)$/.exec(e);
+    if (!m || !PS_CALC_KEY.test(m[1])) return false;
+    const v = m[2].trim();
+    if (v.startsWith("{")) return closingBrace(v, 0) === v.length - 1 && psArithmetic(v.slice(1, -1));
+    return PS_PLAIN_VALUE.test(v);
+  });
+}
+
+/** The command with each calculated column that only does arithmetic taken out (a space in its place). */
+export function withoutCalcColumns(c: string): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < c.length; i++) {
+    const ch = c[i];
+    if (quote) { out += ch; if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; out += ch; continue; }
+    if (ch === "@" && c[i + 1] === "{") {
+      const end = closingBrace(c, i + 1);
+      if (end > 0 && calcColumnReads(c.slice(i + 2, end))) { out += " "; i = end; continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /** Characters outside quotes: PowerShell runs ( ) and { } as code even inside the arguments of a reading cmdlet. */
 function unquoted(c: string): string {
   let out = "";
@@ -1136,12 +1218,14 @@ export function isReadOnly(command: string, hostOs: HostOs): boolean {
     if (touchesSecrets(w.text)) return false;
     if (w.glob && globReachesSecret(w.text)) return false;
   }
-  const { segments, redirect, unsafe } = lex(c);
+  // On Windows a calculated column's ; and { } are not commands: the ones that only do arithmetic are taken out first.
+  const cw = hostOs === "windows" ? withoutCalcColumns(c) : c;
+  const { segments, redirect, unsafe } = lex(cw);
   if (redirect || unsafe) return false;
   if (hostOs === "windows") {
     // Script blocks and ( ) run code inside any cmdlet's arguments (Where-Object { Remove-Item ... }, Get-Item (rm x)).
     // A plain filter ({ $_.Status -eq 'Running' -and $_.CPU -gt 10 }) only compares, so it is kept.
-    if (/[(){}]/.test(unquoted(c.replace(PS_FILTER_BLOCK, " ")))) return false;
+    if (/[(){}]/.test(unquoted(cw.replace(PS_FILTER_BLOCK, " ")))) return false;
     if (uncLeavesNetwork(c)) return false;
     // The environment (Get-ChildItem Env:, $env:GITHUB_TOKEN) and saved Wi-Fi keys (key=clear) hold secrets.
     if (windowsShowsSecrets(c)) return false;

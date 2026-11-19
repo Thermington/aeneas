@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AeneasHub\app\deploy
 
 - **Their own account**, named `aeneas-<name>`.
   - On Linux it has no password and no login, and its home folder is mode 700.
-  - On Windows it is a local account with a long random password that nobody knows (it is never stored or shown). It is hidden from the sign-in screen and refused sign-in at the screen, over Remote Desktop and from the network; it may only run its hub's task. Its hub lives in `%ProgramData%\Aeneas\people\aeneas-<name>`, which only that account, SYSTEM and administrators can open. Windows keeps account names to 20 characters, so the name part is at most 13.
+  - On Windows it is a local account with a long random password that nobody knows: it is never shown and no file holds it, and only Windows' Task Scheduler keeps it, to start that person's hub (Windows 11 lets an administrator register a task without a password only for their own account). It is hidden from the sign-in screen and refused sign-in at the screen, over Remote Desktop and from the network; it may only run its hub's task. Its hub lives in `%ProgramData%\Aeneas\people\aeneas-<name>`, which only that account, SYSTEM and administrators can open. Windows keeps account names to 20 characters, so the name part is at most 13.
 - **Their own hub** on its own port (8788 and up), reachable through the Direct link from anywhere, and on your tailnet when Tailscale runs on the machine (for example, `https://core.example.ts.net:8788`).
 - **Their own everything else**: database, notes folder, work space key, chats, linked accounts, nightly backups and devices.
 - **A name and a color.** Their devices show these:

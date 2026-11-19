@@ -8,10 +8,10 @@ import { DeviceKeys } from "../src/devicekeys.js";
 import { helpedHosts, helpingView, offerHelp, stopHelping } from "../src/helping.js";
 
 /** A machine with two hubs: the owner's (the helper) and Mom's, as People on this machine sets them up. */
-async function family() {
+async function family(opts: { helperNamed?: boolean } = {}) {
   const helper = makeHub();
   const mom = makeHub();
-  helper.hub.profile.set({ name: "Robin" });
+  if (opts.helperNamed !== false) helper.hub.profile.set({ name: "Robin" });
   mom.hub.profile.set({ name: "Mom" });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ea-people-"));
   fs.mkdirSync(path.join(root, "etc/aeneas"), { recursive: true });
@@ -68,6 +68,42 @@ function fakeAgent(pc: (p: string, init?: RequestInit & { json?: unknown }) => R
   })();
   return { seen, stop: async () => { stop = true; await loop; } };
 }
+
+test("helping: an owner who never set their name offers help under the hub's name from setup, never as \"the\"", async () => {
+  const f = await family({ helperNamed: false });
+  try {
+    assert.equal(f.helper.hub.profile.get().name, "the owner", "the stand-in a hub has before it is named");
+    assert.throws(() => offerHelp(f.helper.hub, "aeneas-mom"), /set your name first/);
+    (f.helper.hub.cfg as { hubName: string }).hubName = "Robin";
+    offerHelp(f.helper.hub, "aeneas-mom");
+    await f.serveRequests();
+    const offers = await (await f.phone("/helpers")).json() as { helpers: { name: string }[] };
+    assert.deepEqual(offers.helpers.map((h) => h.name), ["Robin"]);
+  } finally { f.done(); }
+});
+
+test("helping: an offer taken back before Mom answers leaves her app, and the key opens nothing else meanwhile", async () => {
+  const f = await family();
+  try {
+    offerHelp(f.helper.hub, "aeneas-mom");
+    await f.serveRequests();
+    const key = f.helper.hub.connections.get().helping![0].key;
+    // Before her yes the key reads nothing, even the route it may take the offer back on.
+    const r = await f.mom.app.request("/warden/me", { headers: { authorization: `Bearer ${key}` } });
+    assert.equal(r.status, 403);
+    assert.deepEqual(await stopHelping(f.helper.hub, "aeneas-mom"), { stopped: true });
+    const view = await (await f.phone("/helpers")).json() as { helpers: { name: string; state: string }[]; log: { text: string }[] };
+    assert.deepEqual(view.helpers.map((h) => [h.name, h.state]), [["Robin", "stopped"]]);
+    assert.equal(view.log[0].text, "Robin took back the offer to help.");
+    // And a "No, thank you" reads as one.
+    offerHelp(f.helper.hub, "aeneas-mom");
+    await f.serveRequests();
+    const offered = (await (await f.phone("/helpers")).json() as { helpers: { id: string; state: string }[] }).helpers.find((h) => h.state === "offered")!;
+    assert.equal((await f.phone(`/helpers/${offered.id}/stop`, { method: "POST" })).status, 200);
+    const after = await (await f.phone("/helpers")).json() as { log: { text: string }[] };
+    assert.equal(after.log[0].text, "You said no to Robin's offer to help.");
+  } finally { f.done(); }
+});
 
 test("invitations: up to 3 days, kept on disk through a restart, used once", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ea-invite-"));
@@ -145,8 +181,13 @@ test("helping: the helper key opens the helper's routes and nothing else; Stop h
   const f = await family();
   try {
     offerHelp(f.helper.hub, "aeneas-mom");
-    // Before the machine's root service delivers it, the offer is not there: offer again, not stopped.
+    // While the machine's root service has not taken the request yet, the offer is on its way.
+    assert.equal((await helpingView(f.helper.hub))[0].state, "waiting");
+    // A request that is gone without reaching her hub: not there, so offer again (not stopped).
+    const requests = path.join(process.env.EA_PEOPLE_ROOT!, "var/lib/aeneas/requests");
+    for (const r of fs.readdirSync(requests)) fs.rmSync(path.join(requests, r));
     assert.equal((await helpingView(f.helper.hub))[0].state, "not_sent");
+    offerHelp(f.helper.hub, "aeneas-mom");
     await f.serveRequests();
     const key = f.helper.hub.connections.get().helping![0].key;
     const asHelper = (p: string, method = "GET") => f.mom.app.request(p, { method, headers: { authorization: `Bearer ${key}` } });
