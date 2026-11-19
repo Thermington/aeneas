@@ -70,6 +70,9 @@ die() { echo "error: $*" >&2; result failed error "$*"; exit 1; }
 log() { printf '==> %s\n' "$*"; result working step "$*"; }
 
 [ "$(id -u)" = 0 ] || die "run with sudo"
+# Commands run as each person's account below; the folder sudo was started in (the owner's home) is not theirs to open,
+# and find then stops ("Failed to restore initial working directory"). From /, every account can start.
+cd /
 OWNER="${SUDO_USER:-}"
 if [ -z "$OWNER" ] || [ "$OWNER" = root ]; then OWNER="$(cat "$OWNER_FILE" 2>/dev/null || true)"; fi
 [ -n "$OWNER" ] && [ "$OWNER" != root ] || die "run with sudo from your own account (the one your hub runs in), not as root directly"
