@@ -145,6 +145,8 @@ test("helping: the helper key opens the helper's routes and nothing else; Stop h
   const f = await family();
   try {
     offerHelp(f.helper.hub, "aeneas-mom");
+    // Before the machine's root service delivers it, the offer is not there: offer again, not stopped.
+    assert.equal((await helpingView(f.helper.hub))[0].state, "not_sent");
     await f.serveRequests();
     const key = f.helper.hub.connections.get().helping![0].key;
     const asHelper = (p: string, method = "GET") => f.mom.app.request(p, { method, headers: { authorization: `Bearer ${key}` } });

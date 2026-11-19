@@ -18,7 +18,8 @@ import { errCode } from "./logsafe.js";
  * asked; their hub logs everything for them to read.
  */
 
-export type HelpState = "waiting" | "helping" | "stopped" | "unreachable";
+/** `not_sent`: their hub has no such offer (the machine's root service could not deliver it): offer again. */
+export type HelpState = "waiting" | "helping" | "stopped" | "unreachable" | "not_sent";
 
 export interface HelpComputer { device_id: string; name: string; os: HostOs; listening: boolean }
 export interface HelpView {
@@ -58,7 +59,8 @@ export async function helpingView(hub: Hub): Promise<HelpView[]> {
         return { ...base, state: "helping" as const, computers: (r.data.computers ?? []).map(comp), scan: r.data.scan ?? null, passwords: r.data.passwords ?? [] };
       }
       cacheComputers(e, []);
-      return { ...base, state: r.data?.state === "offered" ? "waiting" as const : r.status === 401 ? "stopped" as const : "unreachable" as const };
+      const state = r.data?.state === "offered" ? "waiting" as const : r.data?.state === "stopped" ? "stopped" as const : r.status === 401 ? "not_sent" as const : "unreachable" as const;
+      return { ...base, state };
     } catch {
       return { ...base, state: "unreachable" as const };
     }

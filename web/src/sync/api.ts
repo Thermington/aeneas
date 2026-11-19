@@ -59,7 +59,7 @@ export interface HelpersView {
 }
 /** GET /helping/people: the machine owner's people, each with whether the owner helps them. */
 export interface HelpView {
-  account: string; name: string; state: "waiting" | "helping" | "stopped" | "unreachable"; offered_at: string;
+  account: string; name: string; state: "waiting" | "helping" | "stopped" | "unreachable" | "not_sent"; offered_at: string;
   computers: { device_id: string; name: string; os: string; listening: boolean }[];
   scan: HomeScan | null;
   passwords: { title: string; username: string }[];

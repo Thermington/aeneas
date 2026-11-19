@@ -1387,7 +1387,7 @@ export const TOOLS: ToolDef[] = [
       return {
         people: r.people.map((p) => ({
           name: p.name,
-          state: p.state === "helping" ? "lets you help" : p.state === "waiting" ? "has not said yes yet" : p.state === "stopped" ? "stopped your help" : "their hub does not answer",
+          state: p.state === "helping" ? "lets you help" : p.state === "waiting" ? "has not said yes yet" : p.state === "stopped" ? "stopped your help" : p.state === "not_sent" ? "the offer did not reach their hub: offer again in Settings, People on this machine" : "their hub does not answer",
           computers: p.computers.map((c) => ({ machine: `${p.name.endsWith("s") ? `${p.name}'` : `${p.name}'s`} ${many(p) ? c.name : "computer"}`, os: c.os, is_on: c.listening })),
           home_network: p.scan ? { scanned_at: p.scan.at, devices: p.scan.devices.map((d) => `${d.name || "unnamed"} ${d.ip}${d.open.length ? ` (open ports ${d.open.join(", ")})` : ""}`) } : "not scanned yet (they press Find the devices in my home in their app)",
           passwords: p.passwords.map((x) => x.title),

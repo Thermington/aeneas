@@ -151,6 +151,7 @@ function HelpRow({ person, onChange }: { person: PersonHub & { help: HelpView | 
       {h?.state === "waiting" && <span className="small">Waiting for {n} to say yes in the Aeneas app.</span>}
       {h?.state === "stopped" && <div className="row" style={{ alignItems: "center", gap: 8 }}><span className="small">{n} stopped your help.</span><button type="button" className="small" disabled={busy} onClick={() => void offer()}>Offer again</button></div>}
       {h?.state === "unreachable" && <span className="error small">{n}&rsquo;s hub does not answer.</span>}
+      {h?.state === "not_sent" && <div className="row" style={{ alignItems: "center", gap: 8 }}><span className="error small">The offer did not reach {n}&rsquo;s hub.</span><button type="button" className="small" disabled={busy} onClick={() => void offer()}>Offer again</button></div>}
       {h?.state === "helping" && (
         <div className="col" style={{ gap: 2 }}>
           <span className="ok small">You help {n}. Ask your assistant, for example: why is {n}&rsquo;s computer slow?</span>

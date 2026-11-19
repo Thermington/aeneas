@@ -529,13 +529,15 @@ try:
         or (op == "ward" and named and color == "" and re.fullmatch(r"[A-Za-z][A-Za-z '.-]{0,29}", helper)
             and re.fullmatch(r"[0-9a-f]{64}", khash))
         or (op == "update" and name == "" and color == "" and helper == "" and khash == ""))
-    print("\t".join([rid, op, name, color, helper, khash]) if ok else "")
+    # Fields joined with the unit separator, not a tab: read in bash merges runs of tabs (they count as white space),
+    # so an empty color moved the name of the helper and the hash of the key one field over and every ward failed.
+    print("\x1f".join([rid, op, name, color, helper, khash]) if ok else "")
 except Exception:
     print("")
 EOF
 )"
     [ -n "$REQ" ] || { rm -f "$f"; continue; }
-    IFS=$'\t' read -r RID OP PNAME PCOLOR PHELPER PHASH <<<"$REQ"
+    IFS=$'\x1f' read -r RID OP PNAME PCOLOR PHELPER PHASH <<<"$REQ"
     RESULT="$RESULTS/$RID.json"
     # The result exists before the request goes, so the hub never sees neither.
     result working op "$OP" name "$PNAME"
