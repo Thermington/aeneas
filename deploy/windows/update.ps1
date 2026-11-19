@@ -242,4 +242,18 @@ Release-Hub
 if (-not (Came-Back)) { Roll-Back 'The new version did not start.' }
 # The new version runs: what was set aside is of no more use.
 $null = Remove-Tree $Backup
+# Several people on this PC (deploy\windows\people.ps1): their hubs run this code too. Only the owner's account can
+# drop the request, and the SYSTEM task takes nothing from it but the word update.
+$PeopleBase = Join-Path $env:ProgramData 'Aeneas'
+$PeopleOwner = ''
+try { $PeopleOwner = ([IO.File]::ReadAllText((Join-Path $PeopleBase 'owner'))).Trim() } catch { }
+if ($PeopleOwner -and $PeopleOwner -eq $env:USERNAME -and (Test-Path (Join-Path $PeopleBase 'requests'))) {
+  $rid = "update-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+  try {
+    $part = Join-Path $PeopleBase "requests\.$rid.part"
+    [IO.File]::WriteAllText($part, "{`"id`":`"$rid`",`"op`":`"update`",`"name`":`"`",`"color`":`"`"}", $Utf8)
+    Move-Item -Force $part (Join-Path $PeopleBase "requests\$rid.json")
+    Log "asked the people task to update the other hubs ($rid)"
+  } catch { Log "could not ask the people task to update the other hubs: $($_.Exception.Message)" }
+}
 Finish 'done' 'Updated.'

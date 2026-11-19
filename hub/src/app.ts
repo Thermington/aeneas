@@ -37,6 +37,8 @@ import { hubsRoutes } from "./routes/hubs.js";
 import { referenceRoutes } from "./routes/reference.js";
 import { calendarRoutes } from "./routes/calendars.js";
 import { appUpdateRoutes, outlookOf } from "./routes/appupdates.js";
+import { helperRoutes } from "./routes/helpers.js";
+import { HELPER_KEY_PREFIX } from "./helpers.js";
 import { BEFORE_YOU_INSTALL } from "./disclosure.js";
 import { readJsonObject } from "./http.js";
 import { registerDevice, removeDevice } from "./devices.js";
@@ -107,7 +109,7 @@ function gmailLinked(hub: Hub): boolean {
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 /** `auth`: "owner" for the hub's main key (EA_TOKEN), "device" for a device's own key (devicekeys.ts). */
-export type App = Hono<{ Variables: { hub: Hub; device_id?: string; auth?: "owner" | "device" } }>;
+export type App = Hono<{ Variables: { hub: Hub; device_id?: string; auth?: "owner" | "device" | "helper"; helper_id?: string } }>;
 
 function tokenMatches(expected: string, given: string | undefined): boolean {
   if (!expected || !given) return false;
@@ -293,6 +295,16 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
       c.set("auth", "owner");
       return next();
     }
+    // A helper's key (helpers.ts): the helper's own routes only, sent in the header from this machine (the helper's
+    // hub is the machine owner's, next to this one). Before the person says yes, and after Stop helping, it opens nothing.
+    if (given?.startsWith(HELPER_KEY_PREFIX)) {
+      const h = fromHeader && c.req.path.startsWith("/warden/") && mainKeyAllowed(c, []) ? hub.helpers.lookup(given) : null;
+      if (h?.state === "active") { c.set("auth", "helper"); c.set("helper_id", h.id); return next(); }
+      if (h?.state === "offered") return c.json({ error: "waiting for them to say yes in their app", state: "offered" }, 403);
+      if (h?.state === "stopped") return c.json({ error: "they stopped your help", state: "stopped" }, 401);
+      await slowDown(caller(c));
+      return c.json({ error: "unauthorized" }, 401);
+    }
     // A device's own key: the device is known from the key, and a removed device (its entity deleted) is refused
     // even in the moment before its key is dropped.
     const found = hub.deviceKeys.lookup(given);
@@ -384,10 +396,12 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   // ---- pairing (devicekeys.ts) ----
   // A paired device makes a one-time code for the next one: shown as text, a link and a QR code.
   app.post("/devices/pairing", async (c) => {
-    const body = await readJsonObject<{ name?: unknown }>(c).catch(() => ({} as { name?: unknown }));
+    const body = await readJsonObject<{ name?: unknown; days?: unknown }>(c).catch(() => ({} as { name?: unknown; days?: unknown }));
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
     const address = hubAddress(hub, c.req.url, c.req.header("x-forwarded-host"), c.req.header("x-forwarded-proto"));
-    return c.json(pairingLinks(hub, address, name, c.get("auth") === "device" ? c.get("device_id") : undefined), 200, { "cache-control": "no-store" });
+    // An invitation that lasts days (someone who lives elsewhere) only with the main key: deploy/people.sh on this machine.
+    const days = c.get("auth") === "owner" && typeof body.days === "number" && body.days > 0 ? Math.min(body.days, 3) : 0;
+    return c.json(pairingLinks(hub, address, name, c.get("auth") === "device" ? c.get("device_id") : undefined, days ? days * 24 * 3_600_000 : undefined), 200, { "cache-control": "no-store" });
   });
   // The new device sends the code with its name and platform and gets its own key, once.
   app.post("/devices/claim", async (c) => {
@@ -457,6 +471,7 @@ ${p.contact ? `<h2>Contact</h2>\n<p>${esc(p.contact)}</p>` : ""}
   app.route("/", referenceRoutes());
   app.route("/", calendarRoutes());
   app.route("/", appUpdateRoutes());
+  app.route("/", helperRoutes());
   // Assistant tools call this same app in-process, with the hub's own token, so they get the routes' validation and hooks.
   hub.ai.setApi(async (method, path, body) => {
     const refused = refuseToolCall(method, path);

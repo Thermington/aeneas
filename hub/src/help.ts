@@ -19,6 +19,7 @@ export const HELP_DOCS = [
   "docs/connections.md",
   "docs/running-your-hub.md",
   "docs/multi-person.md",
+  "docs/helpers.md",
   "docs/privacy-network.md",
   "docs/gmail-setup.md",
   "docs/06-threat-model.md",

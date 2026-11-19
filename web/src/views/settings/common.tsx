@@ -19,6 +19,7 @@ export const SETTINGS_TITLES: Record<string, string> = {
   "/settings/windows": "Windows app",
   "/settings/about": "About",
   "/settings/people": "People on this machine",
+  "/settings/helpers": "People who help you",
   "/settings/reference": "Reference",
 };
 

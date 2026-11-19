@@ -21,6 +21,8 @@ struct SetupView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Set up").font(.largeTitle.bold())
+                // Someone who was sent an invitation (People on this machine on a family member's hub): first, and large.
+                InvitationCard()
                 Text("Pair this device with your hub. The easiest way: scan the QR code with the Camera. The first time, it is on the hub's Welcome page (step 5, Make a pairing code); later, on any paired device under Settings, Connection, Pair another device. Scanning also lets this device check the hub's own certificate on a home network, so prefer it to typing.")
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 6) {

@@ -4,6 +4,7 @@ import EACore
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
+    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -15,12 +16,26 @@ struct RootView: View {
             } else if !model.isConfigured {
                 SetupView()
             } else {
-                #if os(iOS)
-                if sizeClass == .compact { PhoneRoot() } else { SplitRoot() }
-                #else
-                SplitRoot()
-                #endif
+                Group {
+                    #if os(iOS)
+                    if sizeClass == .compact { PhoneRoot() } else { SplitRoot() }
+                    #else
+                    SplitRoot()
+                    #endif
+                }
+                // Someone offered to help with this person's devices: the one question, at the top until answered.
+                .safeAreaInset(edge: .top, spacing: 0) { HelperOfferInset() }
             }
+        }
+        // Who helps this person: when the app opens or comes back, and every two minutes (HelpersViews.swift).
+        .task(id: model.isConfigured) {
+            while model.isConfigured, !Task.isCancelled {
+                await HelpersStore.shared.refresh(engine, force: false)
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, model.isConfigured { Task { await HelpersStore.shared.refresh(engine, force: false) } }
         }
         .alert("Switch this device to another hub?", isPresented: Binding(get: { model.pendingSetup != nil }, set: { if !$0 { model.pendingSetup = nil } }), presenting: model.pendingSetup) { p in
             Button("Switch hubs", role: .destructive) {

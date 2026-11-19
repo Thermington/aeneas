@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { PeoplePage, usePeopleSummary } from "./settings/People";
+import { HelpersPage, useHelpersSummary } from "./settings/Helpers";
 import { ReferenceSettingsPage, useReferenceSummary } from "./settings/Reference";
 import { hubLabel, useHubIdentity } from "../lib/hubIdentity";
 import { HubClient, normalizeHubUrl } from "../sync/api";
@@ -69,6 +70,7 @@ export function Settings({ parts, params }: { parts: string[]; params: URLSearch
   if (a === "windows" && isWindowsApp) return <WindowsApp />;
   if (a === "about") return <About />;
   if (a === "people") return <PeoplePage />;
+  if (a === "helpers") return <HelpersPage />;
   if (a === "reference") return <ReferenceSettingsPage />;
   return <SettingsHome />;
 }
@@ -95,6 +97,7 @@ function SettingsHome() {
   const [links] = useConnections();
   const { list: modules } = useModules();
   const people = usePeopleSummary();
+  const helpers = useHelpersSummary();
   const reference = useReferenceSummary();
 
   const ready = useHubReady();
@@ -115,6 +118,8 @@ function SettingsHome() {
     <div className="settings-page col">
       <h1>Settings</h1>
       <nav className="list" aria-label="Settings">
+        {/* First, for someone helped by family: it is the page they may be told to open. */}
+        {helpers && <NavRow href="/settings/helpers" title="People who help you" summary={helpers} />}
         <NavRow href="/settings/theme" title="Theme" summary={`${t.colors}, ${t.taps === "Off" ? "shapes off" : t.taps.split(",")[0]}, ${t.sounds === "Off" ? "notes off" : t.sounds.split(",")[0]}`} />
         <NavRow
           href="/settings/connection"

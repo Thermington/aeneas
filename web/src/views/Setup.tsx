@@ -38,10 +38,13 @@ function withDirectHub(p: URLSearchParams): URLSearchParams {
   return p;
 }
 
-/** A whole pairing link pasted into the address field (the app's `everythingapp://setup?...` or the web one). */
+/**
+ * A pairing link pasted into the address field (the app's `everythingapp://setup?...` or the web one), alone or inside
+ * a whole message: an invitation someone sent (Settings, People on this machine) is a few lines of steps, then the link.
+ */
 export function pastedLink(text: string): URLSearchParams | null {
   const t = text.trim();
-  const q = /^everythingapp:\/\/setup\?(.*)$/i.exec(t)?.[1] ?? /#\/setup\?(.*)$/.exec(t)?.[1];
+  const q = /everythingapp:\/\/setup\?([^\s"'<>]+)/i.exec(t)?.[1] ?? /#\/setup\?([^\s"'<>]+)/.exec(t)?.[1];
   if (!q) return null;
   const p = withDirectHub(new URLSearchParams(q));
   return p.get("hub") && (p.get("code") || p.get("token")) ? p : null;
@@ -84,10 +87,10 @@ export function Setup() {
    * Keep this device's own key; a different hub is a different dataset, so the cached copy goes. Hubs are told apart
    * by their ids when the link and this device both have one, else by address.
    */
-  const keep = async (key: string, deviceId: string | null) => {
-    const url = normalizeHubUrl(hub);
+  const keep = async (key: string, deviceId: string | null, to?: { url: string; id: string | null }) => {
+    const url = normalizeHubUrl(to?.url ?? hub);
     const before = await current();
-    const { same, id } = afterLink(before, { url, id: hid });
+    const { same, id } = afterLink(before, { url, id: to ? to.id : hid });
     // Paired again on the same hub while the old key still worked: the old device entry and its key are removed, so
     // no second entry with a working key is left behind.
     const oldKey = await getMeta<string>(META.token);
@@ -112,15 +115,16 @@ export function Setup() {
     leaveSetup();
   };
 
-  const pairWithCode = async () => {
-    if (!hub.trim() || !code.trim()) { setMsg({ ok: false, text: "The hub's address and a pairing code are needed." }); return; }
+  const pairWithCode = async (given?: { hub: string; hid: string | null; code: string; name: string }) => {
+    const h = given?.hub ?? hub, c = given?.code ?? code, n = given?.name ?? name;
+    if (!h.trim() || !c.trim()) { setMsg({ ok: false, text: "The hub's address and a pairing code are needed." }); return; }
     setBusy(true);
     setMsg(null);
     try {
       // A device paired before on this hub asks to keep its id (the hub gives a new one if that id still has a key).
-      const { same } = afterLink(await current(), { url: hub, id: hid });
-      const r = await new HubClient({ hubUrl: hub, token: "" }).claim(code.trim(), name.trim() || "Browser", platform(), same ? await getMeta<string>(META.deviceId) : undefined);
-      await keep(r.key, r.device_id);
+      const { same } = afterLink(await current(), { url: h, id: given ? given.hid : hid });
+      const r = await new HubClient({ hubUrl: h, token: "" }).claim(c.trim(), n.trim() || "Browser", platform(), same ? await getMeta<string>(META.deviceId) : undefined);
+      await keep(r.key, r.device_id, given ? { url: h, id: given.hid } : undefined);
     } catch (e) {
       setMsg({ ok: false, text: e instanceof HubError && e.status === 404 ? "This hub is older and has no pairing codes yet. Use its main key below." : errorText(e) });
     } finally { setBusy(false); }
@@ -182,6 +186,11 @@ export function Setup() {
           </div>
         </section>
       )}
+      {!switchFrom && <Invitation busy={busy} onFound={(p) => {
+        const found = { hub: p.get("hub")!, hid: normalizeHubId(p.get("hid")), code: p.get("code") ?? "", name: pairingName(p.get("name"), name, ua()) };
+        setHub(found.hub); setHid(found.hid); setCode(found.code); setName(found.name);
+        void pairWithCode(found);
+      }} />}
       <form className="col" onSubmit={(e) => { e.preventDefault(); void pairWithCode(); }}>
         <div className="muted small">On a device that is already paired, open Settings, Connection, Pair another device. It shows a code that works once, for 10 minutes. On this device you can paste the whole pairing link into the address field instead.</div>
         <div>
@@ -218,6 +227,35 @@ export function Setup() {
         </div>
       </details>
     </div>
+  );
+}
+
+/**
+ * For someone who was sent an invitation (docs/helpers.md): large and plain. Paste the whole message, or press Paste,
+ * and the app finds the invitation in it and connects.
+ */
+function Invitation({ busy, onFound }: { busy: boolean; onFound: (p: URLSearchParams) => void }) {
+  const [text, setText] = useState("");
+  const [note, setNote] = useState("");
+  const tryText = (t: string) => {
+    setText(t);
+    const p = pastedLink(t);
+    if (p && p.get("code")) { setNote(""); onFound(p); }
+    else if (t.trim()) setNote("There is no invitation in that. Copy the whole message you were sent, then paste it here.");
+  };
+  const paste = async () => {
+    try { tryText(await navigator.clipboard.readText()); } catch { setNote("Press and hold in the box below, then tap Paste."); }
+  };
+  return (
+    <section className="card col simple" aria-label="I have an invitation">
+      <h2>I have an invitation</h2>
+      <p>Copy the whole message you were sent, then press Paste the invitation.</p>
+      <div className="choices">
+        <button type="button" className="primary" disabled={busy} onClick={() => void paste()}>{busy ? "Connecting" : "Paste the invitation"}</button>
+      </div>
+      <textarea value={text} onChange={(e) => tryText(e.target.value)} rows={3} placeholder="Or paste the message here" aria-label="The invitation message" style={{ fontSize: 18 }} />
+      {note && <p className="error">{note}</p>}
+    </section>
   );
 }
 

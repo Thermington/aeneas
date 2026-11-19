@@ -9,7 +9,9 @@ import { errCode } from "./logsafe.js";
  * removed without touching the others.
  *
  * - A paired device asks for a pairing code (`newCode`): 8 characters from an alphabet with no look-alike letters,
- *   used once, gone after 10 minutes or a hub restart. Codes live in memory only.
+ *   used once, gone after 10 minutes or a hub restart. Codes live in memory only. An invitation (since 2026-11-19, for
+ *   someone who lives elsewhere: Settings, People on this machine) is the same kind of code made by the hub's main key
+ *   with a longer life, up to 3 days: it is kept on disk by its SHA-256 only, so it outlives a restart, and still works once.
  * - The new device trades the code for its key (`claim`). The key is 32 random bytes; the hub keeps only its SHA-256,
  *   so nothing it stores could sign in.
  * - A device paired before this (holding the hub's main key, EA_TOKEN) trades that for a key of its own.
@@ -31,6 +33,8 @@ export const KEY_PREFIX = "ead1_";
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 export const CODE_LENGTH = 8;
 export const CODE_TTL_MS = 10 * 60_000;
+/** The longest an invitation lasts. */
+export const INVITE_TTL_MAX_MS = 3 * 24 * 3_600_000;
 /** Codes waiting at once; making another drops the oldest. */
 const MAX_CODES = 5;
 /** Removed keys remembered, newest kept. */
@@ -53,7 +57,14 @@ export function showCode(code: string): string {
 export interface PairingCode { code: string; expires_at: string; name: string }
 
 interface KeyRow { hash: string; created_at: string; /** The device that holds this key for it (the iPhone, for its Watch). */ parent?: string }
-interface KeyFile { v: 1; keys: Record<string, KeyRow>; /** hash to when it was removed */ revoked: Record<string, string> }
+interface KeyFile {
+  v: 1;
+  keys: Record<string, KeyRow>;
+  /** hash to when it was removed */
+  revoked: Record<string, string>;
+  /** Invitations: a long-lived code's SHA-256 to when it ends and the device name it was made for. */
+  invites?: Record<string, { expires: number; name: string }>;
+}
 
 /** What a key is: a paired device's, a removed device's, or nothing the hub knows. */
 export type KeyLookup = { device: string } | { removed: true } | null;
@@ -72,7 +83,8 @@ export class DeviceKeys {
   private read(file: string): KeyFile {
     const j = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<KeyFile>;
     if (!j || typeof j !== "object" || j.v !== 1 || typeof j.keys !== "object" || !j.keys || typeof j.revoked !== "object" || !j.revoked) throw new Error("not a device keys file");
-    return { v: 1, keys: j.keys, revoked: j.revoked };
+    const invites = j.invites && typeof j.invites === "object" ? j.invites : undefined;
+    return { v: 1, keys: j.keys, revoked: j.revoked, ...(invites ? { invites } : {}) };
   }
 
   private load(): KeyFile {
@@ -179,14 +191,42 @@ export class DeviceKeys {
   }
 
   /** A one-time code for pairing another device, named for what it will be ("iPhone"); `by` is the device that asked. */
-  newCode(name: string, now: number = Date.now(), by?: string): PairingCode {
+  newCode(name: string, now: number = Date.now(), by?: string, ttlMs: number = CODE_TTL_MS): PairingCode {
     this.dropExpired(now);
-    while (this.codes.size >= MAX_CODES) this.codes.delete(this.codes.keys().next().value as string);
     let code = "";
     do { code = Array.from({ length: CODE_LENGTH }, () => ALPHABET[randomInt(ALPHABET.length)]).join(""); } while (this.codes.has(code));
-    const expires = now + CODE_TTL_MS;
+    const life = Math.min(Math.max(ttlMs, CODE_TTL_MS), INVITE_TTL_MAX_MS);
+    const expires = now + life;
+    if (life > CODE_TTL_MS) {
+      // An invitation: on disk by hash, at most MAX_CODES waiting, the oldest dropped.
+      const d = structuredClone(this.load());
+      const invites = Object.fromEntries(Object.entries(d.invites ?? {}).filter(([, v]) => v.expires > now)
+        .sort((a, b) => a[1].expires - b[1].expires).slice(-(MAX_CODES - 1)));
+      invites[hashKey(code)] = { expires, name };
+      d.invites = invites;
+      this.save(d);
+      return { code, expires_at: new Date(expires).toISOString(), name };
+    }
+    while (this.codes.size >= MAX_CODES) this.codes.delete(this.codes.keys().next().value as string);
     this.codes.set(code, { expires, name, ...(by ? { by } : {}) });
     return { code, expires_at: new Date(expires).toISOString(), name };
+  }
+
+  /** An invitation by its code: used up (removed from disk) when it is valid. */
+  private claimInvite(code: string, now: number): { name: string } | null {
+    const d = this.load();
+    const h = hashKey(code);
+    const inv = d.invites?.[h];
+    if (!inv) return null;
+    const next = structuredClone(d);
+    delete next.invites![h];
+    this.save(next);
+    return inv.expires > now ? { name: inv.name } : null;
+  }
+
+  /** Invitations still waiting, for the owner's screen: when each ends and the name it was made for. */
+  invitesWaiting(now: number = Date.now()): { name: string; expires_at: string }[] {
+    return Object.values(this.load().invites ?? {}).filter((v) => v.expires > now).map((v) => ({ name: v.name, expires_at: new Date(v.expires).toISOString() }));
   }
 
   /** Use a code: the name it was made for and who made it, or null when it is wrong, used or expired. Works once. */
@@ -195,7 +235,7 @@ export class DeviceKeys {
     const code = normalizeCode(String(raw ?? ""));
     if (code.length !== CODE_LENGTH) return null;
     const c = this.codes.get(code);
-    if (!c) return null;
+    if (!c) return this.claimInvite(code, now);
     this.codes.delete(code);
     return { name: c.name, ...(c.by ? { by: c.by } : {}) };
   }

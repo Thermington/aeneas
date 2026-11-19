@@ -17,6 +17,8 @@ TOKEN="$(get_env EA_TOKEN)"
 [ -n "$TOKEN" ] || { echo "error: no EA_TOKEN in $ENV_FILE" >&2; exit 1; }
 # The main key goes in a header from a file descriptor, never on the command line where other users could see it.
 body="$(printf '{"name":%s}' "$(printf '%s' "$NAME" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")"
+# EA_PAIR_DAYS (1 to 3): an invitation for someone who lives elsewhere, which lasts that many days (deploy/people.sh).
+case "${EA_PAIR_DAYS:-}" in [1-3]) body="${body%\}},\"days\":${EA_PAIR_DAYS}}" ;; esac
 # Plain HTTP is answered only on 127.0.0.1 (hub/src/tls.ts), which is where this asks.
 answer="$(curl -fsS --max-time 10 -X POST -H @- -H 'content-type: application/json' -d "$body" "http://127.0.0.1:$PORT/devices/pairing" <<<"authorization: Bearer $TOKEN")" || {
   echo "error: the hub on this machine did not answer on port $PORT. Is it running? Logs: journalctl --user -u everythingapp-hub (Linux) or ~/.local/share/everythingapp/logs/hub.log (Mac)" >&2

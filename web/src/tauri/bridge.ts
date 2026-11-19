@@ -162,6 +162,27 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** Runs a command a helper sent through the hub on this computer (src-tauri/src/helper.rs). Windows and desktop apps only. */
+export async function runHelperCommand(command: string, timeoutS: number): Promise<{ exit_code: number; output: string }> {
+  if (!isTauri || isAndroid) throw new Error("only the Windows app runs commands for a helper");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<{ exit_code: number; output: string }>("run_helper_command", { command, timeoutS });
+}
+
+/** Signs in to another device in the home over SSH and runs a command there, for a helper (src-tauri/src/helper.rs). */
+export async function sshHelperCommand(job: { ip: string; port: number; username: string; password: string; host_key?: string }, command: string, timeoutS: number): Promise<{ exit_code: number; output: string; host_key: string }> {
+  if (!isTauri || isAndroid) throw new Error("only the Windows app signs in to other devices for a helper");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("ssh_helper_command", { ip: job.ip, port: job.port, username: job.username, password: job.password, command, timeoutS, hostKey: job.host_key ?? null });
+}
+
+/** The devices on this device's home network (src-tauri/src/helper.rs): about 20 seconds. Windows and Android apps. */
+export async function scanHomeNetwork(): Promise<{ network: string; devices: { name: string; ip: string; open: number[]; kind: string }[] }> {
+  if (!isTauri) throw new Error("only the Windows and Android apps look for devices");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("scan_home_network");
+}
+
 /** Open a web page in the system browser (Steam sign-in). In a browser tab it opens a new tab. */
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri) {

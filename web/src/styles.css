@@ -1173,3 +1173,33 @@ table.compare tbody th { color: var(--muted); font-weight: 600; width: 22%; }
   .tabs a { min-height: 44px; display: flex; align-items: center; justify-content: center; }
   .topbar .back { display: inline-flex; align-items: center; min-height: 44px; }
 }
+
+/* Large and plain (docs/helpers.md): the screens someone who is not technical uses, helped by a family member. */
+.simple { font-size: 19px; line-height: 1.5; }
+.simple h1 { font-size: 28px; }
+.simple h2 { font-size: 23px; margin: 0 0 6px; }
+.simple p { margin: 0 0 10px; }
+.simple .card { padding: 20px; gap: 12px; }
+.simple button { min-height: 52px; font-size: 19px; padding: 10px 20px; border-radius: 12px; }
+.simple input, .simple select { font-size: 19px; min-height: 52px; padding: 8px 12px; }
+.simple label { font-size: 19px; }
+.simple .muted { font-size: 17px; }
+.simple .choices { display: flex; flex-direction: column; gap: 12px; }
+.simple .choices button { width: 100%; }
+@media (min-width: 640px) { .simple .choices { flex-direction: row; } .simple .choices button { width: auto; flex: 1; } }
+.simple .log-line { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.simple .log-line:last-child { border-bottom: none; }
+.simple .when { font-size: 16px; color: var(--muted); }
+.simple .big-ok { font-size: 21px; font-weight: 600; }
+.simple .danger { background: transparent; color: var(--danger, #b3261e); border: 2px solid currentColor; }
+.simple .qr { background: #fff; border-radius: 12px; padding: 10px; align-self: center; }
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+}
+.print-only { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  .print-sheet, .print-sheet * { visibility: visible; }
+  .print-sheet { position: absolute; left: 0; top: 0; width: 100%; font-size: 20px; color: #000; background: #fff; }
+}

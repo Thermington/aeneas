@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 mod appupdate;
+mod helper;
 mod home;
 mod link;
 use std::sync::Mutex;
@@ -300,7 +301,8 @@ pub fn run() {
             set_widget, get_widget, show_main_window, open_capture_window, open_window, set_notify_target, set_capture_shortcut, get_capture_shortcut,
             link::link_fetch, link::link_cancel, link::link_state,
             home::home_fetch, home::home_cancel, home::home_probe, home::home_browse,
-            appupdate::update_begin, appupdate::update_chunk, appupdate::update_finish
+            appupdate::update_begin, appupdate::update_chunk, appupdate::update_finish,
+            helper::run_helper_command, helper::scan_home_network, helper::ssh_helper_command
         ]);
     #[cfg(target_os = "android")]
     {

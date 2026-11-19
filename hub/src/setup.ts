@@ -435,8 +435,8 @@ function homeRouteFingerprint(hub: Hub, address: string): string | null {
   return port === hub.cfg.homePort ? homeCertificate(hub.cfg.dataDir)?.fingerprint ?? null : null;
 }
 
-export function pairingLinks(hub: Hub, address: string, name: string, by?: string) {
-  const c = hub.deviceKeys.newCode(name || "My device", Date.now(), by);
+export function pairingLinks(hub: Hub, address: string, name: string, by?: string, ttlMs?: number) {
+  const c = hub.deviceKeys.newCode(name || "My device", Date.now(), by, ttlMs);
   // A hub serving its own certificate (a home network, no Tailscale) puts its fingerprint in the link, so the app
   // accepts that certificate and no other: nobody on the network can stand in for the hub.
   // Over the home route (homeroute.ts, its own port), it is the home certificate's.

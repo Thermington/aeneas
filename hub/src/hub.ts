@@ -42,6 +42,9 @@ import { FeedKeys } from "./feedkeys.js";
 import { runSeeds } from "./seed.js";
 import path from "node:path";
 import { errCode } from "./logsafe.js";
+import { Helpers } from "./helpers.js";
+import { generatePassword } from "./keepass.js";
+import { helpedHosts, runOnHelped } from "./helping.js";
 
 const require = createRequire(import.meta.url);
 export const VERSION: string = (require("../package.json") as { version: string }).version;
@@ -77,6 +80,8 @@ export interface Hub {
   wiki: WikiStore;
   /** Linked accounts and sync bookkeeping (Steam, Letterboxd, Apple Health). */
   connections: ConnectionStore;
+  /** People who help this hub's person with their devices, and the jobs for their computers (helpers.ts). */
+  helpers: Helpers;
   /** Seals connections.json and ai.json at rest (secretbox.ts). */
   secretBox: SecretBox;
   profile: ProfileStore;
@@ -151,7 +156,15 @@ export function createHub(cfg: Config): Hub {
   const map = new KnowledgeMap(store);
   vault.linkDeriver = (id, body, title, related) => map.deriveLinks(id, body, title, related);
   const devices = new DeviceTracker(store);
-  const hub: Hub = { cfg, db, chatDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); } };
+  // The helper vault's master password is made on first use and kept with the other sealed secrets (helpers.ts).
+  const helpers = new Helpers(cfg.dataDir, db, () => hub.connections.get().helper_vault?.password ?? "", () => {
+    const have = hub.connections.get().helper_vault?.password;
+    if (have) return have;
+    const password = generatePassword(32);
+    hub.connections.update((c) => { c.helper_vault = { password, created_at: nowIso() }; });
+    return password;
+  });
+  const hub: Hub = { helpers, cfg, db, chatDb, bus, store, vault, ai, map, devices, deviceKeys: new DeviceKeys(path.join(cfg.dataDir, "device-keys.json")), work: new WorkSpace(path.join(cfg.dataDir, "work-space.json")), feel: new FeelStore(path.join(cfg.dataDir, "feel.json")), dashboard: new DashboardStore(path.join(cfg.dataDir, "dashboard.json")), layouts: new LayoutStore(path.join(cfg.dataDir, "layouts")), startedAt: nowIso(), tlsProbe: (url) => probeTls(url), checkers: { ...defaultCheckers, backup: backupChecker(sshRunner, cfg.backupJobs) }, connections: new ConnectionStore(path.join(cfg.dataDir, "connections.json"), secretBox), secretBox, profile: new ProfileStore(path.join(cfg.dataDir, "profile.json"), cfg.ownerName), wiki: new WikiStore(path.join(cfg.dataDir, "wiki.json")), feedKeys: new FeedKeys(path.join(cfg.dataDir, "feed-keys.json")), backupKey: new BackupKey(cfg.backupKeyFile, path.join(cfg.dataDir, "backup-recovery.json")),modules: new ModuleStore(path.join(cfg.dataDir, "modules.json"), { preset: cfg.modulesPreset, existing: () => store.hasOwnerData() }), fetch: (input, init) => fetch(input, init), close: () => { db.close(); chatDb.close(); } };
   keepSeqMark(store, path.join(cfg.dataDir, "sync-mark.json"));
   try { if (hub.connections.sealIfPlain()) console.log("[secrets] connections.json sealed"); } catch (e) { console.error(`[secrets] connections.json not sealed: ${errCode(e)}`); }
   // Machines are only the ones the person adds (hosts.json); a hub already using its SSH hosts keeps them, once.
@@ -159,6 +172,10 @@ export function createHub(cfg: Config): Hub {
     const n = adoptSshHosts(cfg, store.hasOwnerData() && (hub.modules.on("homelab") || hub.modules.on("sensors")));
     if (n) console.log(`[hosts] ${n} machine(s) from the SSH config kept in the machines list`);
   } catch (e) { console.error(`[hosts] could not keep the SSH config's machines: ${errCode(e)}`); }
+  // The computers of people the owner helps are machines too; their commands go through those people's hubs.
+  ai.hosts.extraHosts = helpedHosts;
+  const sshOrLocal = ai.hosts.runner;
+  ai.hosts.runner = (host, command, timeoutS, meta) => (host.helper ? runOnHelped(hub, host, command, timeoutS, meta) : sshOrLocal(host, command, timeoutS, meta));
   // An approved command that names a password manager item gets its value only when it runs.
   ai.hosts.fillSecrets = (command, host) => fillSecrets(hub, command, host.os);
   // No command shows the hub's own secrets: reads of its folders wait for approval, and its values are cut from output.

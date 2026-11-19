@@ -3,6 +3,7 @@ import { startGalleryJob } from "./gallery.js";
 import { linkCaptureThreads, startFilingJob } from "./capture-filer.js";
 import { startMailJob } from "./mail-filer.js";
 import { startCalendarJob } from "./calendar-sync.js";
+import { startHelpingRefresh } from "./helping.js";
 import { kick as kickImports } from "./imports/bulk.js";
 import { startNoteLinker } from "./note-linker.js";
 import path from "node:path";
@@ -250,6 +251,7 @@ async function main(): Promise<void> {
   const stopImports = startImportJob(hub);
   const stopMail = startMailJob(hub);
   const stopCalendars = startCalendarJob(hub);
+  const stopHelping = startHelpingRefresh(hub);
   const stopNotes = startNoteLinker(hub);
   const stopGallery = startGalleryJob(hub);
   const linked = linkCaptureThreads(hub);
@@ -291,6 +293,7 @@ async function main(): Promise<void> {
     stopReference();
     stopImports();
     stopCalendars();
+    stopHelping();
     stopMail();
     stopNotes();
     stopGallery();

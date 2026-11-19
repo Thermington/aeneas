@@ -137,7 +137,8 @@ public struct HTTPTransport: HubTransport {
     /// model call up to 2 minutes (more with tool rounds), so the session's 20 s cut answers off while the hub was still
     /// writing them: on the iPhone, and on the Watch, whose requests the iPhone relays through this transport.
     public static func timeout(path: String) -> TimeInterval? {
-        path == "ai/chat" ? 300 : nil
+        // agent/jobs: a helped person's Mac waits up to 25 s for its helper's next command (Helpers.swift).
+        path == "ai/chat" ? 300 : path == "agent/jobs" ? 60 : nil
     }
 
     /// Request bodies are JSON except a vault note (markdown) and an image shape (PNG).

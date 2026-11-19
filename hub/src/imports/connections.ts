@@ -17,7 +17,13 @@ import type { SecretBox } from "../secretbox.js";
 export interface SteamConn { api_key?: string; steam_id: string; persona?: string; profile_url?: string; last_sync?: string; last_error?: string; games?: number }
 export interface LetterboxdConn { username?: string; last_sync?: string; last_error?: string; films?: number }
 export interface HealthConn { last_import?: string; samples?: number; total?: number }
-export interface Connections { steam_key?: string; steam?: SteamConn; letterboxd?: LetterboxdConn; health?: HealthConn; atlassian_app?: { client_id: string; client_secret: string }; atlassian?: AtlassianConn; google_app?: { client_id: string; client_secret: string }; google?: GoogleAccount[]; icloud?: ICloudAccount[]; password_manager?: PasswordManagerConn; keepass?: { password: string; created_at: string } }
+export interface Connections { steam_key?: string; steam?: SteamConn; letterboxd?: LetterboxdConn; health?: HealthConn; atlassian_app?: { client_id: string; client_secret: string }; atlassian?: AtlassianConn; google_app?: { client_id: string; client_secret: string }; google?: GoogleAccount[]; icloud?: ICloudAccount[]; password_manager?: PasswordManagerConn; keepass?: { password: string; created_at: string };
+  /** The master password of helper-passwords.kdbx (helpers.ts): passwords this person saved for their helper. */
+  helper_vault?: { password: string; created_at: string };
+  /** People this hub's owner helps with their devices (helping.ts): each one's hub on this machine and the key to it. */
+  helping?: HelpingEntry[];
+}
+export interface HelpingEntry { account: string; name: string; port: number; key: string; offered_at: string }
 
 export class ConnectionStore {
   constructor(private file: string, private box?: SecretBox) {}

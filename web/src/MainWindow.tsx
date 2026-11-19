@@ -1,19 +1,24 @@
-import { Suspense, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 import type { Route } from "./lib/router";
 import { ScreenStart, Shell, screenOf } from "./components/Shell";
 import { ReminderBanner } from "./components/ReminderBanner";
 import { ActivityBanner, DigestToast, DiskBanner, AppUpdateBanner, MonitorBanner, QuizToast, SensorBanner } from "./components/NotifyBanners";
 import { UpdateToast } from "./components/UpdateToast";
 import { IfModule, ModuleGate } from "./components/ModuleGate";
+import { HelperOfferBanner } from "./components/HelperOffer";
+import { startHelperAgent } from "./lib/helperAgent";
 
 /**
  * The main window around a screen: sidebar and tab bar, banners and toasts. A file of its own, loaded only by the main
  * window: the capture window and the Now widget never need it.
  */
 export function MainWindow({ route, view }: { route: Route; view: ReactNode }) {
+  // The Windows app on a helped person's computer runs their helper's commands (lib/helperAgent.ts).
+  useEffect(() => { void startHelperAgent(); }, []);
   return (
     <Shell route={route}>
       <div className="banners">
+        <HelperOfferBanner path={route.path} />
         <ReminderBanner />
         <ActivityBanner />
         <DiskBanner />

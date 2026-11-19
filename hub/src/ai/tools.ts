@@ -1375,6 +1375,27 @@ export const TOOLS: ToolDef[] = [
     run: async (_api, _a, ctx) => ctx.hosts ? { hosts: ctx.hosts.hosts().map((h) => ({ name: h.name, os: h.os, via: h.via, aliases: h.aliases.filter((x) => x !== h.name) })) } : { error: "host commands are off" },
   },
   {
+    name: "helping", writes: false,
+    available: (cfg) => cfg.hostActions,
+    description: "The people {{owner}} helps with their devices (they share this machine and said yes in their app): for each one, whether they still let {{owner}} help, their computers (each one is a machine in list_hosts, run_command works on it, and is_on says whether its Aeneas app answers now), the devices their app found on their home network, and the names of the passwords they saved for {{owner}} (use one in run_command on their computer as {{secret:Name}}, or {{secret:Name/username}}). They are never asked about a command: read-only ones run at once and changes wait for {{owner}}'s yes. Devices in their home that answer SSH are machines too, signed in from their computer with the password they saved for that device. A device that takes no SSH: the easy way is the Aeneas app on it (a Windows computer or Mac, paired with their hub); otherwise someone at it turns SSH on (Windows: Settings, System, Optional features, OpenSSH Server; Mac: System Settings, General, Sharing, Remote Login). Commands on their own computer run as them, without administrator rights. Say in plain words what you found and what you would change.",
+    parameters: { type: "object", properties: {} },
+    run: async (api) => {
+      const r = await call(api, "GET", "/helping") as { people?: { name: string; state: string; computers: { name: string; os: string; listening: boolean }[]; scan: { at: string; devices: { name: string; ip: string; open: number[] }[] } | null; passwords: { title: string; username: string }[] }[] } & Record<string, unknown>;
+      if (!r || "error" in r || !r.people) return r;
+      if (!r.people.length) return { people: [], note: "{{owner}} helps nobody yet: Settings, People on this machine, Help with devices." };
+      const many = (p: { computers: unknown[] }) => p.computers.length > 1;
+      return {
+        people: r.people.map((p) => ({
+          name: p.name,
+          state: p.state === "helping" ? "lets you help" : p.state === "waiting" ? "has not said yes yet" : p.state === "stopped" ? "stopped your help" : "their hub does not answer",
+          computers: p.computers.map((c) => ({ machine: `${p.name.endsWith("s") ? `${p.name}'` : `${p.name}'s`} ${many(p) ? c.name : "computer"}`, os: c.os, is_on: c.listening })),
+          home_network: p.scan ? { scanned_at: p.scan.at, devices: p.scan.devices.map((d) => `${d.name || "unnamed"} ${d.ip}${d.open.length ? ` (open ports ${d.open.join(", ")})` : ""}`) } : "not scanned yet (they press Find the devices in my home in their app)",
+          passwords: p.passwords.map((x) => x.title),
+        })),
+      };
+    },
+  },
+  {
     name: "list_secrets", writes: false,
     available: (cfg) => cfg.hostActions,
     description: "Find password manager items you may use in run_command, by a word in their name (never their values). Use it before asking {{owner}} for a password.",
@@ -1445,7 +1466,7 @@ export const TOOLS: ToolDef[] = [
 /** The module each tool belongs to (any one of a list); a tool not named here is part of the core. */
 export const TOOL_MODULE: Record<string, ModuleId | ModuleId[]> = {
   dashboard: "dashboard",
-  ops_status: "homelab", ops_action: "homelab", list_hosts: "homelab", run_command: "homelab", approve_command: "homelab",
+  ops_status: "homelab", ops_action: "homelab", list_hosts: "homelab", run_command: "homelab", approve_command: "homelab", helping: "homelab",
   runbook_note: "homelab", journal_entry: "homelab", render_snippet: "homelab", list_secrets: "homelab",
   project_summary: "projects", project_plan: "projects", procedure: "projects",
   music_idea: "music", wiki_search: "wiki", wiki_page: "wiki", generate_image: "images", quiz: "quiz",
@@ -1603,6 +1624,7 @@ export function toolGuide(on: ModuleCheck = () => true, opts: { voiceModel?: boo
     "Plans: when {{owner}} mentions a plan on a day (going somewhere, seeing someone, an appointment), put it on their calendar with create_item kind=event right away, then say so in one sentence; they can tell you to drop it. Name who they are with in the title. Block time only when {{owner}} gave it: a clock time or range is a timed event (a start time alone gets one hour, and say so); a block they ask for (\"block the evening\") is that block. A plan with only a day or a part of the day (tonight, Saturday, this afternoon) is an all-day event on that date (all_day true, start that day at 00:00, end the next day at 00:00, both with the local offset) with the part of the day in the title (\"Tonight: dinner at Luigi's with Jamie\"); it marks the day without blocking any time. Never invent a time. Something {{owner}} already did on a day (an outing, seeing people) goes on the calendar the same way, as an all-day event on the day it happened. When that day already has the same plan or outing (get_week shows it), change that event's title with update_item (keeping its times) instead of adding a second one.",
     "Memory: when {{owner}} tells you something lasting about themself, their gear, their hosts or their preferences, save it with remember without being asked, then confirm in a few words what you saved; do not start a conversation about it. In troubleshooting, record each result with ledger_update and never suggest anything listed as ruled out." + (on("homelab") ? " When a troubleshooting fix works, or {{owner}} tells you how a host is set up, write it with runbook_note; never for something you only looked up to answer a question. {{owner}} calls these fix notes (the Machines screen), so say fix notes, not runbook." : ""),
     on("web") && has("web_search") && "Facts you do not know: search the web (web_search, then read_web_page on the best result) instead of answering from memory when it is about versions, releases, docs, prices, news, or anything you are unsure of. Name the source. If you still do not know, say so.",
+    on("homelab") && has("run_command") && "People {{owner}} helps: their computers are machines too (helping lists them, with the passwords they saved for {{owner}}); when {{owner}} asks about someone's computer or phone, start with helping.",
     on("homelab") && has("run_command") && "Machines: you can run commands on {{owner}}'s hosts with run_command (list_hosts names them). Check before advising: look at status, logs and config yourself rather than asking them to paste it. Read-only commands run at once. A change waits for their approval: show the exact command and why, then stop. When their next message says yes, call approve_command. Changes are journaled automatically.",
     "The hub's own software: when {{owner}} asks about updates or to update the hub (you, the app's server), use update_hub. The apps on their devices (the Windows, Android, iPhone, Mac and Watch apps): update_apps, which also says which version each one runs.",
     "Images {{owner}} sends are attached to their message; read them directly (screenshots, error dialogs, photos of hardware or wiring).",

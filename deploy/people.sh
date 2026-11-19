@@ -9,7 +9,9 @@
 #        hub on its own port and address, and a pairing link for their first device
 #   sudo bash deploy/people.sh list
 #   sudo bash deploy/people.sh pair <name>
-#        a new pairing link for that person's first device (the one `add` printed lasts 10 minutes)
+#        a new invitation for that person's device (works once, for 3 days, from anywhere through the Direct link)
+#   sudo bash deploy/people.sh ward <name> --helper <your name> --hash <sha256>
+#        offer to help that person with their devices (your hub does this from the app; they say yes in theirs)
 #   sudo bash deploy/people.sh update
 #        every other person's hub to your current code and shared model settings (after updating your own hub)
 #   sudo bash deploy/people.sh remove <name> [--erase <name again>]
@@ -197,8 +199,28 @@ copy_shared() {
   # The background reader waits for a button, as on the owner's hub when it has no setting (the GPU may be gaming).
   [ -n "$(env_get_as "$acct" "$env_file" EA_BACKGROUND_AI)" ] || env_set_as "$acct" "$env_file" EA_BACKGROUND_AI ask
 }
-pairing_json() { # account, device name
-  as_user "$1" env EA_PAIR_JSON=1 bash "$(home_of "$1")/everythingapp/deploy/pair-link.sh" "$2"
+pairing_json() { # account, device name: an invitation that lasts 3 days, so it can be sent to someone far away
+  as_user "$1" env EA_PAIR_JSON=1 EA_PAIR_DAYS=3 bash "$(home_of "$1")/everythingapp/deploy/pair-link.sh" "$2"
+}
+# A call to a person's hub on this machine with that hub's main key, made as their account: the key goes in a header
+# from stdin, never on a command line. hub_call <account> <method> <path> [json body]
+hub_call() {
+  as_user "$1" bash -c '
+    f="$HOME/.config/everythingapp/hub.env"
+    port="$(grep -E "^EA_PORT=" "$f" | tail -1 | cut -d= -f2-)"; port="${port:-8787}"
+    tok="$(grep -E "^EA_TOKEN=" "$f" | tail -1 | cut -d= -f2-)"
+    printf "authorization: Bearer %s\n" "$tok" | curl -fsS --max-time 20 -X "$1" -H @- -H "content-type: application/json" ${3:+-d "$3"} "http://127.0.0.1:$port$2"
+  ' sh "$2" "$3" "${4:-}"
+}
+# Direct link on a person's hub (hub/src/link.ts): their phone pairs with one QR code or invitation and reaches it from
+# anywhere, with no Tailscale on it. The Tailscale address stays for anyone who has Tailscale. Waits until it is online.
+use_direct() { # account
+  hub_call "$1" PUT /setup/link '{"method":"direct"}' >/dev/null || { echo "    Direct link could not be turned on; the Tailscale address still works"; return 0; }
+  for _ in $(seq 1 30); do
+    hub_call "$1" GET /setup/link 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin).get("direct") or {}; sys.exit(0 if d.get("state")=="online" else 1)' 2>/dev/null && return 0
+    sleep 1
+  done
+  echo "    Direct link is still starting; the invitation may carry only the Tailscale address"
 }
 ADMIN_NOTE="Their data is kept apart from yours and from everyone else's, but anyone with admin (root or sudo) rights on this machine, you included, can still open it. Tell them before they start."
 
@@ -369,6 +391,8 @@ add)
   wait_health "$PORT" || { as_user "$ACCT" journalctl --user -u everythingapp-hub -n 30 --no-pager; die "$NAME's hub did not start"; }
   log "Giving $NAME's hub its address"
   tailscale serve --bg --https="$PORT" "http://127.0.0.1:$PORT" >/dev/null
+  log "Making $NAME's hub reachable with a QR code, from anywhere"
+  use_direct "$ACCT"
   registry add "$NAME" "$ACCT" "$PORT" "$COLOR" 0 "$(date -u +%FT%TZ)" "$ADDR"
   PAIR="$(pairing_json "$ACCT" "$NAME's phone" || true)"
   [ -n "$PAIR" ] || PAIR='{}'
@@ -378,23 +402,40 @@ add)
   echo "  color    $COLOR"
   echo "  account  $ACCT (data in $HOME_DIR, readable only by that account and by this machine's admins)"
   echo
-  echo "First device (works once, for 10 minutes; 'people.sh pair \"$NAME\"' makes another):"
-  as_user "$ACCT" bash "$HOME_DIR/everythingapp/deploy/pair-link.sh" "$NAME's first device" || true
+  echo "First device (works once, for 3 days; 'people.sh pair \"$NAME\"' makes another):"
+  as_user "$ACCT" env EA_PAIR_DAYS=3 bash "$HOME_DIR/everythingapp/deploy/pair-link.sh" "$NAME's first device" || true
   echo
-  echo "They need to reach this machine on the tailnet: share it with them from the Tailscale admin console (Machines,"
-  echo "this machine, Share), and they use only $ADDR."
+  echo "Their phone reaches this hub through the Direct link in that invitation, from anywhere, with nothing else to"
+  echo "install. Someone who uses Tailscale can use $ADDR instead, once you share this machine with them on Tailscale."
   echo "$ADMIN_NOTE"
   ;;
 
 pair)
   NAME="${1:-}"; ACCT="$(registry get name "$NAME" user)"
   [ -n "$ACCT" ] && [ "$ACCT" != "$OWNER" ] || die "no hub for $NAME (see: people.sh list)"
+  # A hub added before Direct link was offered here gets it now, so the new invitation works from anywhere.
+  use_direct "$ACCT"
   if [ -n "$RESULT" ]; then
     PAIR="$(pairing_json "$ACCT" "$NAME's device")" || die "$NAME's hub did not answer"
     result done name "$NAME" pairing "$PAIR"
   else
-    as_user "$ACCT" bash "$(home_of "$ACCT")/everythingapp/deploy/pair-link.sh" "$NAME's device"
+    as_user "$ACCT" env EA_PAIR_DAYS=3 bash "$(home_of "$ACCT")/everythingapp/deploy/pair-link.sh" "$NAME's device"
   fi
+  ;;
+
+ward)
+  # The owner offers to help this person with their devices (hub/src/helpers.ts): their hub keeps the offer, with only
+  # the SHA-256 of the key the owner's hub made, until they say yes in their app. Nothing secret passes through here.
+  NAME="${1:-}"; shift || true
+  HELPER=""; HASH=""
+  while [ $# -gt 0 ]; do case "$1" in --helper) HELPER="$2"; shift ;; --hash) HASH="$2"; shift ;; *) die "unknown argument $1" ;; esac; shift; done
+  ACCT="$(registry get name "$NAME" user)"
+  [ -n "$ACCT" ] && [ "$ACCT" != "$OWNER" ] || die "no hub for $NAME (see: people.sh list)"
+  valid_name "$HELPER" || die "give --helper <your name>"
+  [[ "$HASH" =~ ^[0-9a-f]{64}$ ]] || die "give --hash <the key's sha256>"
+  OFFER="$(hub_call "$ACCT" POST /helpers/offer "{\"name\":\"$HELPER\",\"key_hash\":\"$HASH\"}")" || die "$NAME's hub did not take the offer (is it running and up to date?)"
+  result done name "$NAME" offer "$OFFER"
+  echo "Offered. $NAME says yes or no in their app."
   ;;
 
 list)
@@ -465,9 +506,9 @@ remove-account)
   ;;
 
 serve-requests)
-  # Run by aeneas-people.service (root) when the owner's hub drops a request. Only add, pair, stop and update are
-  # taken; a request names a person (update names nobody), never a path or a command, and every field is checked here
-  # before anything runs.
+  # Run by aeneas-people.service (root) when the owner's hub drops a request. Only add, pair, stop, ward and update are
+  # taken; a request names a person (update names nobody; ward adds the owner's name and a key's hash), never a path or
+  # a command, and every field is checked here before anything runs.
   find "$RESULTS" -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null || true
   for f in "$REQUESTS"/*.json; do
     [ -e "$f" ] || continue
@@ -477,22 +518,27 @@ try:
     fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as fh: r = json.loads(fh.read(4096))
     rid, op, name, color = str(r.get("id", "")), str(r.get("op", "")), str(r.get("name", "")), str(r.get("color", ""))
+    helper, khash = str(r.get("helper", "")), str(r.get("hash", ""))
+    named = re.fullmatch(r"[A-Za-z][A-Za-z '.-]{0,29}", name)
     ok = re.fullmatch(r"[a-z0-9-]{8,40}", rid) and (
-        (op in ("add", "pair", "stop") and re.fullmatch(r"[A-Za-z][A-Za-z '.-]{0,29}", name)
-         and (color == "" or re.fullmatch(r"#[0-9a-fA-F]{6}", color)))
-        or (op == "update" and name == "" and color == ""))
-    print("\t".join([rid, op, name, color]) if ok else "")
+        (op in ("add", "pair", "stop") and named
+         and (color == "" or re.fullmatch(r"#[0-9a-fA-F]{6}", color)) and helper == "" and khash == "")
+        or (op == "ward" and named and color == "" and re.fullmatch(r"[A-Za-z][A-Za-z '.-]{0,29}", helper)
+            and re.fullmatch(r"[0-9a-f]{64}", khash))
+        or (op == "update" and name == "" and color == "" and helper == "" and khash == ""))
+    print("\t".join([rid, op, name, color, helper, khash]) if ok else "")
 except Exception:
     print("")
 EOF
 )"
     [ -n "$REQ" ] || { rm -f "$f"; continue; }
-    IFS=$'\t' read -r RID OP PNAME PCOLOR <<<"$REQ"
+    IFS=$'\t' read -r RID OP PNAME PCOLOR PHELPER PHASH <<<"$REQ"
     RESULT="$RESULTS/$RID.json"
     # The result exists before the request goes, so the hub never sees neither.
     result working op "$OP" name "$PNAME"
     rm -f "$f"
     args=("$OP"); [ "$OP" = update ] || args+=("$PNAME"); [ "$OP" = add ] && [ -n "$PCOLOR" ] && args+=(--color "$PCOLOR")
+    [ "$OP" = ward ] && args+=(--helper "$PHELPER" --hash "$PHASH")
     # Each request in its own process, so one that fails does not stop the others.
     ( env -u SUDO_USER EA_PEOPLE_RESULT="$RESULT" "$ROOT_COPY" "${args[@]}" ) >/dev/null 2>&1 || true
   done

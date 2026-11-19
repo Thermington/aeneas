@@ -20,7 +20,11 @@ import { detectDestructive } from "../preflight.js";
  */
 
 export type HostOs = "linux" | "macos" | "windows";
-export interface Host { name: string; aliases: string[]; target: string; os: HostOs; local: boolean; via: string }
+export interface Host {
+  name: string; aliases: string[]; target: string; os: HostOs; local: boolean; via: string;
+  /** A computer of someone this hub's owner helps (helping.ts): commands go through that person's hub to their app. */
+  helper?: { account: string; device: string; /** another device in their home, reached over SSH from that computer */ ip?: string; port?: number };
+}
 
 export interface HostFileEntry { name: string; ssh?: string; os?: HostOs; local?: boolean; aliases?: string[] }
 
@@ -1234,7 +1238,8 @@ export function commandArgv(host: Host, command: string): { file: string; args: 
   return { file: "ssh", args: [...ssh, cmd] };
 }
 
-export type Runner = (host: Host, command: string, timeoutS: number) => Promise<RunResult>;
+/** `meta` says why and whether it changes anything, for a helped person's log (helping.ts); ssh ignores it. */
+export type Runner = (host: Host, command: string, timeoutS: number, meta?: { purpose: string; kind: "check" | "change" }) => Promise<RunResult>;
 
 /**
  * The environment a command starts with: what a login shell and ssh need, never the hub's own settings (EA_TOKEN,
@@ -1314,13 +1319,16 @@ export class HostActions {
   hiddenValues: () => string[] = () => [];
   /** Seconds an approved change may run (never less than a read's limit). */
   changeTimeoutS = CHANGE_TIMEOUT_S;
+  /** Computers of the people the owner helps (helping.ts), listed after the owner's own machines. */
+  extraHosts: () => Host[] = () => [];
   private cache: { at: number; hosts: Host[] } | null = null;
 
   constructor(private cfg: Config, private db: DB, private store: Store) {}
 
   hosts(): Host[] {
     if (!this.cache || Date.now() - this.cache.at > 60_000) this.cache = { at: Date.now(), hosts: loadHosts(this.cfg) };
-    return this.cache.hosts;
+    const extra = this.extraHosts().filter((h) => !this.cache!.hosts.some((o) => o.name.toLowerCase() === h.name.toLowerCase()));
+    return extra.length ? [...this.cache.hosts, ...extra] : this.cache.hosts;
   }
 
   host(name: string): Host | null { return findHost(this.hosts(), name); }
@@ -1364,7 +1372,7 @@ export class HostActions {
   async runRead(sessionId: string, host: Host, command: string, purpose: string): Promise<RunResult & { action_id: string }> {
     const id = crypto.randomUUID();
     this.insert({ id, session_id: sessionId, host: host.name, command, purpose, rollback: null, kind: "read", status: "running", created_at: nowIso() });
-    const raw = await this.runner(host, command, this.cfg.commandTimeoutS);
+    const raw = await this.runner(host, command, this.cfg.commandTimeoutS, { purpose, kind: "check" });
     const r = { ...raw, output: redactValues(raw.output, this.hiddenValues()) };
     this.db.prepare("UPDATE ai_actions SET status = ?, ran_at = ?, exit_code = ?, output = ? WHERE id = ?").run(r.exit_code === 0 ? "done" : "failed", nowIso(), r.exit_code, r.output.slice(0, 20_000), id);
     return { ...r, action_id: id };
@@ -1398,7 +1406,8 @@ export class HostActions {
     if (!host) throw new Error(`host ${a.host} is no longer known`);
     // Secrets go in only now, after approval; the stored command and the journal keep the {{secret:...}} names.
     let filled = { command: a.command, values: [] as string[] };
-    if (/\{\{\s*secret:/i.test(a.command)) {
+    // A helped person's computer: their own hub fills the secret from the passwords they saved for their helper.
+    if (/\{\{\s*secret:/i.test(a.command) && !host.helper) {
       try {
         if (!this.fillSecrets) throw new Error("the command names a secret but no password manager is linked");
         filled = await this.fillSecrets(a.command, host);
@@ -1417,7 +1426,7 @@ export class HostActions {
     this.db.prepare("UPDATE ai_actions SET status = 'running', ran_at = ?, journal_id = ? WHERE id = ?").run(nowIso(), journal.id, id);
     let raw: RunResult;
     try {
-      raw = await this.runner(host, filled.command, Math.max(this.cfg.commandTimeoutS, this.changeTimeoutS));
+      raw = await this.runner(host, filled.command, Math.max(this.cfg.commandTimeoutS, this.changeTimeoutS), { purpose: a.purpose, kind: "change" });
     } catch (e) {
       this.finish(id, journal.id, "failed", null, (e as Error).message);
       throw e;

@@ -12,9 +12,19 @@ struct SettingsView: View {
     @State private var debugPage: SettingsPage?
     /// "People on this machine": its summary on the machine owner's hub, nil elsewhere (the row stays out).
     @State private var machinePeople: String?
+    @ObservedObject private var helpers = HelpersStore.shared
 
     var body: some View {
         List {
+            // First, for someone helped by family: it is the page they may be told to open.
+            if let summary = helpers.view?.summary {
+                SwiftUI.Section {
+                    NavigationLink { HelpersSettingsView() } label: {
+                        SettingsRow(title: "People who help you", symbol: "person.2.wave.2", summary: summary)
+                    }
+                }
+                .themedRow()
+            }
             SwiftUI.Section {
                 NavigationLink { ThemeSettingsView() } label: {
                     SettingsRow(title: "Theme", symbol: "paintpalette", summary: themeSummary)
@@ -143,7 +153,7 @@ struct SettingsView: View {
 
 /// The Settings screens that can be opened directly in Debug builds (`-EASettingsPage theme`).
 enum SettingsPage: String, Hashable, Identifiable {
-    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, modules, reference
+    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, modules, reference, helpers
     var id: String { rawValue }
 
     /// A page named by a launch argument, once per launch.
@@ -167,6 +177,7 @@ enum SettingsPage: String, Hashable, Identifiable {
         case .noteSounds: NoteSoundsView()
         case .modules: ModulesSettingsView()
         case .reference: ReferenceSettingsView()
+        case .helpers: HelpersSettingsView()
         }
     }
 }

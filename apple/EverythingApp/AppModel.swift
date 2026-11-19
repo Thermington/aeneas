@@ -322,6 +322,10 @@ final class AppModel: ObservableObject {
             return
         }
         started = true
+        #if os(macOS)
+        // A helped person's Mac runs their helper's commands while they let it (HelperComputer).
+        HelperComputer.shared.start(engine: engine, name: { [weak self] in self?.config.deviceName ?? "Mac" })
+        #endif
         // Tailscale signed in or out inside Aeneas: the hub is reached another way now.
         TailnetSignIn.shared.onChange = { [weak self] in Task { @MainActor in await self?.tailnetChanged() } }
         ReminderScheduler.shared.registerCategories()

@@ -100,6 +100,21 @@ A mail, a web page, a wiki page or a shared article written to steer the model.
 - Protected (Built): mail is read by a background job with no tools. Changes on machines wait for approval. Pictures in model replies, notes, the journal and wiki pages are links and load nothing on their own, so text cannot send data out by naming a picture. Page reads refuse the owner's own network.
 - Gaps: a capture is filed by a chat that can read web pages, so a captured or shared text that names an address could make the model read it, with data in the address.
 
+### A helper, or someone holding the helper's account
+Someone the person trusts fully helps with their devices ([helpers.md](helpers.md)). The person is never asked about a
+command, by design: so whoever controls the helper's hub can run commands as the person on their computer and sign in to
+their home devices with the passwords they saved for the helper.
+- Protected (Built): the person says yes once and can Stop at once (the key ends that moment). The helper key opens
+  `/warden/*` only, never the person's notes, chats or diary, and only from the same machine. Only the SHA-256 of the key
+  passes through the root service; the key itself is sealed with the helper hub's secrets. Commands that change anything
+  wait for the helper's own yes in the chat, and every check, change, scan and saved password is written in the person's
+  log with the exact command. Saved passwords live in a vault of their own, are filled in on the person's hub, and are
+  cut out of the output. SSH goes only to private addresses, and a device's key is kept from the first sign-in, so a
+  stand-in device gets no password. Commands run as the person, without administrator rights.
+- Gaps: a helper hub taken over by someone else can do everything the helper can until the person presses Stop; the
+  log shows it afterwards, not before. The first SSH sign-in to a device trusts whatever key answers. The machine's admin
+  can read the person's files anyway, as for every person on the machine.
+
 ## Known gaps
 
 1. The hub's main key still opens everything, and links made before 2026-11-05 carry it: change it once every device has its own key.

@@ -59,6 +59,18 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_aeneas._tcp</string>
+		<string>_device-info._tcp</string>
+		<string>_companion-link._tcp</string>
+		<string>_airplay._tcp</string>
+		<string>_raop._tcp</string>
+		<string>_googlecast._tcp</string>
+		<string>_ipp._tcp</string>
+		<string>_printer._tcp</string>
+		<string>_smb._tcp</string>
+		<string>_ssh._tcp</string>
+		<string>_rfb._tcp</string>
+		<string>_http._tcp</string>
+		<string>_hap._tcp</string>
 	</array>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Aeneas reads the titles and times of the calendars you choose, so your meetings show in your plan, and writes the events and planned blocks you make in the app to your calendar.</string>
@@ -69,7 +81,7 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Writes what you log in Aeneas (weight, blood pressure, caffeine, mood and timed activities) to Health, so it is in both places.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Aeneas reaches your hub over your home network, so your devices keep syncing with it while the internet is down, and finds it again when your router gives it a new address. Your data stays on your own network when they share one.</string>
+	<string>Aeneas reaches your hub over your home network, so your devices keep syncing with it while the internet is down, and finds it again when your router gives it a new address. Your data stays on your own network when they share one. Aeneas also looks for the devices in your home when you ask, so the person who helps you knows what is there. Nothing leaves your home network.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>With Calculators on, the bill splitter can fill in your state's meals tax. Only an approximate position is used, and it goes to your own hub and nowhere else.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

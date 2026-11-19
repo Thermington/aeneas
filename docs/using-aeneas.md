@@ -115,6 +115,15 @@ The assistant runs on your hub's own model. It reads and changes your data with 
 notes, events), and it says what it changed. Switch modules off and their tools go with them. Ask it about the app
 itself too: it answers from these docs.
 
+## Family: a hub for someone else, and helping with their devices
+
+On a Linux or Windows hub, Settings, People on this machine gives someone their own hub on your machine. Invite them
+with the large QR code when they are with you, or copy a message (or print a page) for someone who lives elsewhere: they
+install Aeneas, copy the message and tap I have an invitation. Help with devices beside their name asks them once,
+in large type; after their yes, your assistant can check and fix their computer (the Aeneas app on it), the devices
+their app found at home, and devices that take SSH, with the passwords they chose to save for you. They see everything
+you did in Settings, People who help you, and can stop it there. The whole story: [helpers.md](helpers.md).
+
 ## Updates, backups and the hub
 
 - **Updates**: Settings, About shows the hub's version and updates it. The Windows and Android apps update from

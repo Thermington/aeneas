@@ -42,6 +42,34 @@ export interface HubUpdateInfo {
 /** GET /hubs: other people's hubs on this machine (deploy/people.sh), as the owner's hub sees them. */
 export interface PersonHub { name: string; account: string; port: number; color: string; owner: boolean; address: string | null; up: boolean }
 export interface HubsList { available: boolean; reason?: "linux_only" | "not_set_up" | "not_owner"; setup_command: string; admin_note: string; hubs: PersonHub[] }
+/** Someone who helps this person with their devices (hub/src/helpers.ts; docs/helpers.md). */
+export interface Helper { id: string; name: string; state: "offered" | "active" | "stopped"; offered_at: string; accepted_at?: string; stopped_at?: string; stopped_by?: "person" | "helper" }
+export interface HelperLogLine { id: string; at: string; helper: string; kind: string; device: string | null; text: string; detail: string | null; outcome: string | null }
+export interface HelperComputer { device_id: string; name: string; os: "windows" | "macos" | "linux"; on: boolean; at: string; listening: boolean }
+export interface HomeDevice { name: string; ip: string; open: number[]; kind?: string }
+export interface HomeScan { at: string; by: string; network?: string; devices: HomeDevice[] }
+/** GET /helpers: the person's own view of who helps them. */
+export interface HelpersView {
+  helpers: Helper[];
+  log: HelperLogLine[];
+  passwords: { title: string; username: string; device?: string }[];
+  computers: HelperComputer[];
+  scan: HomeScan | null;
+  this_device: { device_id: string; agent: HelperComputer | null } | null;
+}
+/** GET /helping/people: the machine owner's people, each with whether the owner helps them. */
+export interface HelpView {
+  account: string; name: string; state: "waiting" | "helping" | "stopped" | "unreachable"; offered_at: string;
+  computers: { device_id: string; name: string; os: string; listening: boolean }[];
+  scan: HomeScan | null;
+  passwords: { title: string; username: string }[];
+}
+export interface AgentJob {
+  id: string; device_id: string; command: string; os: "windows" | "macos" | "linux"; timeout_s: number; created_at: string;
+  /** Run on another device in the home, signed in over SSH from this computer (helper.rs ssh_helper_command). */
+  ssh?: { ip: string; port: number; username: string; password: string; host_key?: string };
+}
+
 /** GET /hubs/requests/:id: adding a person (or a new code, or stopping a hub) as it goes. */
 export interface HubRequest {
   state: "queued" | "working" | "done" | "failed";
@@ -806,6 +834,22 @@ export class HubClient {
   checkHubUpdate() { return this.req<HubUpdateInfo>("POST", "/hub-update/check"); }
   startHubUpdate() { return this.req<{ started: true; run: HubUpdateRun }>("POST", "/hub-update"); }
   hubs() { return this.req<HubsList>("GET", "/hubs"); }
+  /** The machine owner's people with whether the owner helps each one (404 on hubs before 1.0.6). */
+  helpingPeople() { return this.req<{ people: (PersonHub & { help: HelpView | null })[] }>("GET", "/helping/people"); }
+  offerHelp(account: string) { return this.req<{ request_id: string }>("POST", `/helping/${encodeURIComponent(account)}`); }
+  stopHelping(account: string) { return this.req<{ stopped: boolean }>("DELETE", `/helping/${encodeURIComponent(account)}`); }
+  /** This person's helpers, what they did, the passwords saved for them and this person's computers. */
+  helpers() { return this.req<HelpersView>("GET", "/helpers"); }
+  acceptHelper(id: string) { return this.req<Helper>("POST", `/helpers/${encodeURIComponent(id)}/accept`); }
+  stopHelper(id: string) { return this.req<Helper>("POST", `/helpers/${encodeURIComponent(id)}/stop`); }
+  saveHelperPassword(item: { title: string; username?: string; password: string; device?: string }) { return this.req<{ title: string; username: string }>("PUT", "/helpers/passwords", item); }
+  removeHelperPassword(title: string) { return this.req<{ removed: string }>("DELETE", `/helpers/passwords/${encodeURIComponent(title)}`); }
+  sendHomeScan(scan: { network?: string; devices: HomeDevice[] }) { return this.req<HomeScan>("POST", "/helpers/scan", scan); }
+  /** Whether this computer lets its helper run things on it (the app's agent). */
+  setAgent(a: { on: boolean; os: string; name: string }) { return this.req<HelperComputer>("PUT", "/agent/me", a); }
+  /** Work for this computer: waits up to `waitS` seconds for some. */
+  agentJobs(waitS: number, signal?: AbortSignal) { return this.req<{ jobs: AgentJob[]; helping: boolean }>("GET", `/agent/jobs?wait=${waitS}`, undefined, signal ?? (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout((waitS + 20) * 1000) : undefined)); }
+  finishAgentJob(id: string, r: { exit_code: number; output: string; host_key?: string }) { return this.req<{ ok: boolean }>("POST", `/agent/jobs/${encodeURIComponent(id)}`, r); }
   addHub(name: string, color?: string) { return this.req<{ request_id: string }>("POST", "/hubs", { name, ...(color ? { color } : {}) }); }
   hubRequest(id: string) { return this.req<HubRequest>("GET", `/hubs/requests/${encodeURIComponent(id)}`); }
   pairHub(account: string) { return this.req<{ request_id: string }>("POST", `/hubs/${encodeURIComponent(account)}/pair`); }
