@@ -215,6 +215,14 @@ hub_call() {
     printf "authorization: Bearer %s\n" "$tok" | curl -fsS --max-time 20 -X "$1" -H @- -H "content-type: application/json" ${3:+-d "$3"} "http://127.0.0.1:$port$2"
   ' sh "$2" "$3" "${4:-}"
 }
+# The person's name on their own hub (Settings, Set up, Your name), when it has none yet: their phone then opens on the
+# app itself, not on the first-run Welcome steps, which someone who is not technical should not have to face.
+name_hub() { # account, name
+  local named
+  named="$(hub_call "$1" GET /setup 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("named", False))' 2>/dev/null || echo unknown)"
+  [ "$named" = "False" ] || return 0
+  hub_call "$1" PUT /profile "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$2")" >/dev/null || echo "    could not set the name on their hub"
+}
 # Direct link on a person's hub (hub/src/link.ts): their phone pairs with one QR code or invitation and reaches it from
 # anywhere, with no Tailscale on it. The Tailscale address stays for anyone who has Tailscale. Waits until it is online.
 use_direct() { # account
@@ -396,6 +404,7 @@ add)
   tailscale serve --bg --https="$PORT" "http://127.0.0.1:$PORT" >/dev/null
   log "Making $NAME's hub reachable with a QR code, from anywhere"
   use_direct "$ACCT"
+  name_hub "$ACCT" "$NAME"
   registry add "$NAME" "$ACCT" "$PORT" "$COLOR" 0 "$(date -u +%FT%TZ)" "$ADDR"
   PAIR="$(pairing_json "$ACCT" "$NAME's phone" || true)"
   [ -n "$PAIR" ] || PAIR='{}'
@@ -416,8 +425,10 @@ add)
 pair)
   NAME="${1:-}"; ACCT="$(registry get name "$NAME" user)"
   [ -n "$ACCT" ] && [ "$ACCT" != "$OWNER" ] || die "no hub for $NAME (see: people.sh list)"
-  # A hub added before Direct link was offered here gets it now, so the new invitation works from anywhere.
+  # A hub added before Direct link was offered here gets it now, so the new invitation works from anywhere; and its
+  # person's name, so their phone opens on the app rather than on the setup steps.
   use_direct "$ACCT"
+  name_hub "$ACCT" "$NAME"
   if [ -n "$RESULT" ]; then
     PAIR="$(pairing_json "$ACCT" "$NAME's device")" || die "$NAME's hub did not answer"
     result done name "$NAME" pairing "$PAIR"

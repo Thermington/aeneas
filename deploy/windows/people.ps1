@@ -273,6 +273,14 @@ function Use-Direct([string]$account) {
   Note 'Direct link is still starting; the invitation may not carry it yet (pair makes another later)'
 }
 
+# The person's name on their own hub, when it has none yet: their phone then opens on the app itself, not on the
+# first-run Welcome steps, which someone who is not technical should not have to face.
+function Name-Hub([string]$account, [string]$name) {
+  try { $v = Hub-Call $account 'GET' '/setup' } catch { return }
+  if ($v.named) { return }
+  try { $null = Hub-Call $account 'PUT' '/profile' @{ name = $name } } catch { Note 'could not set the name on their hub' }
+}
+
 # An invitation for a person's device: works once, for 3 days, from anywhere through the Direct link.
 function Get-Invitation([string]$account, [string]$deviceName) { return Hub-Call $account 'POST' '/devices/pairing' @{ name = $deviceName; days = 3 } }
 
@@ -622,6 +630,7 @@ function Do-Add([string]$pName, [string]$pColor) {
   }
   Say "Making $pName's hub reachable with a QR code, from anywhere"
   Use-Direct $account
+  Name-Hub $account $pName
   $pairing = $null
   try { $pairing = Get-Invitation $account "$pName's phone" } catch { Note "no invitation yet: $($_.Exception.Message)" }
   Set-Result 'done' @{ pairing = $(if ($pairing) { $pairing } else { [ordered]@{} }); note = $AdminNote }
@@ -647,6 +656,7 @@ function Do-Pair([string]$pName) {
   if (-not $entry -or $entry.owner) { Die "no hub for $pName (see: people.ps1 list)" }
   # A hub added before Direct link was offered gets it now, so the new invitation works from anywhere.
   Use-Direct ([string]$entry.user)
+  Name-Hub ([string]$entry.user) $pName
   try { $pairing = Get-Invitation ([string]$entry.user) "$pName's device" } catch { Die "$pName's hub did not answer" }
   Set-Result 'done' @{ name = $pName; pairing = $pairing }
   Write-Host "Works once, for 3 days. Code: $($pairing.code)"

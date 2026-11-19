@@ -35,7 +35,7 @@ export function HelpersPage() {
         {!view && <p className="muted">Asking your hub.</p>}
         {view && !active.length && !offered.length && (
           <div className="card col">
-            <h2>Nobody helps you yet</h2>
+            <h2>{view.helpers.some((h) => h.state === "stopped") ? "Nobody helps you now" : "Nobody helps you yet"}</h2>
             <p>When someone in your family offers to help with your computer and phone, you can say yes here.</p>
           </div>
         )}
