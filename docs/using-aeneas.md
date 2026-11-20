@@ -125,7 +125,21 @@ a ping, port, web address, certificate, name lookup or backup check with Add che
 - **Propose a fix** sits on anything red: a check that is down or a reading out of bounds. The assistant looks into it
   with read-only commands and proposes one change, which runs only when you approve it in that chat.
 - **A machine's page** (tap its card) has its checks, its readings with graphs and alert limits, its History, its fix
-  notes and its snippets.
+  notes and its snippets. At the top it says what kind of device it is (Computer, Network device, Printer, Camera or
+  Device) and what it runs or its model when the device says. The hub works this out from what each device reports
+  about itself and answers when asked, and names a kind only when it is fairly sure; otherwise it says Not identified.
+- **Add machine** needs the computer's address, a user name and its password once: the hub signs in with it, adds
+  its own key there, checks that signing in with the key works, and forgets the password. The computer needs SSH on:
+  on a Mac, System Settings, General, Sharing, Remote Login; on Windows, Settings, System, Optional features, OpenSSH
+  Server; on Linux, the openssh-server package. The assistant can add one too when the password is in your password
+  manager ("add the NAS at 192.168.1.20 as admin, the password is the NAS item"); it waits for your Run.
+- **A computer with the Aeneas app** can show up by itself: on Windows, Settings, This computer, Show this computer
+  in Tech sends its CPU, memory and disks every 10 minutes while the app runs, and Let the hub sign in turns on
+  Windows' SSH server (one administrator prompt) and adds the hub's key, so the assistant can run commands there too.
+- **Purpose** on a machine's page is what it is for, in your words. The assistant reads it whenever that machine comes
+  up, and saves to it when you tell it about the machine.
+- **Virtual machines** on a Proxmox host the hub signs in to get their own cards with CPU and memory, without adding
+  them. Their disks need the QEMU guest agent turned on in the VM's Options and installed inside it.
 - **History** is what happened on that machine, newest first: changes the assistant made with your approval (with
   the command and how to undo it), checks that went down and came back, readings that went out of bounds and back, and
   changes you note in one line ("What did you change?"), tell the assistant or say in a Capture ("I replaced the fan on

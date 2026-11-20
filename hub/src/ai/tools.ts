@@ -18,7 +18,8 @@ import type { Config } from "../config.js";
 import type { Store } from "../store.js";
 import { cloudScrubber } from "./backends.js";
 import { listOf, matchList, sameOpenTask, taskLists, wordsOf } from "./lists.js";
-import { ensureRunbook, factKey, upsertSection } from "../memory.js";
+import { ensureRunbook, factKey, hostFacts, upsertSection } from "../memory.js";
+import { readMachineInfoFile } from "../machineinfo.js";
 import { detectDestructive } from "../preflight.js";
 import { openLedger } from "./ledger.js";
 import { AFFIRMATION, isReadOnly, type HostActions } from "./hosts.js";
@@ -1369,9 +1370,21 @@ export const TOOLS: ToolDef[] = [
   {
     name: "list_hosts", writes: false,
     available: (cfg) => cfg.hostActions,
-    description: "Machines you can run commands on, with their OS and how they are reached.",
+    description: "Machines you can run commands on, with their OS, how they are reached, what they run, what kind of device each is and what {{owner}} says it is for.",
     parameters: { type: "object", properties: {} },
-    run: async (_api, _a, ctx) => ctx.hosts ? { hosts: ctx.hosts.hosts().map((h) => ({ name: h.name, os: h.os, via: h.via, aliases: h.aliases.filter((x) => x !== h.name) })) } : { error: "host commands are off" },
+    run: async (_api, _a, ctx) => {
+      if (!ctx.hosts) return { error: "host commands are off" };
+      // What each machine says it runs and is (machineinfo.ts) and its purpose in Memory (host:<name>), with the rest.
+      const info = readMachineInfoFile(ctx.cfg.dataDir);
+      const purposes = hostFacts(ctx.store);
+      return { hosts: ctx.hosts.hosts().map((h) => ({
+        name: h.name, os: h.os, via: h.via, aliases: h.aliases.filter((x) => x !== h.name),
+        ...(info[h.name]?.os ? { runs: info[h.name].os } : {}),
+        ...(info[h.name]?.category ? { kind: info[h.name].category } : {}),
+        ...(info[h.name]?.facts?.length ? { seen: info[h.name].facts } : {}),
+        ...(purposes.get(h.name) ? { purpose: purposes.get(h.name) } : {}),
+      })) };
+    },
   },
   {
     name: "helping", writes: false,
@@ -1443,6 +1456,25 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "add_machine", writes: true,
+    available: (cfg) => cfg.hostActions,
+    description: "Add a computer or device for the hub to read and run commands on: after {{owner}} approves, the hub signs in once with the password from a password manager item, puts its own SSH key there, checks it and adds the machine. Never ask for or accept a password in chat; if no password manager item holds it, tell {{owner}} to open Tech, Add machine and type it there once.",
+    parameters: { type: "object", properties: { address: { type: "string", description: "name or IP address, like nas.local or 192.168.1.20" }, user: { type: "string" }, password_item: { type: "string", description: "the password manager item holding that account's password, as Name or Folder/Name" }, name: { type: "string", description: "what to call it, when not its own name" } }, required: ["address", "user", "password_item"] },
+    run: async (_api, a, ctx) => {
+      if (!ctx.hosts) return { error: "host commands are off" };
+      const address = str(a.address), user = str(a.user), secret = str(a.password_item);
+      if (!address || !user) return { error: "address and user are needed" };
+      if (!secret) return { error: "the password must come from a password manager item; otherwise {{owner}} adds it in Tech, Add machine" };
+      const turn = turnOf(ctx);
+      if (turn.ran.length || turn.proposed.size) return { error: "something already ran or waits for {{owner}}'s yes in this reply; propose this in a later reply" };
+      const action = ctx.hosts.proposeSetup(ctx.sessionId, { address, user, secret, ...(str(a.name) ? { name: str(a.name)! } : {}) }, `add ${address} so the hub can read it and run commands on it`);
+      turn.proposed.add(action.id);
+      const approval = approvalOf({ id: action.id, host: address, command: action.command, purpose: action.purpose });
+      ctx.onApproval?.(approval);
+      return { status: "waiting_for_approval", action_id: action.id, host: address, instruction: "Not done yet. Tell {{owner}} the hub will sign in to that machine once with the password from that item and add its own key, then stop. It runs only after they approve." };
+    },
+  },
+  {
     name: "approve_command", writes: true, maxChars: 9000, cutMiddle: true,
     available: (cfg) => cfg.hostActions,
     description: "Run the command that is waiting for approval in this conversation, after {{owner}} has just said yes to it. Never call it unless their latest message approves it.",
@@ -1467,7 +1499,7 @@ export const TOOLS: ToolDef[] = [
 /** The module each tool belongs to (any one of a list); a tool not named here is part of the core. */
 export const TOOL_MODULE: Record<string, ModuleId | ModuleId[]> = {
   dashboard: "dashboard",
-  ops_status: "homelab", ops_action: "homelab", list_hosts: "homelab", run_command: "homelab", approve_command: "homelab", helping: "homelab",
+  ops_status: "homelab", ops_action: "homelab", list_hosts: "homelab", run_command: "homelab", approve_command: "homelab", helping: "homelab", add_machine: "homelab",
   runbook_note: "homelab", journal_entry: "homelab", render_snippet: "homelab", list_secrets: "homelab",
   project_summary: "projects", project_plan: "projects", procedure: "projects",
   music_idea: "music", wiki_search: "wiki", wiki_page: "wiki", generate_image: "images", quiz: "quiz",

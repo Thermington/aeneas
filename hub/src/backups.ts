@@ -371,7 +371,7 @@ export function machineOutcome(t: BackupTarget, reports: Map<BackupJob, BackupRe
 export type SshRunner = (dest: string, remote: string, stdin: string | undefined, timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export const sshRunner: SshRunner = (dest, remote, stdin, timeoutMs) => new Promise((resolve) => {
-  const child = execFile("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR", dest, remote], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+  const child = execFile("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new", "-o", "LogLevel=ERROR", dest, remote], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
     const code = err ? (typeof err.code === "number" ? err.code : err.killed ? -1 : 1) : 0;
     resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
   });

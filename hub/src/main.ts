@@ -26,6 +26,7 @@ import { startFocusLoop } from "./focus.js";
 import { sensorTick, startReadingPurgeJob } from "./sensors.js";
 import { startRetentionJob } from "./retention.js";
 import { startHostSensorLoop } from "./hostsensors.js";
+import { startIdentifyLoop } from "./identify.js";
 import { startQuizJob } from "./quiz.js";
 import { startCheckPruneJob, startMonitorLoop } from "./monitors.js";
 import { installTailscaleLookup } from "./tsdns.js";
@@ -243,6 +244,7 @@ async function main(): Promise<void> {
   const stopReadingPurge = startReadingPurgeJob(hub);
   const stopRetention = startRetentionJob(hub);
   const stopHostSensors = startHostSensorLoop(hub);
+  const stopIdentify = startIdentifyLoop(hub);
   const stopQuiz = startQuizJob(hub);
   const stopMonitors = startMonitorLoop(hub);
   const stopCheckPrune = startCheckPruneJob(hub);
@@ -286,6 +288,7 @@ async function main(): Promise<void> {
     stopReadingPurge();
     stopRetention();
     stopHostSensors();
+    stopIdentify();
     stopQuiz();
     stopMonitors();
     stopCheckPrune();

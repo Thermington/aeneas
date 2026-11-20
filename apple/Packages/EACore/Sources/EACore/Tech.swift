@@ -9,6 +9,34 @@ public enum ThingKind: String, Codable, CaseIterable, Sendable {
     case machine, service, place
 }
 
+/// What kind of device a machine is, from what it says about itself (hub/src/identify.ts): its OS line, being a
+/// Proxmox guest, or what it answers on the network. Never guessed: a device that said nothing has none.
+public enum DeviceCategory: String, Codable, CaseIterable, Sendable {
+    case computer, network, printer, camera, other
+
+    /// The Overview's section title.
+    public var section: String {
+        switch self {
+        case .computer: return "Computers"
+        case .network: return "Network"
+        case .printer: return "Printers"
+        case .camera: return "Cameras"
+        case .other: return "Other devices"
+        }
+    }
+
+    /// One of them: the machine page's "Computer · Ubuntu 26.04 LTS".
+    public var one: String {
+        switch self {
+        case .computer: return "Computer"
+        case .network: return "Network device"
+        case .printer: return "Printer"
+        case .camera: return "Camera"
+        case .other: return "Device"
+        }
+    }
+}
+
 /// One machine, service or place with its checks and readings (`GET /ops` `things`).
 public struct TechThing: Codable, Equatable, Hashable, Identifiable, Sendable {
     /// The key, lowercase: what pages use.
@@ -26,15 +54,37 @@ public struct TechThing: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var os: String?
     /// The machine the hub runs on.
     public var hub: Bool
+    /// What the machine itself says it runs ("Ubuntu 26.04 LTS"): machines the hub signs in to, and VMs with a guest
+    /// agent. Nothing is inferred for the others.
+    public var os_name: String?
+    /// What kind of device it is, from what it says about itself; none when it said nothing.
+    public var category: DeviceCategory?
+    /// The facts that say so, in words ("it offers file sharing"); also why a device is not identified.
+    /// The exact name it gives for itself (a printer's make and model), shown beside the kind.
+    public var model: String?
+    /// A virtual machine or container on this Proxmox host, and its state there.
+    public var vm_of: String?
+    public var vm_state: String?
+    /// What it is for, in the owner's words: its fact `host:<name>` in Memory, which the assistant reads too.
+    public var purpose: String?
+    /// A computer its own Aeneas app reports (PUT /devices/me/computer): the hub has its readings through the app and
+    /// does not sign in to it.
+    public var reports_itself: Bool
     public var id: String { name }
 
     public init(name: String, label: String? = nil, kind: ThingKind, monitors: [String] = [], sensors: [String] = [],
-                reachable: Bool = false, os: String? = nil, hub: Bool = false) {
+                reachable: Bool = false, os: String? = nil, hub: Bool = false, os_name: String? = nil,
+                category: DeviceCategory? = nil, model: String? = nil, vm_of: String? = nil, vm_state: String? = nil, purpose: String? = nil,
+                reports_itself: Bool = false) {
         self.name = name; self.label = label ?? name; self.kind = kind; self.monitors = monitors; self.sensors = sensors
-        self.reachable = reachable; self.os = os; self.hub = hub
+        self.reachable = reachable; self.os = os; self.hub = hub; self.os_name = os_name
+        self.category = category; self.model = model; self.vm_of = vm_of; self.vm_state = vm_state; self.purpose = purpose
+        self.reports_itself = reports_itself
     }
 
-    enum CodingKeys: String, CodingKey { case name, label, kind, monitors, sensors, reachable, os, hub }
+    enum CodingKeys: String, CodingKey {
+        case name, label, kind, monitors, sensors, reachable, os, hub, os_name, category, model, vm_of, vm_state, purpose, reports_itself
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -47,7 +97,24 @@ public struct TechThing: Codable, Equatable, Hashable, Identifiable, Sendable {
         reachable = (try? c.decodeIfPresent(Bool.self, forKey: .reachable)) ?? false
         os = try? c.decodeIfPresent(String.self, forKey: .os)
         hub = (try? c.decodeIfPresent(Bool.self, forKey: .hub)) ?? false
+        func text(_ key: CodingKeys) -> String? { (try? c.decodeIfPresent(String.self, forKey: key)).flatMap { $0.isEmpty ? nil : $0 } }
+        os_name = text(.os_name)
+        // A category a later hub adds reads as none (Not identified) rather than taking the whole board down.
+        category = text(.category).flatMap(DeviceCategory.init(rawValue:))
+        model = text(.model)
+        vm_of = text(.vm_of)
+        vm_state = vm_of == nil ? nil : text(.vm_state)
+        purpose = text(.purpose)
+        reports_itself = (try? c.decodeIfPresent(Bool.self, forKey: .reports_itself)) ?? false
     }
+}
+
+/// One section of the Overview's machines.
+public struct MachineSection: Equatable, Identifiable, Sendable {
+    public var title: String
+    public var things: [TechThing]
+    public var id: String { title }
+    public init(title: String, things: [TechThing]) { self.title = title; self.things = things }
 }
 
 /// How something is doing, as a color word: red with what is wrong, green when fine, grey before anything is known.
@@ -229,6 +296,20 @@ public enum Tech {
             out.append(bar(fullest, disks.count > 1 ? "Fullest: \(label)" : label))
         }
         return out
+    }
+
+    /// The Overview's machine sections: one per kind of device, then the ones that did not say what they are (Not
+    /// identified). Empty sections are left out.
+    public static func machineSections(_ machines: [TechThing]) -> [MachineSection] {
+        var out = DeviceCategory.allCases.map { c in MachineSection(title: c.section, things: machines.filter { $0.category == c }) }
+        out.append(MachineSection(title: "Not identified", things: machines.filter { $0.category == nil }))
+        return out.filter { !$0.things.isEmpty }
+    }
+
+    /// A card's one line about what the machine is: what it runs, or the VM it is, or nothing.
+    public static func identityLine(_ t: TechThing) -> String {
+        let vm = t.vm_of.map { host in "\(t.vm_state.map { $0 == "running" ? "" : "\($0) " } ?? "")virtual machine on \(host)" } ?? ""
+        return [t.os_name ?? t.model ?? "", vm].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     /// CPU, memory and disks first on a machine's page, then GPU memory, then temperatures and the rest.

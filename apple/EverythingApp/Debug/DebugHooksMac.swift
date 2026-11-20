@@ -12,6 +12,11 @@ import EACore
 ///   -EAReferenceTest YES       the Reference screen in a window of its own (its size from -EAWindowSize); prints the
 ///                              window number. With -EAReferenceQuery <words> it searches for them; with
 ///                              -EAReferenceOpen <book>/<path> (which also opens the window) that page is in the reader
+///   -EAMachinesStart YES       Set up Machines in a window of its own; prints the window number
+///   -EAThisMacTest YES         Settings, Machines (with This Mac) in a window of its own; prints the window number.
+///                              With -EAThisMacSignIn YES its Add machine for this Mac shows, filled in, without
+///                              opening System Settings, and with -EAScrollTo thisMac This Mac is at the top
+///   -EAMachine <name>          that machine's page in a window of its own; prints the window number
 /// Screenshots are then taken from outside (screencapture -o -l <window id>), which needs Screen Recording.
 @MainActor
 enum DebugHooksMac {
@@ -23,6 +28,21 @@ enum DebugHooksMac {
         if d.bool(forKey: "EADictationTest") { let s = model.section; Task { await dictationSelfTest(section: s) } }
         if let id = d.string(forKey: "EAModuleTest") { Task { await moduleSelfTest(model, id: id) } }
         if d.bool(forKey: "EAReferenceTest") || d.string(forKey: "EAReferenceOpen") != nil { Task { await referenceSelfTest(model) } }
+        if d.bool(forKey: "EAMachinesStart") {
+            Task { await screenWindow(model, title: "Set up Machines", size: NSSize(width: 600, height: 780)) { MachinesStartSheet() } }
+        }
+        if d.bool(forKey: "EAThisMacTest") {
+            Task { await screenWindow(model, title: "Machines", size: NSSize(width: 640, height: 900)) { NavigationStack { MachinesSettingsPage() } } }
+        }
+        if let name = d.string(forKey: "EAMachine"), !name.isEmpty {
+            Task {
+                // A window of its own has no scene that is active, so the page would not load these itself.
+                try? await Task.sleep(for: .seconds(2))
+                await OpsBoardFeed.shared.load(model.engine)
+                await ReadingsFeed.shared.load(model.engine)
+                await screenWindow(model, title: name, size: NSSize(width: 760, height: 900)) { NavigationStack { HostDetailView(host: name) } }
+            }
+        }
         guard let size = d.string(forKey: "EAWindowSize").flatMap(parse) else { return }
         try? await Task.sleep(for: .seconds(1))
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else { return }
@@ -220,6 +240,34 @@ enum DebugHooksMac {
         say("window \(w.windowNumber)")
         try? await Task.sleep(for: .seconds(2))
         say("done")
+    }
+
+    /// One screen in a window of its own, with its toolbar on the window as in the app, for a screenshot: prints the
+    /// window number once the screen has had time to load what it reads.
+    static func screenWindow<V: View>(_ model: AppModel, title: String, size: NSSize, @ViewBuilder _ content: () -> V) async {
+        func say(_ s: String) { print("screen test: " + s); fflush(stdout) }
+        try? await Task.sleep(for: .seconds(3))
+        let screen = content()
+            .themedRoot()
+            .environmentObject(model)
+            .environmentObject(model.engine)
+        let w = NSWindow(contentRect: NSRect(origin: NSPoint(x: 160, y: 120), size: size), styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                         backing: .buffered, defer: false)
+        w.title = title
+        w.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: screen)
+        host.sceneBridgingOptions = .all
+        w.contentView = host
+        // On the sharpest screen, so a screenshot is at 2x when a Retina display is attached.
+        if let screen = NSScreen.screens.max(by: { $0.backingScaleFactor < $1.backingScaleFactor }) {
+            let f = screen.visibleFrame
+            w.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: max(f.minY, f.maxY - size.height - 40)))
+        } else {
+            w.center()
+        }
+        w.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .seconds(5))
+        say("\(title) window \(w.windowNumber), at \(Int(w.backingScaleFactor))x")
     }
 
     private static func parse(_ s: String) -> NSSize? {

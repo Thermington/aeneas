@@ -33,9 +33,25 @@ export function refreshModules(): Promise<void> {
 export async function setModules(changes: Record<string, boolean>): Promise<ModuleInfo[]> {
   const c = engine.client;
   if (!c) throw new Error("Not connected to a hub");
+  const was = new Set((cached ?? []).filter((m) => m.on).map((m) => m.id));
   const r = await c.setModules(changes);
+  for (const [id, on] of Object.entries(changes)) {
+    if (on && !was.has(id)) fresh.add(id);
+    else if (!on) fresh.delete(id);
+  }
   keep(r.modules);
   return r.modules;
+}
+
+/**
+ * Modules switched on from this app since it opened, whose first steps it offers until the person says Done (Machines:
+ * Add machine and this computer's choices, under its switch and at the top of Tech).
+ */
+const fresh = new Set<string>();
+export const justSwitchedOn = (id: string): boolean => fresh.has(id);
+export function doneWithFirstSteps(id: string): void {
+  fresh.delete(id);
+  listeners.forEach((f) => f());
 }
 
 /** Whether a module is on in a list (an id the list does not have is on). */

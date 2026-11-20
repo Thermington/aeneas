@@ -1124,3 +1124,5 @@ export function readingLabel(sensor: string, thing: string): string {
   const words = rest.replace(/[._]+/g, " ").trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+export { HOST_SCRIPTS } from "./hostscripts.js";

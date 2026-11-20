@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { ModuleInfo, ModulePermission } from "../../sync/api";
-import { setModules, useModules } from "../../lib/modules";
+import { doneWithFirstSteps, justSwitchedOn, setModules, useModules } from "../../lib/modules";
 import { SubPage, Toggle, errorText } from "./common";
+import { MachinesStart } from "./MachinesSetup";
 
 const ORDER = ["On your devices", "Plan", "Body and home", "Making", "Life admin", "Tech", "Assistant"];
 const GROUP_TITLE: Record<string, string> = { Assistant: "What the assistant may do" };
@@ -92,7 +93,10 @@ export function ModulePicker() {
               <div className="muted small">{mods.map((m) => m.title).join(", ")}</div>
             </summary>
             {mods.map((m) => (
-              <ModuleToggle key={m.id} m={m} busy={busy === m.id} onFlip={(v) => void flip(m.id, v)} />
+              <div key={m.id}>
+                <ModuleToggle m={m} busy={busy === m.id} onFlip={(v) => void flip(m.id, v)} />
+                {m.on && m.id === "homelab" && justSwitchedOn(m.id) && <MachinesStart onDone={() => doneWithFirstSteps(m.id)} />}
+              </div>
             ))}
           </details>
         );

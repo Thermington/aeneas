@@ -6,8 +6,10 @@ import { useEntities, useEntity } from "../sync/hooks";
 import { createEntity, updateEntity } from "../sync/edits";
 import { usePoll } from "../lib/usePoll";
 import { go, replace } from "../lib/router";
-import { checksLine, machineBars, needsALook, readingLabel, readingValue, techLight, thingStatus, type Look, type Thing } from "../lib/tech";
+import { checksLine, identityLine, machineBars, machineSections, needsALook, readingLabel, readingValue, techLight, thingStatus, type Look, type Thing } from "../lib/tech";
 import { MachinesSettings } from "./settings/HubPrivacy";
+import { MachinesStart } from "./settings/MachinesSetup";
+import { doneWithFirstSteps, justSwitchedOn, useModules } from "../lib/modules";
 import { HistoryList } from "./History";
 import { historyItems } from "../lib/history";
 import { useEscape } from "../lib/keys";
@@ -52,6 +54,8 @@ const TARGET_HINT: Record<MonitorType, string> = {
  * changes and snippets.
  */
 export function Ops({ focus: asked }: { focus?: string | null }) {
+  // Rerenders when Machines' first steps are done with (lib/modules.ts).
+  useModules();
   const p = usePoll((c) => c.ops(), 30_000);
   // Sensors may be switched off: then there are only checks.
   const sp = usePoll((c) => c.sensors(), 60_000);
@@ -118,17 +122,21 @@ export function Ops({ focus: asked }: { focus?: string | null }) {
             <h2 style={{ margin: 0 }}>Machines the hub can reach</h2>
             <button className="small ghost" onClick={() => setAdding(null)}>Close</button>
           </div>
-          <MachinesSettings />
+          <MachinesSettings onAdded={() => void reload()} />
           <div className="muted small">
             A machine with a check, fix notes or a change shows here too. For a sensor board somewhere in the house, see <a href="#/sensors">how a board posts readings</a>.
           </div>
         </div>
       )}
 
+      {justSwitchedOn("homelab") && <MachinesStart onDone={() => doneWithFirstSteps("homelab")} onAdded={() => void reload()} />}
+
       <NeedsALook looks={looks} things={things} onChanged={reloadAll} />
 
       {oldHub && <div className="muted small" style={{ marginTop: 12 }}>This hub is older than this app: update it (Settings, About) to see a card for each machine.</div>}
-      <ThingGrid title="Machines" things={machines} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
+      {machineSections(machines).map((sec) => (
+        <ThingGrid key={sec.title} title={sec.title} things={sec.things} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
+      ))}
       <ThingGrid title="Services" things={services} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
       <ThingGrid title="Places" things={places} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
       {data && !things.length && !oldHub && <div className="empty">Nothing watched yet. Add a machine, or a check for a machine or a web address.</div>}
@@ -228,6 +236,7 @@ function ThingCard({ t, monitors, sensors, hubBackup }: { t: Thing; monitors: Ma
         </div>
         <span className={`chip static tone-${st.tone}`}>{st.label}</span>
       </div>
+      {identityLine(t) && <div className="small" style={{ marginTop: 2, overflowWrap: "anywhere" }}>{identityLine(t)}</div>}
       {(line || t.hub) && <div className="muted small" style={{ marginTop: 2 }}>{[t.hub ? "the hub's machine" : "", line].filter(Boolean).join(", ")}</div>}
       {bars.map((b) => (
         <div key={b.label} className="stat-bar">

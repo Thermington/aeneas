@@ -72,6 +72,12 @@ import { APP_THEMES, DEFAULT_FEEL, MAX_IMAGES, appThemeExists, cleanPatch, norma
 import { MODULES } from "../../hub/src/modules";
 
 const mockModuleOn = new Map<string, boolean>();
+const mockMachines: { name: string; ssh?: string; os?: string; local?: boolean }[] = [
+  { name: "server", local: true, os: "linux" },
+  { name: "desktop", ssh: "alex@desktop", os: "windows" },
+  { name: "nas01", ssh: "admin@nas01", os: "linux" },
+];
+
 function mockModules() {
   return MODULES.map((m) => ({ id: m.id, title: m.title, summary: m.summary, group: m.group, on: mockModuleOn.get(m.id) ?? m.default,
     ...(m.reads ? { reads: m.reads } : {}), ...(m.permissions ? { permissions: m.permissions } : {}), ...(m.setup ? { setup: m.setup } : {}) }));
@@ -702,6 +708,8 @@ function seedOps() {
     { name: "hub health", host: "server", type: "http", target: "http://127.0.0.1:8787/health", expect: "ok", interval_s: 60 },
     { name: "ollama", host: "desktop", type: "http", target: "http://100.64.10.5:11434/api/tags", interval_s: 60 },
     { name: "server tls", host: "server", type: "tls", target: "https://hub.your-tailnet.ts.net:8787", interval_s: 300 },
+    { name: "office printer", host: "office-printer", type: "tcp", target: "192.168.1.30:9100", interval_s: 300 },
+    { name: "gateway admin", host: "gateway", type: "tcp", target: "192.168.1.1:443", interval_s: 300 },
   ];
   const end = Date.now();
   const OLLAMA_ERR = "connect ECONNREFUSED 100.64.10.5:11434";
@@ -766,6 +774,22 @@ function mockThings(monitors: Entity[], sensors: Entity[]) {
     const name = String(s.fields.name), loc = String(s.fields.location ?? "");
     const own = !!loc && name.startsWith(`${loc}.`);
     get(own ? loc : loc.toLowerCase() || "home", own ? "machine" : "place", loc || "Home").sensors.push(name);
+  }
+  // What each machine says it runs and what kind of device it is, with the facts that say so (hub/src/identify.ts);
+  // mini-pc said nothing. Purpose is the host:<name> fact, as on the hub.
+  const id: Record<string, { os_name?: string; category?: string; model?: string; reports_itself?: boolean }> = {
+    server: { os_name: "Ubuntu 26.04 LTS", category: "computer" },
+    desktop: { os_name: "Windows 11 Pro", category: "computer" },
+    nas01: { os_name: "TrueNAS SCALE 25.04", category: "computer" },
+    "office-printer": { category: "printer", model: "HP LaserJet Pro M404" },
+    laptop: { os_name: "Windows 11 Home", category: "computer", reports_itself: true },
+    gateway: { category: "network" },
+  };
+
+  const facts = new Map(allLive().filter((e) => e.kind === "fact" && String(e.fields.key ?? "").startsWith("host:")).map((e) => [String(e.fields.key).slice(5).toLowerCase(), String(e.fields.value ?? "")]));
+  for (const t of things.values()) {
+    Object.assign(t, id[t.name] ?? {});
+    if (facts.get(t.name)) (t as { purpose?: string }).purpose = facts.get(t.name);
   }
   const rank = { machine: 0, service: 1, place: 2 };
   return [...things.values()].sort((a, b) => rank[a.kind] - rank[b.kind] || a.name.localeCompare(b.name));
@@ -854,6 +878,7 @@ function seed() {
   }
   create("fact", { category: "constraint", key: "diet:no_cook", value: "Prefers meals that need no cooking on weeknights.", source: "seed", confidence: 0.95 });
   create("fact", { category: "host", key: "host:pve1", value: "Proxmox host, 64 GB RAM, NVMe boot", source: "seed", confidence: 0.9 });
+  create("fact", { category: "host", key: "host:desktop", value: "Gaming and model PC, RTX 4090. Ollama on 11434 for the hub's models; repos on the G: drive.", source: "user", confidence: 1 });
   create("fact", { category: "preference", key: "work:blocks", value: "Prefers long focus blocks in the evening.", source: "seed", confidence: 0.9 });
   create("fact", { category: "relationship", key: "dog:name", value: "Dog", source: "user", confidence: 1, private: true });
   create("rule", { text: "Plain punctuation: no em or en dashes.", enforce: "both", pattern: "\\s*[\u2014\u2013]\\s*", flags: "g", replacement: ", ", active: true });
@@ -1010,6 +1035,10 @@ function seed() {
   machine("desktop.disk.c.used", "%", 90, () => 71.4);
   machine("desktop.disk.g.used", "%", 90, (i) => 89.2 + (96 - i) * 0.02);
   machine("desktop.gpu0.temp", "°C", 85, (i) => (i < 30 ? 71 : 38));
+  // A laptop its own Aeneas app reports (PUT /devices/me/computer): the hub does not sign in to it.
+  machine("laptop.cpu.used", "%", undefined, (i) => 9 + Math.abs(Math.sin(i / 4)) * 12);
+  machine("laptop.memory.used", "%", undefined, () => 52);
+  machine("laptop.disk.c.used", "%", 90, () => 64.8);
   machine("nas01.disk.root.used", "%", 90, () => 31);
   machine("nas01.zfs.tank.pool", "%", 80, () => 46);
   machine("nas01.zfs.tank.healthy", "", undefined, () => 1);
@@ -1357,6 +1386,27 @@ const server = http.createServer(async (req, res) => {
     if (path === "/prefs/feel" && req.method === "GET") return json(res, 200, feelView());
     // Modules: the hub's own list (hub/src/modules.ts), switched in memory, so the module picker renders as on a hub.
     if (path === "/modules" && req.method === "GET") return json(res, 200, { modules: mockModules() });
+    // Machines (hosts.json) and Add machine's one-time password sign-in, as the hub answers them.
+    if (path === "/machines" && req.method === "GET") return json(res, 200, { machines: mockMachines, ssh_config: ["nas01", "backup-box"] });
+    if (path === "/machines" && req.method === "PUT") {
+      const b = await readBody(req);
+      mockMachines.splice(0, mockMachines.length, ...((b.machines as typeof mockMachines) ?? []));
+      return json(res, 200, { machines: mockMachines });
+    }
+    if (path === "/machines/setup" && req.method === "POST") {
+      const b = await readBody(req);
+      const address = String(b.address ?? "").toLowerCase();
+      await new Promise((r) => setTimeout(r, 1200));
+      if (!b.password && !b.secret) return json(res, 422, { error: "the password is needed once, to add the hub's key" });
+      if (b.password === "wrong") return json(res, 401, { error: `${address} did not accept that user name and password` });
+      if (address.startsWith("10.0.0.99")) return json(res, 409, { error: `${address} does not answer for sign-in (SSH). Turn it on there: on a Mac, System Settings, General, Sharing, Remote Login; on Windows, Settings, System, Optional features, OpenSSH Server; on Linux, install openssh-server.` });
+      // The hub names it as the machine calls itself (its hostname); the mock's machines at an IP call themselves nas02.
+      const machine = { name: /^\d/.test(address) ? "nas02" : address.split(".")[0].replace(/[^a-z0-9-]/g, "") || "machine", ssh: `${String(b.user)}@${address}`, os: "linux" };
+      mockMachines.push(machine);
+      return json(res, 200, { machine, created: true });
+    }
+    if (path === "/machines/hub-key" && req.method === "GET") return json(res, 200, { public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockMockMockMockMockMockMockMockMockMock aeneas-hub@server" });
+    if (path === "/setup" && req.method === "GET") return json(res, 200, { owner: "Alex", named: true, ai: { ollama: null, openai: null, anthropic: null }, model_ready: true, password_manager: true });
     if (path === "/modules" && req.method === "PUT") {
       for (const [id, v] of Object.entries(await readBody(req))) if (typeof v === "boolean") mockModuleOn.set(id, v);
       return json(res, 200, { modules: mockModules() });

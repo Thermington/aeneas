@@ -138,6 +138,29 @@ struct OpsView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            page
+                #if DEBUG && os(iOS)
+                // `-EAScrollTo <row>` (DebugHooks): a row of the Overview at the top, for screenshots.
+                .task {
+                    guard UserDefaults.standard.string(forKey: "EAMachine") == nil, let to = UserDefaults.standard.string(forKey: "EAScrollTo") else { return }
+                    try? await Task.sleep(for: .seconds(3))
+                    proxy.scrollTo(to, anchor: .top)
+                }
+                #endif
+        }
+    }
+
+    /// Machines by the kind of device they said they are, Not identified last (Tech.machineSections), then services and
+    /// places.
+    private func groups(_ things: [TechThing]) -> [MachineSection] {
+        Tech.machineSections(things.filter { $0.kind == .machine })
+            + [MachineSection(title: "Services", things: things.filter { $0.kind == .service }),
+               MachineSection(title: "Places", things: things.filter { $0.kind == .place })].filter { !$0.things.isEmpty }
+    }
+
+    @ViewBuilder
+    private var page: some View {
         let monitors = self.monitors
         let sensors = self.sensors
         let things = self.things(monitors, sensors)
@@ -160,25 +183,22 @@ struct OpsView: View {
                     ForEach(looks) { l in
                         let row = LookRow(look: l, thing: byName[l.thing], onAck: { acking = $0 })
                         if l.thing.isEmpty {
-                            row
+                            row.id(l.key)
                         } else {
-                            NavigationLink { HostDetailView(host: l.thing) } label: { row }
+                            NavigationLink { HostDetailView(host: l.thing) } label: { row }.id(l.key)
                         }
                     }
                 }
             }
 
-            ForEach([(ThingKind.machine, "Machines"), (.service, "Services"), (.place, "Places")], id: \.0) { group in
-                let shown = things.filter { $0.kind == group.0 }
-                if !shown.isEmpty {
-                    SwiftUI.Section(group.1) {
-                        ForEach(shown) { t in
-                            NavigationLink { HostDetailView(host: t.name) } label: {
-                                ThingRow(thing: t, status: Tech.status(of: t, monitors: byMonitor, sensors: bySensor, hubBackup: board?.hub_backup ?? []),
-                                         line: Tech.checksLine(t, monitors: byMonitor),
-                                         bars: t.kind == .place ? [] : Tech.machineBars(t, sensors: bySensor),
-                                         readings: t.kind == .place ? t.sensors.compactMap { bySensor[$0] } : [])
-                            }
+            ForEach(groups(things)) { group in
+                SwiftUI.Section(group.title) {
+                    ForEach(group.things) { t in
+                        NavigationLink { HostDetailView(host: t.name) } label: {
+                            ThingRow(thing: t, status: Tech.status(of: t, monitors: byMonitor, sensors: bySensor, hubBackup: board?.hub_backup ?? []),
+                                     line: Tech.checksLine(t, monitors: byMonitor),
+                                     bars: t.kind == .place ? [] : Tech.machineBars(t, sensors: bySensor),
+                                     readings: t.kind == .place ? t.sensors.compactMap { bySensor[$0] } : [])
                         }
                     }
                 }
@@ -437,6 +457,9 @@ struct ThingRow: View {
                 Spacer(minLength: 6)
                 TechStatusPill(status: status)
             }
+            // What it runs or its model, and the VM it is (Tech.identityLine); nothing when it gave neither.
+            let identity = Tech.identityLine(thing)
+            if !identity.isEmpty { Text(identity).font(.subheadline) }
             let sub = [thing.hub ? "the hub's machine" : "", line].filter { !$0.isEmpty }.joined(separator: ", ")
             if !sub.isEmpty { Text(sub.prefix(1).uppercased() + sub.dropFirst()).font(.caption).foregroundStyle(.secondary) }
             ForEach(bars) { TechBarRow(bar: $0) }

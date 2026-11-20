@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { allowed, swiftPinProblems } from "./check.mjs";
+import { allowed, legacyLicense, swiftPinProblems } from "./check.mjs";
 
 test("license expressions: OR needs one allowed side, AND needs both, unknown and missing fail", () => {
   for (const ok of ["MIT", "MIT OR Apache-2.0", "(MIT OR WTFPL)", "MIT/Apache-2.0", "Apache-2.0 / MIT", "(MIT OR Apache-2.0) AND Unicode-3.0", "Apache-2.0 WITH LLVM-exception", "MIT OR Apache-2.0 OR LGPL-2.1-or-later", "BSD-3-Clause AND MIT"]) assert.equal(allowed(ok), true, ok);
@@ -17,4 +17,13 @@ test("Swift pins: approved packages pass, any other remote package fails", () =>
   assert.deepEqual(swiftPinProblems(pin("https://github.com/n0-computer/iroh-ffi.git"), "a/Package.resolved"), []);
   assert.match(swiftPinProblems(pin("https://github.com/someone/other"), "a/Package.resolved")[0], /not an approved Swift package/);
   assert.deepEqual(swiftPinProblems(JSON.stringify({ pins: [] }), "a/Package.resolved"), []);
+});
+
+test("a license in npm's older list form is read, and still has to be allowed", () => {
+  assert.equal(legacyLicense({ licenses: [{ type: "MIT", url: "https://example.org/LICENSE" }] }), "MIT");
+  assert.equal(legacyLicense({ licenses: [{ type: "MIT" }, { type: "Apache-2.0" }] }), "(MIT OR Apache-2.0)");
+  assert.equal(legacyLicense({ licenses: [{ type: "MIT; rm -rf" }] }), "");
+  assert.equal(legacyLicense({}), "");
+  assert.ok(allowed(legacyLicense({ licenses: [{ type: "MIT" }] })));
+  assert.ok(!allowed(legacyLicense({ licenses: [{ type: "GPL-3.0" }] })));
 });

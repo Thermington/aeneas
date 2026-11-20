@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS ai_actions (
   exit_code INTEGER,
   output TEXT,
   journal_id TEXT,
-  lookup INTEGER NOT NULL DEFAULT 0
+  lookup INTEGER NOT NULL DEFAULT 0,
+  payload TEXT
 );
 CREATE INDEX IF NOT EXISTS ai_actions_session ON ai_actions(session_id, created_at);
 `;
@@ -199,6 +200,8 @@ export function openChatDb(dbPath: string): DB {
   // Since 2026-11-19: an approved command the model said only looks (its journal entry stays out of History).
   const cols = new Set((db.prepare("PRAGMA table_info(ai_actions)").all() as { name: string }[]).map((c) => c.name));
   if (!cols.has("lookup")) db.exec("ALTER TABLE ai_actions ADD COLUMN lookup INTEGER NOT NULL DEFAULT 0");
+  // Since 2026-11-20: a machine setup the assistant proposed (kind setup): its address, user and password item.
+  if (!cols.has("payload")) db.exec("ALTER TABLE ai_actions ADD COLUMN payload TEXT");
   return db;
 }
 

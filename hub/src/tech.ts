@@ -4,11 +4,12 @@ import { findHost, loadHosts, type Host, type HostOs } from "./ai/hosts.js";
 import type { Hub } from "./hub.js";
 import { StoreError } from "./store.js";
 import { sensorHosts } from "./hostsensors.js";
-import { hostsSummary } from "./memory.js";
+import { hostFacts, hostsSummary } from "./memory.js";
 import { monitorOrThrow } from "./monitors.js";
 import { diaryDay } from "./diary.js";
 import { personalize } from "./profile.js";
 import { errCode } from "./logsafe.js";
+import { readMachineInfo, type Category } from "./machineinfo.js";
 
 /**
  * Tech (Module 4 and 6, since 2026-11-19): every check and reading belongs to one thing, so the apps show one card
@@ -37,6 +38,19 @@ export interface Thing {
   os?: HostOs;
   /** The machine the hub runs on. */
   hub?: boolean;
+  /** What the machine itself says it runs (machineinfo.ts): machines the hub signs in to, and VMs with a guest agent. */
+  os_name?: string;
+  /** What kind of device it is, only with decent confidence (identify.ts); none: not identified. */
+  category?: Category;
+  /** The exact name it gives for itself (a printer's make and model), shown beside the kind. */
+  model?: string;
+  /** A virtual machine or container on this Proxmox host, and its state there. */
+  vm_of?: string;
+  vm_state?: string;
+  /** What it is for, in the owner's words: its fact `host:<name>` in Memory, which the assistant reads too. */
+  purpose?: string;
+  /** A computer its own Aeneas app reports (PUT /devices/me/computer), which the hub does not sign in to. */
+  reports_itself?: boolean;
 }
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -95,6 +109,20 @@ export function techThings(hub: Hub): Thing[] {
     const own = !!loc && name.toLowerCase().startsWith(`${loc.toLowerCase()}.`);
     const t = things.get(k) ?? thing(k, own || known(k) ? "machine" : "place", loc || "Home");
     t.sensors.push(name);
+  }
+  const info = readMachineInfo(hub);
+  // A computer its app reports is a machine even before its first reading (Sensors off shows it with its OS).
+  for (const [n, i] of Object.entries(info)) if (i.reported_by && !things.has(n)) thing(n, "machine");
+  const purposes = hostFacts(hub.store);
+  for (const t of things.values()) {
+    const i = info[t.name];
+    if (i?.os) t.os_name = i.os;
+    if (i?.category) t.category = i.category;
+    if (i?.model) t.model = i.model;
+    if (i?.vm_of) { t.vm_of = i.vm_of; if (i.vm_state) t.vm_state = i.vm_state; }
+    const p = purposes.get(t.name);
+    if (p) t.purpose = p;
+    if (i?.reported_by && !t.reachable) t.reports_itself = true;
   }
   return [...things.values()].sort((a, b) => RANK[a.kind] - RANK[b.kind] || a.name.localeCompare(b.name));
 }

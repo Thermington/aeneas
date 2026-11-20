@@ -1385,11 +1385,16 @@ export const spawnRunner: Runner = (host, command, timeoutS) => new Promise((res
 
 export interface ActionRow {
   id: string; session_id: string; host: string; command: string; purpose: string; rollback: string | null;
-  kind: "read" | "change"; status: "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled" | "expired";
+  kind: "read" | "change" | "setup"; status: "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled" | "expired";
   created_at: string; ran_at: string | null; exit_code: number | null; output: string | null; journal_id: string | null;
   /** 1: the model said it only looks (it still needed approval); its journal entry is marked so History leaves it out. */
   lookup?: number;
+  /** kind setup: the machine to set up, JSON { address, user, secret, name? } (machinesetup.ts). */
+  payload?: string | null;
 }
+
+/** A machine setup the assistant proposes: where, as whom, and the password manager item that holds the password. */
+export interface SetupRequest { address: string; user: string; secret: string; name?: string }
 
 export const ACTION_TTL_MS = 60 * 60 * 1000;
 /** How long an approved change may run (an upgrade or a backup takes minutes); reads stop at EA_COMMAND_TIMEOUT_S. */
@@ -1446,8 +1451,42 @@ export class HostActions {
   }
 
   private insert(row: Omit<ActionRow, "ran_at" | "exit_code" | "output" | "journal_id">): void {
-    this.db.prepare("INSERT INTO ai_actions (id, session_id, host, command, purpose, rollback, kind, status, created_at, lookup) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(row.id, row.session_id, row.host, row.command, row.purpose, row.rollback, row.kind, row.status, row.created_at, row.lookup ? 1 : 0);
+    this.db.prepare("INSERT INTO ai_actions (id, session_id, host, command, purpose, rollback, kind, status, created_at, lookup, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.id, row.session_id, row.host, row.command, row.purpose, row.rollback, row.kind, row.status, row.created_at, row.lookup ? 1 : 0, row.payload ?? null);
+  }
+
+  /** Sets up the hub's access to a new machine (hub.ts wires machinesetup.ts with the password manager). */
+  setupMachine: ((req: SetupRequest) => Promise<{ machine: { name: string; ssh?: string; os?: string } }>) | null = null;
+
+  /**
+   * The assistant proposes adding a machine: it runs only when the owner approves, like a change. The password comes
+   * from the password manager item at that moment and never passes through the chat or the model.
+   */
+  proposeSetup(sessionId: string, req: SetupRequest, purpose: string): ActionRow {
+    this.db.prepare("UPDATE ai_actions SET status = 'cancelled' WHERE session_id = ? AND status = 'pending'").run(sessionId);
+    const id = crypto.randomUUID();
+    const command = `add the hub's SSH key to ${req.user}@${req.address} (password from {{secret:${req.secret}}}), then add it as a machine`;
+    this.insert({ id, session_id: sessionId, host: req.address, command, purpose, rollback: "remove the hub's key from that account's authorized keys, and the machine from Add machine", kind: "setup", status: "pending", created_at: nowIso(), payload: JSON.stringify(req) });
+    return this.get(id)!;
+  }
+
+  private async approveSetup(a: ActionRow): Promise<{ action: ActionRow; result: RunResult; journal: Entity }> {
+    const req = JSON.parse(a.payload ?? "{}") as SetupRequest;
+    const journal = this.store.create("journal", { host: (req.name || req.address).toLowerCase(), at: nowIso(), what: `Set up the hub's access to ${req.user}@${req.address}`, command: a.command, risk: "medium", rollback: a.rollback ?? undefined, outcome: "running", session_id: a.session_id });
+    this.db.prepare("UPDATE ai_actions SET status = 'running', ran_at = ?, journal_id = ? WHERE id = ?").run(nowIso(), journal.id, a.id);
+    const t0 = Date.now();
+    try {
+      if (!this.setupMachine) throw new Error("machine setup is not available on this hub");
+      const out = await this.setupMachine(req);
+      // The History line goes on the machine as it was named (its own name, not the address it was reached at).
+      if (out.machine.name !== journal.fields.host) this.store.patch(journal.id, { host: out.machine.name });
+      const done = this.finish(a.id, journal.id, "done", 0, `added ${out.machine.name} (${out.machine.ssh ?? ""}, ${out.machine.os ?? "unknown OS"})`);
+      return { action: this.get(a.id)!, result: { exit_code: 0, output: `added ${out.machine.name}`, timed_out: false, ms: Date.now() - t0 }, journal: done };
+    } catch (e) {
+      const msg = (e as Error).message.slice(0, 300);
+      this.finish(a.id, journal.id, "failed", 1, msg);
+      throw new Error(msg);
+    }
   }
 
   private setStatus(id: string, status: ActionRow["status"]): void {
@@ -1492,6 +1531,7 @@ export class HostActions {
     if (!a) throw new Error("no such action");
     if (a.status !== "pending") throw new Error(`action is ${a.status}, not pending`);
     if (Date.now() - Date.parse(a.created_at) > ACTION_TTL_MS) { this.setStatus(id, "expired"); throw new Error("action expired; ask again"); }
+    if (a.kind === "setup") return this.approveSetup(a);
     const host = this.host(a.host);
     if (!host) throw new Error(`host ${a.host} is no longer known`);
     // Secrets go in only now, after approval; the stored command and the journal keep the {{secret:...}} names.

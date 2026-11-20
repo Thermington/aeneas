@@ -8,7 +8,7 @@ import { Store } from "./store.js";
 import { Vault } from "./vault.js";
 import { Gateway } from "./ai/index.js";
 import { KnowledgeMap } from "./notes.js";
-import { fillSecrets, hubSecretValues } from "./secrets.js";
+import { fillSecrets, hubSecretValues, secretValue } from "./secrets.js";
 import { addSensitivePath, adoptSshHosts } from "./ai/hosts.js";
 import { ProfileStore } from "./profile.js";
 import { applyAiSettings, readAiSettings, sealAiSettings } from "./setup.js";
@@ -23,6 +23,7 @@ import { installRecordHooks } from "./records.js";
 import { installProjectHooks } from "./projects.js";
 import { defaultCheckers, installMonitorHooks, mergeBackupMonitors, type Checkers } from "./monitors.js";
 import { installHistory } from "./history.js";
+import { setupMachineAccess } from "./machinesetup.js";
 import { backupChecker, sshRunner } from "./backups.js";
 import { installAdminHooks, syncApplicationReminder } from "./admin.js";
 import { linkedTask, migrateRemindersToTasks, syncLinkedTask } from "./reminders.js";
@@ -179,6 +180,8 @@ export function createHub(cfg: Config): Hub {
   ai.hosts.runner = (host, command, timeoutS, meta) => (host.helper ? runOnHelped(hub, host, command, timeoutS, meta) : sshOrLocal(host, command, timeoutS, meta));
   // An approved command that names a password manager item gets its value only when it runs.
   ai.hosts.fillSecrets = (command, host) => fillSecrets(hub, command, host.os);
+  // A machine the assistant was approved to add: the password is read from the item now, in the hub, and used once.
+  ai.hosts.setupMachine = async (req) => setupMachineAccess(hub, { address: req.address, user: req.user, password: await secretValue(hub, req.secret), ...(req.name ? { name: req.name } : {}) });
   // No command shows the hub's own secrets: reads of its folders wait for approval, and its values are cut from output.
   ai.hosts.hiddenValues = () => hubSecretValues(hub);
   for (const p of [cfg.dataDir, path.dirname(cfg.workKeyFile), path.dirname(cfg.backupKeyFile)]) addSensitivePath(path.resolve(p));

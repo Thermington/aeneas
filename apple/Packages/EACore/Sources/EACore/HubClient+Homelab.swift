@@ -144,6 +144,32 @@ public struct HubMachines: Decodable, Equatable, Sendable {
     }
 }
 
+/// `POST /machines/setup`: the machine the hub added (or set up again for the same account), named as it calls itself.
+public struct MachineSetup: Decodable, Equatable, Sendable {
+    public var machine: HubMachine
+    /// False when the same account was already one of the hub's machines and only its entry changed.
+    public var created: Bool
+}
+
+/// `PUT /devices/me/computer`: what the hub did with this computer's readings.
+public struct ComputerReport: Decodable, Equatable, Sendable {
+    /// The name the hub keeps it under.
+    public var name: String
+    /// The hub signs in to this computer itself and keeps its own readings: nothing was stored.
+    public var read_by_hub: Bool
+    /// Readings kept (0 while Sensors is off on the hub).
+    public var kept: Int
+
+    enum CodingKeys: String, CodingKey { case name, read_by_hub, kept }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        read_by_hub = (try? c.decodeIfPresent(Bool.self, forKey: .read_by_hub)) ?? false
+        kept = Int((try? c.decodeIfPresent(Double.self, forKey: .kept)) ?? 0)
+    }
+}
+
 /// One row of `GET /monitors/:id/history`.
 public struct MonitorCheck: Decodable, Equatable, Sendable {
     public var at: String
@@ -223,6 +249,35 @@ extension HubClient {
         struct B: Encodable { var machines: [HubMachine] }
         struct R: Decodable { var machines: [HubMachine] }
         return try await post("machines", B(machines: machines), as: R.self, method: "PUT").machines
+    }
+
+    /// `POST /machines/setup` (Add machine): the hub signs in once with the password, or with a password manager item
+    /// it reads in its own process (`secret`, "Name" or "Folder/Name"), puts its own key there, checks that the key
+    /// signs in and only then adds the machine. Its refusals are sentences for people (401 wrong password, 409 no SSH,
+    /// 422 a bad address or user). The password goes in this one request body and nowhere else.
+    public func setupMachine(address: String, user: String, password: String? = nil, secret: String? = nil, name: String? = nil) async throws -> MachineSetup {
+        struct B: Encodable { var address: String; var user: String; var password: String?; var secret: String?; var name: String? }
+        return try await post("machines/setup", B(address: address, user: user, password: password, secret: secret, name: name), as: MachineSetup.self)
+    }
+
+    /// `GET /machines/hub-key`: the hub's public SSH key, for a machine whose key is added by hand.
+    public func hubKey() async throws -> String {
+        struct R: Decodable { var public_key: String }
+        return try await get("machines/hub-key", as: R.self).public_key
+    }
+
+    /// `PUT /devices/me/computer`: the computer this app runs on sends its readings (ThisComputer.lines) with this
+    /// device's own key. 404 from a hub older than the route.
+    public func reportComputer(name: String, output: String) async throws -> ComputerReport {
+        struct B: Encodable { var name: String; var output: String }
+        return try await post("devices/me/computer", B(name: name, output: output), as: ComputerReport.self, method: "PUT")
+    }
+
+    /// `GET /setup` `password_manager`: whether a password manager is linked, so Add machine can offer an item instead
+    /// of a password.
+    public func passwordManagerLinked() async throws -> Bool {
+        struct R: Decodable { var password_manager: Bool? }
+        return try await get("setup", as: R.self).password_manager ?? false
     }
 
     // MARK: Ops (Module 6)

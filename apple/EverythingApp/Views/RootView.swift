@@ -59,6 +59,11 @@ struct RootView: View {
         .sheet(item: Binding(get: { model.isConfigured && !model.showingSettings ? model.permissionOffer : nil }, set: { if $0 == nil, !model.showingSettings { model.permissionOffer = nil } })) { offer in
             PermissionsOfferView(offer: offer).environmentObject(model)
         }
+        // Machines switched on here: Set up Machines, once the permission screen (if any) is answered.
+        .sheet(isPresented: Binding(get: { model.isConfigured && !model.showingSettings && model.permissionOffer == nil && model.machinesStart },
+                                    set: { if !$0, !model.showingSettings { model.machinesStart = false } })) {
+            MachinesStartSheet().environmentObject(model).environmentObject(engine)
+        }
         .sheet(item: Binding(get: { model.openItemId.map { PendingSnooze(id: $0) } }, set: { model.openItemId = $0?.id })) { p in
             NavigationStack {
                 ItemView(id: p.id)
@@ -198,6 +203,10 @@ struct PhoneRoot: View {
             // here (a sheet cannot open under another one).
             .sheet(item: Binding(get: { model.permissionOffer }, set: { if $0 == nil { model.permissionOffer = nil } })) { offer in
                 PermissionsOfferView(offer: offer).environmentObject(model)
+            }
+            // Machines switched on in Settings, Modules: Set up Machines over Settings too, after the permission screen.
+            .sheet(isPresented: Binding(get: { model.permissionOffer == nil && model.machinesStart }, set: { if !$0 { model.machinesStart = false } })) {
+                MachinesStartSheet().environmentObject(model).environmentObject(engine)
             }
         }
         // Anything that asks for Settings by section opens the sheet instead.

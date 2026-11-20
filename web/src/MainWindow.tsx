@@ -7,6 +7,7 @@ import { UpdateToast } from "./components/UpdateToast";
 import { IfModule, ModuleGate } from "./components/ModuleGate";
 import { HelperOfferBanner } from "./components/HelperOffer";
 import { startHelperAgent } from "./lib/helperAgent";
+import { startComputerReports } from "./lib/thisComputer";
 
 /**
  * The main window around a screen: sidebar and tab bar, banners and toasts. A file of its own, loaded only by the main
@@ -14,7 +15,7 @@ import { startHelperAgent } from "./lib/helperAgent";
  */
 export function MainWindow({ route, view }: { route: Route; view: ReactNode }) {
   // The Windows app on a helped person's computer runs their helper's commands (lib/helperAgent.ts).
-  useEffect(() => { void startHelperAgent(); }, []);
+  useEffect(() => { void startHelperAgent(); void startComputerReports(); }, []);
   return (
     <Shell route={route}>
       <div className="banners">

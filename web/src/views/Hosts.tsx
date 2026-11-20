@@ -1,14 +1,15 @@
+import { plainError } from "../lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Entity } from "@everythingapp/shared";
 import { useEntities, useEntity } from "../sync/hooks";
-import { createEntity, softDelete } from "../sync/edits";
+import { createEntity, softDelete, updateEntity } from "../sync/edits";
 import { engine } from "../sync/engine";
 import { copyText } from "../sync/memory";
 import { type RunbookCommand, type RunbookF, type SnippetF } from "../lib/memory";
 import { Markdown } from "../components/Markdown";
 import { replace } from "../lib/router";
 import { usePoll } from "../lib/usePoll";
-import { targetHost, thingStatus, type Thing } from "../lib/tech";
+import { identityLine, kindName, targetHost, thingStatus, type Thing } from "../lib/tech";
 import type { OpsMonitor } from "../lib/ops";
 import { HubBackupCard, MonitorCard, MonitorEditor } from "./Ops";
 import { ReadingCard } from "./Sensors";
@@ -275,13 +276,21 @@ function ThingStatus({ host, focus }: { host: string; focus?: string }) {
 
   return (
     <>
+      {self.kind === "machine" && thing && (
+        <div style={{ marginTop: 2, overflowWrap: "anywhere" }}>
+          <strong>{kindName(self)}</strong>
+          {identityLine(self) && <span className="muted"> · {identityLine(self)}</span>}
+        </div>
+      )}
       <div className="row" style={{ gap: 8, marginTop: 4 }}>
         <span className={`chip static tone-${st.tone}`}>{st.label}</span>
         <span className="muted small">
-          {[self.hub ? "the machine the hub runs on" : "", self.kind === "service" ? "a service on the internet" : self.kind === "place" ? "sensor boards here" : "", self.reachable ? "the hub reads it and the assistant can run commands on it" : self.kind === "machine" && !self.hub ? "checked from the hub" : ""].filter(Boolean).join("; ")}
+          {[self.hub ? "the machine the hub runs on" : "", self.kind === "service" ? "a service on the internet" : self.kind === "place" ? "sensor boards here" : "", self.reachable ? "the hub reads it and the assistant can run commands on it" : self.reports_itself ? "its Aeneas app sends its readings" : self.kind === "machine" && !self.hub ? "checked from the hub" : ""].filter(Boolean).join("; ")}
         </span>
       </div>
 
+
+      {self.kind === "machine" && <Purpose name={key} />}
 
       {(monitors.length > 0 || hubBackup.length > 0 || self.kind !== "place") && (
         <section style={{ marginTop: 16 }}>
@@ -321,6 +330,51 @@ function ThingStatus({ host, focus }: { host: string; focus?: string }) {
         <HistoryList items={history} />
       </section>
     </>
+  );
+}
+
+/**
+ * What this machine is for, in the owner's words: its fact `host:<name>` in Memory, which the assistant reads whenever
+ * the machine comes up, and which it writes itself when told ("pve1 runs the domain controllers"). Saving empty removes it.
+ */
+function Purpose({ name }: { name: string }) {
+  const facts = useEntities("fact", (e) => String(e.fields.key ?? "").trim().toLowerCase() === `host:${name}`, [name]);
+  const fact = facts[0];
+  const value = typeof fact?.fields.value === "string" ? fact.fields.value : "";
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+  const [err, setErr] = useState("");
+  useEffect(() => { if (!editing) setText(value); }, [value, editing]);
+  const save = async () => {
+    setErr("");
+    const next = text.trim();
+    try {
+      if (fact && !next) await softDelete(fact);
+      else if (fact) await updateEntity(fact, { value: next });
+      else if (next) await createEntity("fact", { category: "host", key: `host:${name}`, value: next, source: "user", confidence: 1 });
+      setEditing(false);
+    } catch (e) {
+      setErr(plainError(e));
+    }
+  };
+  return (
+    <section style={{ marginTop: 12 }}>
+      <div className="row between">
+        <h2 style={{ margin: 0 }}>Purpose</h2>
+        {!editing && <button className="small ghost" onClick={() => setEditing(true)}>{value ? "Edit" : "Add"}</button>}
+      </div>
+      {!editing && (value ? <div style={{ marginTop: 4, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{value}</div> : <div className="muted small" style={{ marginTop: 4 }}>What it is for and how it is set up. The assistant reads this whenever {name} comes up.</div>)}
+      {editing && (
+        <form className="col" style={{ marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); void save(); }}>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={2000} aria-label={`What ${name} is for`} placeholder="Proxmox host for the domain controllers; backups go to the NAS at night" autoFocus />
+          <div className="row">
+            <button type="submit" className="small primary">Save</button>
+            <button type="button" className="small ghost" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+          {err && <div className="error">{err}</div>}
+        </form>
+      )}
+    </section>
   );
 }
 

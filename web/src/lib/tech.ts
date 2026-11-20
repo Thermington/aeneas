@@ -20,7 +20,49 @@ export interface Thing {
   reachable: boolean;
   os?: string;
   hub?: boolean;
+  /** What the machine itself says it runs ("Ubuntu 26.04 LTS"): machines the hub signs in to, and VMs with a guest agent. */
+  os_name?: string;
+  /** What kind of device it is, only with decent confidence (the hub weighs what the device says); none: not identified. */
+  category?: Category;
+  /** The exact name it gives for itself (a printer's make and model). */
+  model?: string;
+  /** A virtual machine or container on this Proxmox host, and its state there. */
+  vm_of?: string;
+  vm_state?: string;
+  /** What it is for, in the owner's words: its fact `host:<name>` in Memory, which the assistant reads. */
+  purpose?: string;
+  /** A computer its own Aeneas app reports: the hub reads it through the app and does not sign in to it. */
+  reports_itself?: boolean;
 }
+
+export type Category = "computer" | "network" | "printer" | "camera" | "other";
+/** The kinds of device in the Overview's order, with their section titles and names. */
+export const CATEGORIES: { category: Category; section: string; one: string }[] = [
+  { category: "computer", section: "Computers", one: "Computer" },
+  { category: "network", section: "Network", one: "Network device" },
+  { category: "printer", section: "Printers", one: "Printer" },
+  { category: "camera", section: "Cameras", one: "Camera" },
+  { category: "other", section: "Other devices", one: "Device" },
+];
+
+/**
+ * The Overview's machine sections: one per kind of device, then the ones that did not say what they are (Not
+ * identified). Empty sections are left out.
+ */
+export function machineSections(machines: Thing[]): { title: string; things: Thing[] }[] {
+  const out = CATEGORIES.map((c) => ({ title: c.section, things: machines.filter((t) => t.category === c.category) }));
+  out.push({ title: "Not identified", things: machines.filter((t) => !t.category) });
+  return out.filter((x) => x.things.length);
+}
+
+/** One line about what the machine is: what it runs or its model, and the VM it is; empty when it gave neither. */
+export function identityLine(t: Thing): string {
+  const vm = t.vm_of ? `${t.vm_state && t.vm_state !== "running" ? `${t.vm_state} ` : ""}virtual machine on ${t.vm_of}` : "";
+  return [t.os_name ?? t.model, vm].filter(Boolean).join(", ");
+}
+
+/** "Computer", "Printer"...; "Not identified" when the hub is not sure. */
+export const kindName = (t: Thing) => CATEGORIES.find((c) => c.category === t.category)?.one ?? "Not identified";
 
 export type Tone = "ok" | "danger" | "muted";
 

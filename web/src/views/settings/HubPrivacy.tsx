@@ -4,6 +4,7 @@ import { engine } from "../../sync/engine";
 import type { HubMachine } from "../../sync/api";
 import { errorText } from "./common";
 import { useHubReady } from "../../sync/hooks";
+import { AddMachineForm, HubKey } from "./MachinesSetup";
 
 const label = (d: number) => (d === 0 ? "Forever" : d === 365 ? "1 year" : `${d} days`);
 
@@ -53,7 +54,7 @@ export function RetentionSettings({ suggest = false }: { suggest?: boolean }) {
  * The machines the assistant may run commands on and the sensors read. Only machines listed here are reached; names from
  * the hub machine's SSH config can be added with one tap.
  */
-export function MachinesSettings() {
+export function MachinesSettings({ onAdded }: { onAdded?: () => void } = {}) {
   const [list, setList] = useState<HubMachine[] | null>(null);
   const [ssh, setSsh] = useState<string[]>([]);
   const [name, setName] = useState("");
@@ -84,10 +85,16 @@ export function MachinesSettings() {
           {offer.map((n) => <button key={n} type="button" className="chip" onClick={() => save([...list, { name: n.toLowerCase(), ssh: n }])}>Add {n}</button>)}
         </div>
       )}
-      <form className="row" onSubmit={(e) => { e.preventDefault(); const m = machineFromInput(name); if (m) { save([...list, m]); setName(""); } }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name or SSH host" aria-label="Machine name or SSH host" autoCapitalize="off" spellCheck={false} />
-        <button type="submit" disabled={!name.trim()}>Add</button>
-      </form>
+      <AddMachineForm onAdded={(m) => { setList((l) => [...(l ?? []).filter((x) => x.name !== m.name), m]); onAdded?.(); }} />
+      <details>
+        <summary className="small">The hub can already sign in to it</summary>
+        <form className="row" style={{ marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); const m = machineFromInput(name); if (m) { save([...list, m]); setName(""); } }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name or SSH host" aria-label="Machine name or SSH host" autoCapitalize="off" spellCheck={false} />
+          <button type="submit" disabled={!name.trim()}>Add</button>
+        </form>
+        <div className="muted small">For a machine whose key is already set up on the hub's machine: an SSH config name, or user@address.</div>
+        <HubKey />
+      </details>
       {err && <div className="error">{err}</div>}
     </div>
   );

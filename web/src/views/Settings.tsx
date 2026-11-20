@@ -25,6 +25,8 @@ import { ConnectionsPage, connectionsSummary, useConnections } from "./settings/
 import { DevicesList, PairDevice } from "./settings/Devices";
 import { LinkChoice } from "./settings/Link";
 import { MachinesSettings, RetentionSettings } from "./settings/HubPrivacy";
+import { ThisComputer } from "./settings/MachinesSetup";
+import { canUseThisComputer } from "../lib/thisComputer";
 import { HubUpdateCard } from "./settings/HubUpdate";
 import { keyKind } from "./Setup";
 import { saveBlob } from "../lib/download";
@@ -278,6 +280,12 @@ function Connection() {
         <h2>Machines</h2>
         <MachinesSettings />
       </div>
+      {canUseThisComputer && (
+        <div className="card col">
+          <h2>This computer</h2>
+          <ThisComputer />
+        </div>
+      )}
       <div className="card col">
         <h2>Sync</h2>
         <dl className="facts">

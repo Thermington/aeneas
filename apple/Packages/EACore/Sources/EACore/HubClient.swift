@@ -138,7 +138,8 @@ public struct HTTPTransport: HubTransport {
     /// writing them: on the iPhone, and on the Watch, whose requests the iPhone relays through this transport.
     public static func timeout(path: String) -> TimeInterval? {
         // agent/jobs: a helped person's Mac waits up to 25 s for its helper's next command (Helpers.swift).
-        path == "ai/chat" ? 300 : path == "agent/jobs" ? 60 : nil
+        // machines/setup: the hub gives the first sign-in 20 s, then adds its key and signs in again with it.
+        path == "ai/chat" ? 300 : path == "agent/jobs" ? 60 : path == "machines/setup" ? 90 : nil
     }
 
     /// Request bodies are JSON except a vault note (markdown) and an image shape (PNG).

@@ -1,3 +1,6 @@
+import { adoptComputer, hubPublicKey, setupMachineAccess } from "../machinesetup.js";
+import { reportComputer } from "../hostsensors.js";
+import { secretValue } from "../secrets.js";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { ChatRequest } from "@everythingapp/shared";
@@ -10,7 +13,7 @@ import { errCode } from "../logsafe.js";
 import { readMachines, sshConfigNames, writeMachines, type HostFileEntry } from "../ai/hosts.js";
 
 export function aiRoutes() {
-  const r = new Hono<{ Variables: { hub: Hub } }>();
+  const r = new Hono<{ Variables: { hub: Hub; device_id?: string } }>();
 
   r.post("/ai/chat", async (c) => {
     const hub = c.get("hub");
@@ -130,6 +133,39 @@ export function aiRoutes() {
     const hub = c.get("hub");
     return c.json({ machines: readMachines(hub.cfg) ?? [], ssh_config: sshConfigNames(hub.cfg) });
   });
+  // Add machine with a one-time password (or a password manager item): the hub puts its own key on the machine,
+  // checks that signing in with it works, then adds it (machinesetup.ts). The password is never stored or logged.
+  r.post("/machines/setup", async (c) => {
+    const hub = c.get("hub");
+    const body = await readJsonObject(c);
+    const str = (v: unknown) => (typeof v === "string" ? v : "");
+    let password = str(body.password);
+    const secret = str(body.secret).trim();
+    if (!password && secret) {
+      try { password = await secretValue(hub, secret); } catch (e) { throw new StoreError(409, `the password manager did not give a password for that item: ${(e as Error).message}`); }
+    }
+    return c.json(await setupMachineAccess(hub, { address: str(body.address), user: str(body.user), password, ...(str(body.name) ? { name: str(body.name) } : {}) }));
+  });
+  /** The hub's public SSH key, for an app setting up the hub's access to its own computer. */
+  r.get("/machines/hub-key", async (c) => c.json({ public_key: await hubPublicKey() }));
+  // The computer an app runs on reports itself: { name, output } with the output of HOST_SCRIPTS for its OS.
+  r.put("/devices/me/computer", async (c) => {
+    const id = c.get("device_id");
+    if (!id) throw new StoreError(400, "only a device signed in with its own key reports its computer");
+    const body = await readJsonObject(c);
+    return c.json(reportComputer(c.get("hub"), id, { name: String(body.name ?? ""), output: String(body.output ?? "") }));
+  });
+  // ...and, when the person lets it, sets up the hub's access to it: { name, user, os, host_keys, addresses? }.
+  r.post("/devices/me/computer/access", async (c) => {
+    if (!c.get("device_id")) throw new StoreError(400, "only a device signed in with its own key sets up its computer");
+    const body = await readJsonObject(c);
+    const os = body.os === "windows" || body.os === "macos" || body.os === "linux" ? body.os : null;
+    if (!os) throw new StoreError(422, "os is windows, macos or linux");
+    const given = Array.isArray(body.addresses) ? body.addresses.map(String) : [];
+    const from = callerAddress(c);
+    const addresses = [...given, ...(from ? [from] : [])];
+    return c.json(await adoptComputer(c.get("hub"), { name: String(body.name ?? ""), user: String(body.user ?? ""), os, host_keys: Array.isArray(body.host_keys) ? body.host_keys.map(String) : [], addresses }));
+  });
   r.put("/machines", async (c) => {
     const hub = c.get("hub");
     const body = await readJsonObject(c);
@@ -173,4 +209,17 @@ export function aiRoutes() {
   });
 
   return r;
+}
+
+/**
+ * The address a device reached the hub from, when the hub may reach it back there: a home or tailnet IPv4 address,
+ * the connecting one, or the one a proxy on this machine (Tailscale Serve) forwarded.
+ */
+function callerAddress(c: { env: unknown; req: { header(name: string): string | undefined } }): string | null {
+  const peer = ((c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? "").replace(/^::ffff:/, "");
+  const a = /^(127\.|::1$)/.test(peer) || !peer ? (c.req.header("x-forwarded-for") ?? "").split(",")[0].trim().replace(/^::ffff:/, "") : peer;
+  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(a);
+  if (!m) return null;
+  const [x, y] = [Number(m[1]), Number(m[2])];
+  return x === 10 || (x === 192 && y === 168) || (x === 172 && y >= 16 && y < 32) || (x === 100 && y >= 64 && y < 128) ? a : null;
 }

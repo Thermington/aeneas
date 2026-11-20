@@ -42,6 +42,11 @@ struct SettingsView: View {
                 NavigationLink { ModulesSettingsView() } label: {
                     SettingsRow(title: "Modules", symbol: "square.grid.3x3.square", summary: modulesSummary)
                 }
+                if model.isOn(.homelab) {
+                    NavigationLink { MachinesSettingsPage() } label: {
+                        SettingsRow(title: "Machines", symbol: "desktopcomputer", summary: machinesSummary)
+                    }
+                }
                 if let machinePeople {
                     NavigationLink { MachinePeopleView() } label: {
                         SettingsRow(title: "People on this machine", symbol: "person.2.badge.plus", summary: machinePeople)
@@ -125,6 +130,15 @@ struct SettingsView: View {
         let links: [(AppModule, String)] = [(.games, "Steam"), (.wiki, "Confluence"), (.films, "Letterboxd"), (.health, "Apple Health")]
         let shown = links.filter { model.isOn($0.0) }.map(\.1)
         return shown.isEmpty ? "Gmail and Apple Reminders" : shown.joined(separator: ", ")
+    }
+
+    /// The Mac says whether it shows itself in Tech (ThisMacReport).
+    private var machinesSummary: String {
+        #if os(macOS)
+        ThisMacReport.shared.on ? "Add a computer or device; this Mac shows in Tech" : "Add a computer or device, or show this Mac in Tech"
+        #else
+        "Add a computer or device"
+        #endif
     }
 
     private var modulesSummary: String {

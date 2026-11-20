@@ -14,9 +14,11 @@ import EACore
 ///   -EAHumSample YES             put a hummed song (melody and rhythm) on the device and open it
 ///   -EASample YES                a copy that is not set up starts in sample mode, as Try it with sample data does
 ///   -EAMachine <name>            with -EASection ops, the Overview opens that machine's page (Tech screenshots)
-///   -EAScrollTo history          that machine's page scrolls to its History
+///   -EAScrollTo history          that machine's page scrolls to its History; without -EAMachine, the Overview scrolls to
+///                                that row (a Needs a look key such as hub-backup)
 ///   -EAAddMachine YES            with -EASection ops, the Overview opens Add machine
 ///   -EAReadingSpan 7             reading cards start on 7 days (24, 7, 30 or 90)
+///   -EAMachinesStart YES         Set up Machines shows, as when Machines is switched on in Settings, Modules
 @MainActor
 enum DebugHooks {
     /// The machine page `-EAMachine` asked for opens once, not again each time the Overview shows.
@@ -32,6 +34,7 @@ enum DebugHooks {
         referenceRequests(model)
         if d.bool(forKey: "EAHumSample") { await humSample(model) }
         if let name = d.string(forKey: "EAWatchCaptureFile") { watchCaptureFile(name) }
+        if d.bool(forKey: "EAMachinesStart") { model.machinesStart = true }
     }
 
     /// A spoken capture as if it had come from the Watch: `-EAWatchCaptureFile <name>` takes that file from this app's

@@ -1,49 +1,85 @@
 import SwiftUI
 import EACore
 
-/// Add machine, from the Overview: the machines the assistant may run commands on and the sensors read (GET and PUT
-/// /machines), as the web's Settings has them (MachinesSettings). Only machines listed here are contacted; names from
-/// the hub machine's SSH config are added with one tap. A change goes to the hub at once, and the Overview reloads its
-/// cards (`onChanged`), which come from GET /ops.
+/// Add machine, from the Overview: the machines the assistant may run commands on and the sensors read, as the web's
+/// Settings has them (MachinesSettings). A change goes to the hub at once, and the Overview reloads its cards
+/// (`onChanged`), which come from GET /ops.
 struct MachinesSheet: View {
-    @EnvironmentObject var engine: SyncEngine
     @Environment(\.dismiss) private var dismiss
     var onChanged: () async -> Void
+
+    var body: some View {
+        NavigationStack {
+            MachinesForm(onChanged: onChanged)
+                .navigationTitle("Add machine")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        #if os(macOS)
+        .frame(minWidth: 500, minHeight: 560)
+        #endif
+    }
+}
+
+/// The machines the hub reaches (GET and PUT /machines; only machines listed are contacted) with the hub machine's
+/// SSH config names to add with one tap, Add machine with an address, user and password once (POST /machines/setup),
+/// and folded under "The hub can already sign in to it" a name or SSH host typed and the hub's key to add by hand. In
+/// Settings, Machines on the Mac (`thisMac`) also This Mac.
+struct MachinesForm: View {
+    @EnvironmentObject var engine: SyncEngine
+    var onChanged: () async -> Void
+    var thisMac = false
     @State private var list: HubMachines?
     @State private var typed = ""
     @State private var busy = false
     @State private var error: String?
 
     var body: some View {
-        NavigationStack {
-            Form {
-                SwiftUI.Section {
-                    Text("The assistant runs read-only commands on these at once; anything that changes a machine waits for your approval. With Sensors on, the hub also reads their CPU, memory, disk and temperature every 10 minutes. No other machine is contacted.")
-                        .font(.subheadline).foregroundStyle(.secondary)
+        ScrollViewReader { proxy in
+            form
+                #if DEBUG
+                // `-EAScrollTo thisMac` (DebugHooksMac): This Mac at the top, for screenshots.
+                .task {
+                    guard UserDefaults.standard.string(forKey: "EAScrollTo") == "thisMac" else { return }
+                    try? await Task.sleep(for: .seconds(2))
+                    proxy.scrollTo("thisMac", anchor: .top)
                 }
-                if let list {
-                    SwiftUI.Section("Machines") {
-                        if list.machines.isEmpty { Text("No machines yet.").foregroundStyle(.secondary) }
-                        ForEach(list.machines) { m in row(m, in: list) }
-                    }
-                    if !list.offers.isEmpty {
-                        SwiftUI.Section {
-                            FlowLayout(spacing: 8) {
-                                ForEach(list.offers, id: \.self) { name in
-                                    Button("Add \(name)") { add(HubMachine(name: name.lowercased(), ssh: name)) }
-                                        .buttonStyle(.bordered)
-                                        .disabled(busy)
-                                }
+                #endif
+        }
+    }
+
+    private var form: some View {
+        Form {
+            SwiftUI.Section {
+                Text("The assistant runs read-only commands on these at once; anything that changes a machine waits for your approval. With Sensors on, the hub also reads their CPU, memory, disk and temperature every 10 minutes. No other machine is contacted.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            if let list {
+                SwiftUI.Section("Machines") {
+                    if list.machines.isEmpty { Text("No machines yet.").foregroundStyle(.secondary) }
+                    ForEach(list.machines) { m in row(m, in: list) }
+                }
+                if !list.offers.isEmpty {
+                    SwiftUI.Section {
+                        FlowLayout(spacing: 8) {
+                            ForEach(list.offers, id: \.self) { name in
+                                Button("Add \(name)") { add(HubMachine(name: name.lowercased(), ssh: name)) }
+                                    .buttonStyle(.bordered)
+                                    .disabled(busy)
                             }
-                            .padding(.vertical, 4)
-                        } header: {
-                            Text("In the hub machine's SSH config")
                         }
+                        .padding(.vertical, 4)
+                    } header: {
+                        Text("In the hub machine's SSH config")
                     }
-                } else if error == nil {
-                    SwiftUI.Section { HStack { ProgressView().controlSize(.small); Text("Loading").foregroundStyle(.secondary) } }
                 }
-                SwiftUI.Section {
+            } else if error == nil {
+                SwiftUI.Section { HStack { ProgressView().controlSize(.small); Text("Loading").foregroundStyle(.secondary) } }
+            }
+            SwiftUI.Section("Add a computer or device") {
+                AddMachineRows(onAdded: added)
+            }
+            SwiftUI.Section {
+                DisclosureGroup("The hub can already sign in to it") {
                     HStack {
                         TextField("Name or SSH host", text: $typed, prompt: Text("Name or SSH host, for example nas01"))
                             .autocorrectionDisabled()
@@ -55,18 +91,21 @@ struct MachinesSheet: View {
                             .buttonStyle(.borderless)
                             .disabled(busy || list == nil || HubMachine.typed(typed) == nil)
                     }
-                } footer: {
-                    if let error { Text(error).foregroundStyle(.red) }
+                    Text("For a machine whose key is already set up on the hub's machine: a name from its SSH config, or user@address.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    HubKeyRows()
                 }
+            } footer: {
+                if let error { Text(error).foregroundStyle(.red) }
             }
-            .formStyle(.grouped)
-            .navigationTitle("Add machine")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task { await load() }
+            #if os(macOS)
+            if thisMac {
+                SwiftUI.Section("This Mac") { ThisMacRows(onAdded: added) }.id("thisMac")
+            }
+            #endif
         }
-        #if os(macOS)
-        .frame(minWidth: 460, minHeight: 480)
-        #endif
+        .formStyle(.grouped)
+        .task { await load() }
     }
 
     private func row(_ m: HubMachine, in list: HubMachines) -> some View {
@@ -81,6 +120,12 @@ struct MachinesSheet: View {
                 .buttonStyle(.borderless)
                 .disabled(busy)
         }
+    }
+
+    /// The hub put it in hosts.json: the list shows it at once, the Overview's cards once the board reloads.
+    private func added(_ m: HubMachine) async {
+        if let l = list { list = HubMachines(machines: l.machines.filter { $0.name != m.name } + [m], ssh_config: l.ssh_config) }
+        await onChanged()
     }
 
     private func load() async {

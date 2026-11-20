@@ -20,6 +20,7 @@ import Foundation
 /// - `entities/<id>` for items not on the device, and `entities?kind=device`: sample mode has every item, and its
 ///   device id from the start.
 /// - `ai/sessions`: sample mode keeps chats on the device.
+/// - `machines/hub-key`: the hub machine's own SSH key, read only when asked; the sample hub has no machine of its own.
 /// - `vault/index` and `file`, `ai/memory`, `dashboard`, `images/jobs`, `search` by kinds: no Apple screen reads them.
 enum SampleScreens {
     struct Read: Sendable {
@@ -114,6 +115,8 @@ enum SampleScreens {
         add("Ops") { _ = try await $0.opsBoard() }
         add("Machines") { _ = try await $0.hostSummaries() }
         add("Overview, Add machine") { _ = try await $0.machines() }
+        // Add machine and Set up Machines offer a password manager item only when one is linked.
+        add("Add machine, password manager") { _ = try await $0.passwordManagerLinked() }
         for id in w.ids(.monitor) {
             add("Monitor \(id), history") { _ = try await $0.monitorHistory(id: id, hours: 24) }
             // Monitor and machine pages read their monitors again every 30 s (Homelab.fresh).

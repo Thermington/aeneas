@@ -1,6 +1,6 @@
 {
   "name": "@everythingapp/hub",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
@@ -19,6 +19,7 @@
     "@number0/iroh": "1.2.0",
     "@scure/base": "^2.4.0",
     "@spotify/basic-pitch": "^1.0.1",
+    "@types/ssh2": "^1.15.6",
     "@xmldom/xmldom": "^0.9.12",
     "age-encryption": "^0.3.1",
     "better-sqlite3": "^11.6.0",
@@ -29,6 +30,7 @@
     "imapflow": "2.10.0",
     "kdbxweb": "^2.1.1",
     "multicast-dns": "7.2.5",
+    "ssh2": "^1.17.0",
     "tsx": "^4.19.2",
     "zod": "^4.6.7"
   },

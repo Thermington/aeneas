@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Entity } from "@everythingapp/shared";
 import type { SensorRow } from "../sync/api";
 import type { OpsMonitor } from "./ops";
-import { checksLine, machineBars, machineFromInput, needsALook, readingLabel, readingValue, targetHost, techLight, thingStatus, type Thing } from "./tech";
+import { checksLine, identityLine, machineBars, machineFromInput, machineSections, needsALook, readingLabel, readingValue, targetHost, techLight, thingStatus, type Thing } from "./tech";
 
 const now = new Date("2026-11-19T21:00:00Z");
 const ent = (id: string, kind: string, fields: Record<string, unknown>): Entity =>
@@ -38,6 +38,20 @@ describe("Tech things", () => {
     expect(machineFromInput("me@nas:2222")).toEqual({ name: "nas", ssh: "me@nas:2222" });
     expect(machineFromInput("")).toBeNull();
     expect(machineFromInput("me@")).toBeNull();
+  });
+
+  it("splits machines by the kind of device they said they are, the rest under Not identified", () => {
+    const m = (name: string, category?: Thing["category"]): Thing => ({ name, label: name, kind: "machine", monitors: [], sensors: [], reachable: false, ...(category ? { category } : {}) });
+    expect(machineSections([m("gw", "network"), m("pc", "computer"), m("x"), m("cam", "camera")]).map((x) => [x.title, x.things.map((t) => t.name)])).toEqual([
+      ["Computers", ["pc"]],
+      ["Network", ["gw"]],
+      ["Cameras", ["cam"]],
+      ["Not identified", ["x"]],
+    ]);
+    expect(identityLine({ ...m("dc1"), os_name: "Windows Server 2022 Standard", vm_of: "pve", vm_state: "running" })).toBe("Windows Server 2022 Standard, virtual machine on pve");
+    expect(identityLine({ ...m("dc2"), vm_of: "pve", vm_state: "stopped" })).toBe("stopped virtual machine on pve");
+    expect(identityLine(m("x"))).toBe("");
+    expect(identityLine({ ...m("p", "printer"), model: "HP LaserJet Pro M404" })).toBe("HP LaserJet Pro M404");
   });
 
   it("reads a check's host from its target, as the hub does", () => {

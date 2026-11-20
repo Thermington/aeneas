@@ -37,6 +37,40 @@ final class TechTests: XCTestCase {
     private var M: [String: Entity] { Dictionary(uniqueKeysWithValues: monitors.map { ($0.id, $0) }) }
     private var S: [String: Entity] { Dictionary(uniqueKeysWithValues: sensors.map { ($0.str("name"), $0) }) }
 
+    func testSplitsMachinesByTheKindOfDeviceTheySaidTheyAreTheRestUnderNotIdentified() {
+        func m(_ name: String, _ category: DeviceCategory? = nil) -> TechThing { TechThing(name: name, kind: .machine, category: category) }
+        let sections = Tech.machineSections([m("gw", .network), m("pc", .computer), m("x"), m("cam", .camera)])
+        XCTAssertEqual(sections.map(\.title), ["Computers", "Network", "Cameras", "Not identified"])
+        XCTAssertEqual(sections.map { $0.things.map(\.name) }, [["pc"], ["gw"], ["cam"], ["x"]])
+        XCTAssertEqual(Tech.machineSections([m("a"), m("b")]).map(\.title), ["Not identified"])
+        XCTAssertEqual(Tech.machineSections([]), [])
+        var dc1 = m("dc1"); dc1.os_name = "Windows Server 2022 Standard"; dc1.vm_of = "pve"; dc1.vm_state = "running"
+        var dc2 = m("dc2"); dc2.vm_of = "pve"; dc2.vm_state = "stopped"
+        XCTAssertEqual(Tech.identityLine(dc1), "Windows Server 2022 Standard, virtual machine on pve")
+        XCTAssertEqual(Tech.identityLine(dc2), "stopped virtual machine on pve")
+        XCTAssertEqual(Tech.identityLine(m("x")), "")
+        XCTAssertEqual(DeviceCategory.allCases.map(\.one), ["Computer", "Network device", "Printer", "Camera", "Device"])
+    }
+
+    /// The kind, OS and model are only what the hub sends, and the purpose only the owner's fact: none is worked out here.
+    func testReadsWhatTheHubSaysAboutEachMachineAndGuessesNothing() throws {
+        let json = #"{"monitors":[],"things":[{"name":"server","kind":"machine","reachable":true,"os":"linux","os_name":"Ubuntu 26.04 LTS","category":"computer","purpose":"Runs the hub and the models"},{"name":"desk-pc","kind":"machine","category":"toaster"},{"name":"printer","kind":"machine","category":"printer","model":"HP LaserJet Pro M404"},{"name":"dc1","kind":"machine","os_name":"","vm_of":"pve2","vm_state":"stopped"},{"name":"nas01","kind":"machine","vm_state":"running"}]}"#
+        let things = try XCTUnwrap(try JSONDecoder().decode(OpsBoard.self, from: Data(json.utf8)).things)
+        XCTAssertEqual(things[0].os_name, "Ubuntu 26.04 LTS")
+        XCTAssertEqual(things[0].category, .computer)
+        XCTAssertEqual(things[0].purpose, "Runs the hub and the models")
+        XCTAssertNil(things[1].category, "a kind this app does not know reads as not identified")
+        XCTAssertEqual(things[2].model, "HP LaserJet Pro M404")
+        XCTAssertEqual(Tech.identityLine(things[2]), "HP LaserJet Pro M404")
+        XCTAssertNil(things[3].os_name)
+        XCTAssertEqual(things[3].vm_of, "pve2")
+        XCTAssertEqual(things[3].vm_state, "stopped")
+        XCTAssertNil(things[4].vm_state, "a state without its host says nothing")
+        let local = Tech.localThings(monitors: [ent("m1", .monitor, ["name": .string("NAS ping"), "type": .string("ping"), "target": .string("nas01")])],
+                                    sensors: [], hosts: ["server"])
+        XCTAssertTrue(local.allSatisfy { $0.os_name == nil && $0.category == nil && $0.model == nil && $0.vm_of == nil && $0.purpose == nil })
+    }
+
     func testReadsACheckHostFromItsTargetAsTheHubDoes() {
         XCTAssertEqual(Tech.targetHost(type: "tcp", target: "pve2:8006"), "pve2")
         XCTAssertEqual(Tech.targetHost(type: "http", target: "http://127.0.0.1:8787/health"), "127.0.0.1")
@@ -159,6 +193,14 @@ final class TechTests: XCTestCase {
         XCTAssertEqual(things.first { $0.name == "server" }?.sensors, ["server.cpu.used"])
     }
 
+    /// A computer its own app reports says so; an older hub says nothing and none does.
+    func testReadsWhichComputersTheirOwnAppReports() throws {
+        let json = #"{"monitors":[],"things":[{"name":"laptop","kind":"machine","sensors":["laptop.cpu.used"],"reachable":false,"os_name":"macOS 26.1","category":"computer","reports_itself":true},{"name":"server","kind":"machine","reachable":true}]}"#
+        let things = try XCTUnwrap(try JSONDecoder().decode(OpsBoard.self, from: Data(json.utf8)).things)
+        XCTAssertEqual(things.map(\.reports_itself), [true, false])
+        XCTAssertEqual(things.first?.os_name, "macOS 26.1")
+    }
+
     /// Sample mode shows a card for each machine: the recording's board names its things and their checks.
     func testTheSampleBoardHasACardForEachMachine() throws {
         let rec = try JSONDecoder().decode(SampleTransport.Recording.self, from: Data(contentsOf: SampleScreens.bundledRecording))
@@ -169,5 +211,11 @@ final class TechTests: XCTestCase {
         let ids = Set(board.monitors.map(\.id))
         XCTAssertEqual(Set(things.flatMap(\.monitors)), ids, "every check is on one thing")
         XCTAssertEqual(things.filter(\.hub).count, 1)
+        // The laptop its own app reports, with its readings in the recording too.
+        let laptop = try XCTUnwrap(things.first { $0.name == "laptop" })
+        XCTAssertTrue(laptop.reports_itself)
+        XCTAssertFalse(laptop.reachable)
+        let sensors = try XCTUnwrap(rec.entries["GET sensors"]?.body)
+        for name in laptop.sensors { XCTAssertTrue(sensors.contains("\"name\":\"\(name)\""), name) }
     }
 }

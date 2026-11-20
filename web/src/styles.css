@@ -1011,6 +1011,10 @@ details.module-more > summary { padding: 2px 0; }
 .link-choice.unavailable { opacity: 0.75; }
 .info-btn { background: none; border: none; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 4px; cursor: pointer; min-width: 32px; min-height: 32px; }
 .info-btn[aria-expanded="true"] { color: var(--accent); }
+.small-heading { font-size: 14px; font-weight: 600; margin: 10px 0 0; }
+.add-machine button.link { align-self: flex-start; }
+.add-machine input { min-width: 0; }
+.machines-start { margin: 8px 0 4px; }
 .link-info { margin: 8px 0 2px 28px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2, rgba(127,127,127,0.08)); line-height: 1.45; }
 .table-scroll { overflow-x: auto; }
 table.compare { border-collapse: collapse; width: 100%; font-size: 14px; }

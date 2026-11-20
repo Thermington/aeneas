@@ -227,12 +227,17 @@ struct HostDetailView: View {
         List {
             SwiftUI.Section {
                 VStack(alignment: .leading, spacing: 6) {
+                    if me.kind == .machine { identity(me) }
                     TechStatusPill(status: status)
                     let words = about(me)
                     if !words.isEmpty { Text(words).font(.subheadline).foregroundStyle(.secondary) }
                 }
                 .padding(.vertical, 2)
                 .accessibilityElement(children: .combine)
+            }
+
+            if me.kind == .machine {
+                SwiftUI.Section("Purpose") { PurposeRows(name: key) }
             }
 
             if !checks.isEmpty || !hubBackup.isEmpty || me.kind != .place {
@@ -346,6 +351,17 @@ struct HostDetailView: View {
         }
     }
 
+    /// "Computer · Ubuntu 26.04 LTS", "Printer · HP LaserJet Pro M404", "Network device", or "Not identified": what kind
+    /// of device the hub is sure it is, and what it runs or its model when it gave one. Never the facts behind it.
+    @ViewBuilder
+    private func identity(_ t: TechThing) -> some View {
+        if t.kind == .machine {
+            let line = Tech.identityLine(t)
+            let kind = Text(t.category?.one ?? "Not identified").font(.headline)
+            if line.isEmpty { kind } else { Text("\(kind)\(Text(" · \(line)").foregroundStyle(.secondary))") }
+        }
+    }
+
     /// One reading on this page, named as people say it ("Disk /"). Before the first load the card says its graph comes
     /// from the hub; after it, an empty series is fewer than 2 readings.
     private func readingCard(_ s: Entity, on me: TechThing) -> some View {
@@ -380,7 +396,9 @@ struct HostDetailView: View {
         let parts = [
             t.hub ? "the machine the hub runs on" : "",
             t.kind == .service ? "a service on the internet" : t.kind == .place ? "sensor boards here" : "",
-            t.reachable ? "the hub reads it and the assistant can run commands on it" : t.kind == .machine && !t.hub ? "checked from the hub" : ""
+            t.reachable ? "the hub reads it and the assistant can run commands on it"
+                : t.reports_itself ? "its Aeneas app sends its readings"
+                : t.kind == .machine && !t.hub ? "checked from the hub" : ""
         ].filter { !$0.isEmpty }
         guard !parts.isEmpty else { return "" }
         let s = parts.joined(separator: "; ")
@@ -436,6 +454,53 @@ struct HostDetailView: View {
         } catch {
             sensorError = "Could not export: \(Homelab.errorText(error))"
         }
+    }
+}
+
+/// What this machine is for, in the owner's words: its fact `host:<name>` in Memory, which the assistant reads whenever
+/// the machine comes up and writes itself when told ("pve1 runs the domain controllers"). Read from the synced facts,
+/// so it shows and saves offline; saving it empty removes it.
+struct PurposeRows: View {
+    @EnvironmentObject var engine: SyncEngine
+    var name: String
+    @State private var editing = false
+    @State private var text = ""
+
+    private var key: String { "host:\(Homelab.hostKey(name))" }
+    private var fact: Entity? { engine.list(.fact).first { Homelab.hostKey($0.str("key")) == key } }
+
+    var body: some View {
+        let value = fact?.str("value") ?? ""
+        if editing {
+            TextField("What it is for", text: $text, prompt: Text("Proxmox host for the domain controllers; backups go to the NAS at night"), axis: .vertical)
+                .lineLimit(3...8)
+            HStack(spacing: 12) {
+                Button("Save") { Task { await save() } }.buttonStyle(.borderedProminent)
+                Button("Cancel") { editing = false }.buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+        } else {
+            if value.isEmpty {
+                Text("What it is for and how it is set up. The assistant reads this whenever \(name) comes up.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Text(StyleGuard.dashes(value)).textSelection(.enabled)
+            }
+            Button(value.isEmpty ? "Add" : "Edit") { text = value; editing = true }
+        }
+    }
+
+    private func save() async {
+        let next = String(Homelab.trimmed(text).prefix(2000))
+        if let f = fact {
+            if next.isEmpty { await engine.softDelete(f.id) }
+            else if next != f.str("value") { _ = await engine.update(f.id, fields: ["value": .string(next)]) }
+        } else if !next.isEmpty {
+            _ = await engine.create(kind: .fact, fields: [
+                "category": .string("host"), "key": .string(key), "value": .string(next), "source": .string("user"), "confidence": .number(1)
+            ])
+        }
+        editing = false
     }
 }
 

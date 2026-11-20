@@ -209,6 +209,9 @@ final class AppModel: ObservableObject {
     @Published var deviceRemoved = false
     /// What the modules that are on need from this device, offered once after pairing or when a module is switched on.
     @Published var permissionOffer: PermissionOffer?
+    /// Machines was just switched on in this app: Set up Machines shows (MachinesStartSheet), after the permission
+    /// screen when there is one, until Done.
+    @Published var machinesStart = false
 
     private init() {
         #if os(macOS)
@@ -341,6 +344,8 @@ final class AppModel: ObservableObject {
         #if os(macOS)
         // A helped person's Mac runs their helper's commands while they let it (HelperComputer).
         HelperComputer.shared.start(engine: engine, name: { [weak self] in self?.config.deviceName ?? "Mac" })
+        // This Mac's readings go to the hub while the person lets them (ThisMacReport; off until ticked).
+        ThisMacReport.shared.start(engine: engine)
         #endif
         // Tailscale signed in or out inside Aeneas: the hub is reached another way now.
         TailnetSignIn.shared.onChange = { [weak self] in Task { @MainActor in await self?.tailnetChanged() } }
@@ -549,7 +554,10 @@ final class AppModel: ObservableObject {
     /// Switch modules on or off for every device; the hub answers with the whole list.
     func setModules(_ changes: [String: Bool]) async throws {
         guard let c = engine.client else { throw HubError.notConfigured }
+        let machinesWereOn = isOn(.homelab)
         applyModules(try await c.setModules(changes), offer: true)
+        // Machines switched on here (not on another device): its first steps, as the web offers them under the switch.
+        if changes[AppModule.homelab.rawValue] == true, !machinesWereOn, isOn(.homelab) { machinesStart = true }
     }
 
     /// `offer`: the list came from a switch changed now (here in Settings, or another device over /live), so a

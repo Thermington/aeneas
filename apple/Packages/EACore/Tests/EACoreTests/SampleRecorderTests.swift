@@ -132,6 +132,8 @@ enum SampleRecordingCleaner {
             o["last_run"] = NSNull()
             o["running"] = false
         }
+        // Add machine reads only whether a password manager is linked; the rest is the demo hub's model setup.
+        edit(&rec, "GET setup") { o in o = ["password_manager": o["password_manager"] ?? false] }
         // The Quiz reads only the creative counts; the rest is the hub's folders, uptime and model setup.
         edit(&rec, "GET status") { o in o = ["creative": o["creative"] ?? NSNull()] }
         // Keys that open the demo hub's calendar and sensor feeds (in the door's path too); screens show them in

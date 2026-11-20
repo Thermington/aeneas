@@ -65,12 +65,26 @@ export function allowed(expr) {
   try { const v = or(); return i >= tokens.length && v; } catch { return false; }
 }
 
+/**
+ * A license written the old npm way, `"licenses": [{ "type": "MIT" }]`, which the lock file does not copy: read from
+ * the installed package itself. More than one entry meant a choice between them, so they join with OR.
+ */
+export function legacyLicense(pkg) {
+  const list = Array.isArray(pkg?.licenses) ? pkg.licenses : [];
+  const types = list.map((l) => (typeof l === "string" ? l : l?.type)).filter((t) => typeof t === "string" && /^[A-Za-z0-9.+-]+$/.test(t));
+  return types.length ? (types.length === 1 ? types[0] : `(${types.join(" OR ")})`) : "";
+}
+
 function npmPackages() {
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
   const out = [];
   for (const [key, v] of Object.entries(lock.packages ?? {})) {
     if (!key || !key.includes("node_modules/") || v.link) continue; // the root and this project's own workspaces
-    out.push({ name: key.slice(key.lastIndexOf("node_modules/") + 13), version: v.version ?? "", license: v.license ?? "" });
+    let license = v.license ?? "";
+    if (!license) {
+      try { license = legacyLicense(JSON.parse(fs.readFileSync(path.join(ROOT, key, "package.json"), "utf8"))); } catch { /* not installed here */ }
+    }
+    out.push({ name: key.slice(key.lastIndexOf("node_modules/") + 13), version: v.version ?? "", license });
   }
   return out;
 }

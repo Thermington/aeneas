@@ -981,6 +981,22 @@ export class HubClient {
   setMachines(machines: HubMachine[]) {
     return this.req<{ machines: HubMachine[] }>("PUT", "/machines", { machines });
   }
+  /** Add machine with a password typed once, or a password manager item: the hub puts its own key there and checks it. */
+  setupMachine(v: { address: string; user: string; password?: string; secret?: string; name?: string }) {
+    return this.req<{ machine: HubMachine; created: boolean }>("POST", "/machines/setup", v);
+  }
+  /** The hub's public SSH key, for this computer's app to add. */
+  hubKey() {
+    return this.req<{ public_key: string }>("GET", "/machines/hub-key");
+  }
+  /** The computer this app runs on reports its readings (the output of HOST_SCRIPTS for its OS). */
+  reportComputer(v: { name: string; output: string }) {
+    return this.req<{ name: string; read_by_hub: boolean; kept: number }>("PUT", "/devices/me/computer", v);
+  }
+  /** After this app put the hub's key on its computer: the hub checks it signs in, trusting only these host keys. */
+  computerAccess(v: { name: string; user: string; os: "windows" | "macos" | "linux"; host_keys: string[]; addresses?: string[] }) {
+    return this.req<{ machine: HubMachine; created: boolean }>("POST", "/devices/me/computer/access", v);
+  }
 
   /** The state's meals tax at an approximate position (rounded to about a kilometre before it leaves the browser). */
   mealsTax(lat: number, lon: number) {

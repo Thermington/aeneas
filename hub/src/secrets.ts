@@ -413,6 +413,16 @@ async function bitwardenRead(host: Host, c: PasswordManagerConn, name: string, f
   return value;
 }
 
+/**
+ * One password manager item's value, read in the hub's own process (machine setup's one-time sign-in): the same
+ * allowed items as commands, and the value goes nowhere but the caller. `ref` is `Name`, `Folder/Name` or `Name/field`.
+ */
+export async function secretValue(hub: Hub, ref: string): Promise<string> {
+  const c = conn(hub);
+  if (!c) throw new Error("no password manager is linked");
+  return readSecret(hub, c, ref.trim());
+}
+
 /** Put the named secrets into a command, quoted for the host's shell. Returns the values so the output can be cleaned. */
 export async function fillSecrets(hub: Hub, command: string, os: HostOs): Promise<{ command: string; values: string[] }> {
   const c = conn(hub);
