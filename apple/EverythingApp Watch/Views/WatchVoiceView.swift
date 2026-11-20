@@ -9,13 +9,17 @@ enum VoiceAction: Equatable { case ask, capture, hum }
 
 /// The Watch's first page: Ask, Capture and Hum, all by voice. Ask goes straight to dictation, with no keyboard or
 /// scribble; Capture and Hum record with the microphone (a capture is written down on the iPhone, so a long one is
-/// kept whole). Reminders and the rest are on the pages below and in Apple's own apps.
+/// kept whole, and first on the Watch itself where it can run Whisper, so the words show at once). Reminders and the
+/// rest are on the pages below and in Apple's own apps.
 struct WatchVoiceView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var engine: SyncEngine
     @ObservedObject var ask: WatchAskModel
     @ObservedObject var hum: WatchHumModel
     @ObservedObject var capture: WatchCaptureModel
+    #if DEBUG
+    @ObservedObject private var speech = WatchSpeech.shared
+    #endif
     /// The last result, shown over the bottom for a few seconds: the buttons fill a small Watch, so the lines under
     /// them are out of sight.
     @State private var banner: String?
@@ -25,7 +29,7 @@ struct WatchVoiceView: View {
             VStack(spacing: 8) {
                 if hum.recorder.recording {
                     WatchHumRecordingPanel(hum: hum)
-                } else if capture.recorder.recording {
+                } else if capture.recording {
                     WatchCaptureRecordingPanel(capture: capture)
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
@@ -49,10 +53,13 @@ struct WatchVoiceView: View {
                     Text("This Watch was removed from your hub. Pair it again on your iPhone: Settings, Connection, Devices.")
                         .font(.caption2).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
-                if let p = hum.recorder.error ?? hum.problem ?? capture.recorder.error ?? capture.problem {
+                if let p = hum.recorder.error ?? hum.problem ?? capture.recorderError ?? capture.problem {
                     Text(p).font(.caption2).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
                 if let c = capture.shown { WatchCaptureRow(status: c) }
+                #if DEBUG
+                ForEach(speech.benchLines, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
+                #endif
                 if ask.asking != nil || !ask.turns.isEmpty {
                     Button { model.conversationOpen = true } label: { conversationPreview }
                         .buttonStyle(.bordered)
@@ -62,6 +69,10 @@ struct WatchVoiceView: View {
             }
             .padding(.horizontal, 2)
         }
+        #if DEBUG
+        // Screenshots of the rows under the buttons (`-scrollToRows YES`): the simulator cannot turn the crown.
+        .defaultScrollAnchor(UserDefaults.standard.bool(forKey: "scrollToRows") ? .bottom : .top)
+        #endif
         .overlay(alignment: .bottom) {
             if let b = banner {
                 HStack(spacing: 6) {
@@ -77,8 +88,11 @@ struct WatchVoiceView: View {
         .animation(.default, value: banner)
         // Each step of a hum on its way, from "Sent to your iPhone" to the idea's title.
         .onChange(of: hum.recent.first) { _, s in if let s { show(StyleGuard.dashes(s.line)) } }
-        // And each step of a capture, from "Sent to your iPhone" to how it was filed.
-        .onChange(of: capture.recent.first) { _, s in if let s { show(StyleGuard.dashes(s.line)) } }
+        // And each step of a capture, from the words it heard to what it was filed as.
+        .onChange(of: capture.recent.first) { old, s in
+            guard let s, s.banner != old?.banner || s.id != old?.id else { return }
+            show(StyleGuard.dashes(s.banner))
+        }
         .navigationDestination(isPresented: $model.conversationOpen) { WatchConversationView(ask: ask) }
         // Ask, Capture and Hum complications land here and start at once.
         .task(id: model.listen) {
@@ -137,12 +151,12 @@ struct WatchVoiceView: View {
         case .capture:
             // Recorded here and written down on the iPhone, then sorted by the hub like a phone capture: a reminder,
             // task, log or note, not left to file by hand. One recording at a time.
-            guard !hum.recorder.recording, !capture.recorder.recording else { return }
+            guard !hum.recorder.recording, !capture.recording else { return }
             Task { await capture.record() }
         case .hum:
             // The Hum Song complication: recording straight away. Hum is part of Music.
             guard model.isOn(.music) else { show("Hum is part of Music, which is off. Turn it on in Settings, Modules."); WKHaptic.failure(); return }
-            guard !hum.recorder.recording, !capture.recorder.recording else { return }
+            guard !hum.recorder.recording, !capture.recording else { return }
             record()
         }
     }
@@ -254,7 +268,7 @@ enum Dictation {
 
     /// Said once before the first dictation on this Watch, as the Voice module promises: the Watch's dictation is
     /// Apple's, and Apple may process the audio on its servers. Only Ask dictates; a capture is recorded and written
-    /// down on the iPhone. Not now asks again next time.
+    /// down on the Watch and the iPhone themselves. Not now asks again next time.
     private static func noticeAccepted(on c: WKInterfaceController) async -> Bool {
         if UserDefaults.standard.bool(forKey: noticeKey) { return true }
         return await withCheckedContinuation { cont in
@@ -264,7 +278,7 @@ enum Dictation {
             }
             let no = WKAlertAction(title: "Not now", style: .cancel) { cont.resume(returning: false) }
             c.presentAlert(withTitle: "Before you talk",
-                           message: "Asking on the Watch uses Apple's dictation, and Apple may turn your voice into text on its servers. Aeneas keeps only the text. Capture is written down on your iPhone instead.",
+                           message: "Asking on the Watch uses Apple's dictation, and Apple may turn your voice into text on its servers. Aeneas keeps only the text. Capture is written down on your own devices instead.",
                            preferredStyle: .alert, actions: [ok, no])
         }
     }

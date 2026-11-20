@@ -39,7 +39,10 @@ company and what goes before it starts:
 - **Linked accounts** you choose to connect (for example Gmail, read only; Confluence; Steam) are read by your hub
   with your permission, which you can withdraw at any time.
 - **Voice input** uses your device's own speech recognition; where the device would send audio to its maker (Apple,
-  Google or Microsoft) for that, the app says so first.
+  Google or Microsoft) for that, the app says so first. An Apple Watch that can (Series 9, Ultra 2 or newer) also
+  writes captures down itself with a public speech model that your hub downloads once from Hugging Face and your
+  iPhone copies from the hub; Hugging Face sees only the hub's address and which public files it fetched, never
+  anything you say.
 - **Location** (only if you allow it, for the meals tax in the calculator) is used once, approximately, on your device
   and hub to find your state; it is not kept or sent anywhere else.
 

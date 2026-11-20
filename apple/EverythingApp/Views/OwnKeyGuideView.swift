@@ -24,7 +24,7 @@ struct OwnKeyGuideView: View {
             if let g = guide, let w = g.warning, !showAnyway {
                 // The hub's address stops this service from working: say so first, not after ten minutes of steps.
                 SwiftUI.Section {
-                    Text("Not on this hub yet. \(w)").foregroundStyle(.red)
+                    Text("Not on this hub yet. \(w)").foregroundStyle(.dangerText)
                     Text("Everything else works without it. Once the hub has a Tailscale address, open this guide from that address and the steps fill in the right values.")
                         .foregroundStyle(.secondary)
                     Button("Show the steps anyway") { showAnyway = true }
@@ -32,7 +32,7 @@ struct OwnKeyGuideView: View {
             } else if let g = guide {
                 let step = g.steps[index]
                 if let w = g.warning {
-                    SwiftUI.Section { Text(w).foregroundStyle(.red) }
+                    SwiftUI.Section { Text(w).foregroundStyle(.dangerText) }
                 }
                 SwiftUI.Section {
                     Text(step.text)
@@ -65,7 +65,7 @@ struct OwnKeyGuideView: View {
                         Button(busy ? "Checking" : step.test != nil ? "Save and check" : "Save") { save(g, step) }
                             .disabled(busy || fields.contains { (values[$0.id] ?? "").trimmingCharacters(in: .whitespaces).isEmpty })
                     }
-                    if let m = message { Text(m.text).foregroundStyle(m.ok ? Color.secondary : Color.red) }
+                    if let m = message { Text(m.text).foregroundStyle(m.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)) }
                 } header: {
                     Text("Step \(index + 1) of \(g.steps.count): \(step.title)")
                 } footer: {
@@ -80,7 +80,7 @@ struct OwnKeyGuideView: View {
                     .buttonStyle(.borderless)
                 }
             } else if let e = loadError {
-                Text(e).foregroundStyle(.red)
+                Text(e).foregroundStyle(.dangerText)
             } else {
                 ProgressView()
             }

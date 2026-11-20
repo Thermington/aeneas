@@ -183,8 +183,8 @@ struct ListChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(selected ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.12), in: Capsule())
-            .overlay(Capsule().strokeBorder(selected ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+            .background(selected ? AnyShapeStyle(.tint.opacity(0.22)) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? AnyShapeStyle(.tint.opacity(0.6)) : AnyShapeStyle(Color.clear), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(count) open")
@@ -215,13 +215,13 @@ struct TaskRow: View {
                 HStack(spacing: 8) {
                     if let at = task.alertDate {
                         Label(at.formatted(.dateTime.month(.abbreviated).day().hour().minute()), systemImage: "bell")
-                            .foregroundStyle(at <= Date() ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(at <= Date() ? AnyShapeStyle(.warnText) : AnyShapeStyle(.secondary))
                     }
                     if let r = f?.repeat, !r.isEmpty { Image(systemName: "repeat").accessibilityLabel(r) }
                     if let d = f?.due, !d.isEmpty, let dd = ISO.date(d) {
                         Text("Due \(dd.formatted(.dateTime.month(.abbreviated).day()))")
                             // A date alone is overdue once its day is over, not from its own midnight.
-                            .foregroundStyle(TaskDue.isOverdue(d) && f?.status != .done ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(TaskDue.isOverdue(d) && f?.status != .done ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
                     }
                     if let b = f?.block { Text("Block \(dateLabel(b.start))") }
                     if let r = f?.parked_reason, !r.isEmpty { Text(r) }

@@ -15,19 +15,25 @@ public struct CalendarOccurrence: Equatable, Sendable {
     public var allDay: Bool
     /// One occurrence of a repeating event.
     public var recurring: Bool
+    /// The calendar it is on (`apple:<account>/<calendar>`), the key its color is kept under. Nil leaves the field out.
+    public var calendarKey: String?
 
-    public init(eventIdentifier: String, calendarId: String, title: String, start: Date, end: Date, allDay: Bool = false, recurring: Bool = false) {
+    public init(eventIdentifier: String, calendarId: String, title: String, start: Date, end: Date, allDay: Bool = false, recurring: Bool = false,
+                calendarKey: String? = nil) {
         self.eventIdentifier = eventIdentifier; self.calendarId = calendarId; self.title = title
-        self.start = start; self.end = end; self.allDay = allDay; self.recurring = recurring
+        self.start = start; self.end = end; self.allDay = allDay; self.recurring = recurring; self.calendarKey = calendarKey
     }
 
     /// Contract occurrence key: `eventIdentifier` + "|" + ISO start.
     public var externalId: String { eventIdentifier + "|" + ISO.string(start) }
 
-    /// The only fields an imported event carries.
+    /// The only fields an imported event carries. An event imported before `calendar_key` existed gets it as a change
+    /// on the next import, like any other field that differs.
     public var fields: [String: JSONValue] {
-        ["title": .string(title), "start": .string(ISO.string(start)), "end": .string(ISO.string(end)),
-         "all_day": .bool(allDay), "source": "eventkit", "external_id": .string(externalId)]
+        var f: [String: JSONValue] = ["title": .string(title), "start": .string(ISO.string(start)), "end": .string(ISO.string(end)),
+                                      "all_day": .bool(allDay), "source": "eventkit", "external_id": .string(externalId)]
+        if let calendarKey { f["calendar_key"] = .string(calendarKey) }
+        return f
     }
 }
 
@@ -38,8 +44,18 @@ public struct CalendarInfo: Equatable, Identifiable, Sendable {
     /// Account name, e.g. the Exchange account's address.
     public var sourceTitle: String
     public var isExchange: Bool
-    public init(id: String, title: String, sourceTitle: String, isExchange: Bool) {
-        self.id = id; self.title = title; self.sourceTitle = sourceTitle; self.isExchange = isExchange
+    /// The calendar's own color as `#RRGGBB`, when it has one.
+    public var color: String?
+    public init(id: String, title: String, sourceTitle: String, isExchange: Bool, color: String? = nil) {
+        self.id = id; self.title = title; self.sourceTitle = sourceTitle; self.isExchange = isExchange; self.color = color
+    }
+
+    /// The key its events carry and its color is kept under; nil when it cannot have one (`EventCalendar.appleKey`).
+    public var key: String? { EventCalendar.appleKey(account: sourceTitle, calendar: title) }
+
+    /// How the hub hears about it (Theme, Calendar colors).
+    public var report: CalendarReportItem? {
+        key.map { CalendarReportItem(key: $0, name: title, account: sourceTitle.isEmpty ? nil : sourceTitle, color: color) }
     }
 }
 
@@ -111,11 +127,15 @@ public enum CalendarDiff {
             let o = current[key]!
             var entityId: String?
             var create = false
+            // The calendar this device last found it in, when it has a record of it.
+            var lastCalendar: String?
             if let rec = previous[key] {
                 entityId = rec.entity_id
+                lastCalendar = rec.calendar_id
             } else if let olds = oldByEvent[o.eventIdentifier], olds.count == 1, newByEvent[o.eventIdentifier]?.count == 1,
                       current[olds[0]] == nil, !claimed.contains(olds[0]) {
                 entityId = previous[olds[0]]!.entity_id
+                lastCalendar = previous[olds[0]]!.calendar_id
                 claimed.insert(olds[0])
             } else if let held = byExternalId(key), !held.isDeleted, !claimed.contains("entity:\(held.id)") {
                 entityId = held.id
@@ -141,6 +161,12 @@ public enum CalendarDiff {
             }
             var changed: [String: JSONValue] = [:]
             for (k, v) in o.fields where !same(e.fields[k], v) { changed[k] = v }
+            // The calendar's key is written when the event has none, or when this device saw it move to another
+            // calendar. Another device may name the same calendar's account differently (an Exchange account's
+            // description): rewriting it on every run would make the two take turns for good.
+            if changed["calendar_key"] != nil, !e.str("calendar_key").isEmpty, lastCalendar == nil || lastCalendar == o.calendarId {
+                changed.removeValue(forKey: "calendar_key")
+            }
             if e.isDeleted { changed["deleted_at"] = .null }
             if changed.isEmpty { plan.unchanged += 1 } else {
                 plan.patches.append(Patch(id: id, kind: .event, space: space, ts: ts, fields: changed))

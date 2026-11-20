@@ -19,6 +19,7 @@ struct TodayView: View {
     @State private var reloadTask: Task<Void, Never>?
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 StatusBanner()
@@ -36,6 +37,7 @@ struct TodayView: View {
                     if model.isOn(.health) { medsSection(TodayExtras.regularMeds(engine.logs(type: .med, days: 9))) }
                     if model.isOn(.jobs) { followUpsSection(TodayExtras.followUpsDue(engine.list(.application))) }
                     TimelineList(blocks: t.blocks, commitments: t.commitments, events: engine.localDay(Date()).events, reminders: t.reminders_due, freeSlots: t.free_slots, day: Date(), onSchedule: { scheduling = $0 })
+                        .id("timeline")
                     if model.isOn(.renewals) { watchesSection(t.watches_due_soon) }
                     diarySection()
                     if !fromHub {
@@ -47,6 +49,15 @@ struct TodayView: View {
                 }
             }
             .padding()
+        }
+        .task(id: today != nil) {
+            #if DEBUG
+            // `-EAScrollTo timeline` (DebugHooks): the day's timeline at the top, for screenshots.
+            guard today != nil, UserDefaults.standard.string(forKey: "EAScrollTo") == "timeline" else { return }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            proxy.scrollTo("timeline", anchor: .top)
+            #endif
+        }
         }
         .navigationTitle(shownDate.formatted(.dateTime.weekday(.wide).day().month(.wide)))
         .toolbar {
@@ -160,7 +171,7 @@ struct TodayView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+            .background(.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
         }
     }
 
@@ -250,7 +261,7 @@ struct TodayView: View {
                             Spacer()
                             if let d = a.date("next_at") {
                                 Text(d < Date() && !Calendar.current.isDateInToday(d) ? "late" : d.formatted(date: .omitted, time: .shortened))
-                                    .font(.subheadline).foregroundStyle(d < Date() ? .red : .secondary)
+                                    .font(.subheadline).foregroundStyle(d < Date() ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
                             }
                         }
                         .padding(10)
@@ -366,7 +377,7 @@ struct NowCard: View {
                 .buttonStyle(.plain)
                 HStack(spacing: 8) {
                     Button { Task { await engine.markDone(task.id) } } label: { Label("Done", systemImage: "checkmark").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                     Button { Task { await engine.skip(task.id) } } label: { Label("Skip", systemImage: "forward").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                     if f?.status != .doing {
@@ -385,7 +396,7 @@ struct NowCard: View {
                     Text("Capture something, or move a task to Next.").font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Capture") { model.section = .capture }.buttonStyle(.borderedProminent)
+                Button("Capture") { model.section = .capture }.buttonStyle(.themedProminent)
             }
             .padding(16)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
@@ -444,6 +455,8 @@ enum TimelineItem: Identifiable {
 /// A day's blocks, commitments, reminders and free slots in time order, with the current-time marker on today.
 struct TimelineList: View {
     @EnvironmentObject var engine: SyncEngine
+    /// Calendar colors, so a color chosen in Theme redraws the day at once.
+    @ObservedObject private var feel = FeelController.shared
     var blocks: [PlannerBlock]
     var commitments: [PlannerCommitment]
     var events: [Entity] = []
@@ -470,38 +483,48 @@ struct TimelineList: View {
         switch item {
         case .now(let d):
             HStack(spacing: 8) {
-                Circle().fill(Color.red).frame(width: 10, height: 10)
-                Rectangle().fill(Color.red).frame(height: 2)
-                Text(d.shortTime).font(.caption.weight(.semibold)).foregroundStyle(.red)
+                Circle().fill(.danger).frame(width: 10, height: 10)
+                Rectangle().fill(.danger).frame(height: 2)
+                Text(d.shortTime).font(.caption.weight(.semibold)).foregroundStyle(.dangerText)
             }
             .accessibilityLabel("Now, \(d.shortTime)")
         case .block(let b):
             let past = (ISO.date(b.end) ?? .distantFuture) < now
-            timelineRow(time: timeRange(b.start, b.end), title: b.title, subtitle: b.status == .doing ? "Doing" : "Block", color: .accentColor, dim: past) {
+            // A block under way is marked as fine, as on the web; the others in the theme's accent.
+            timelineRow(time: timeRange(b.start, b.end), title: b.title, subtitle: b.status == .doing ? "Doing" : "Block",
+                        color: b.status == .doing ? AnyShapeStyle(.ok) : AnyShapeStyle(.tint), dim: past) {
                 Button("Unschedule") { Task { await engine.unschedule(taskId: b.task_id) } }
                 if b.status != .doing { Button("Make Now") { Task { await engine.makeNow(b.task_id) } } }
                 Button("Done") { Task { await engine.markDone(b.task_id) } }
             }
         case .commitment(let c):
-            timelineRow(time: timeRange(c.start, c.end), title: c.title, subtitle: c.type.rawValue.capitalized, color: c.type == .blackout ? .gray : (c.type == .preference ? .green : .secondary), dim: (ISO.date(c.end) ?? .distantFuture) < now) { EmptyView() }
+            timelineRow(time: timeRange(c.start, c.end), title: c.title, subtitle: c.type.rawValue.capitalized, color: AnyShapeStyle(c.type == .blackout ? Color.gray : (c.type == .preference ? Color.green : Color.secondary)), dim: (ISO.date(c.end) ?? .distantFuture) < now) { EmptyView() }
         case .event(let e):
-            timelineRow(time: (e.bool("all_day") ?? false) ? "All day" : timeRange(e.str("start"), e.str("end")), title: e.str("title"), subtitle: "Event", color: .purple, dim: (e.date("end") ?? .distantFuture) < now, chip: e.space == .work ? "Work" : nil) {
+            // In its calendar's color (Theme, Calendar colors), else the theme's accent: a tint under the words and a
+            // solid bar, so the words read on any theme.
+            timelineRow(time: (e.bool("all_day") ?? false) ? "All day" : timeRange(e.str("start"), e.str("end")), title: e.str("title"), subtitle: "Event",
+                        color: EventColor.style(e, calendars: feel.settings.calendars), dim: (e.date("end") ?? .distantFuture) < now, chip: e.space == .work ? "Work" : nil) {
                 // Work events come from the work calendar and go back on its next import.
                 if e.space != .work || EventMirror.mirrors(e) { Button("Delete", role: .destructive) { Task { await engine.softDelete(e.id) } } }
             }
         case .reminder(let r, let d):
-            timelineRow(time: d.shortTime, title: r.str("title"), subtitle: "Reminder", color: .orange, dim: d < now) {
+            timelineRow(time: d.shortTime, title: r.str("title"), subtitle: "Reminder", color: AnyShapeStyle(.warn), dim: d < now) {
                 Button("Done") { Task { await engine.ack(r.id) } }
             }
         case .free(let f):
-            HStack(spacing: 12) {
-                Text(timeRange(f.start, f.end)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 96, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Free, \(f.hours.formatted()) h").font(.body.weight(.medium))
+            let time = Text(timeRange(f.start, f.end)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 96, alignment: .leading)
+            let free = Text("Free, \(f.hours.formatted()) h").font(.body.weight(.medium))
+            let schedule = Button { onSchedule(f) } label: { Label("Schedule here", systemImage: "plus") }
+                .buttonStyle(.bordered)
+                .fixedSize()
+            // On a narrow phone the button goes under the words: squeezed beside them, "Schedule" broke in two.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { time; free; Spacer(); schedule }
+                HStack(spacing: 12) {
+                    time
+                    VStack(alignment: .leading, spacing: 6) { free; schedule }
+                    Spacer(minLength: 0)
                 }
-                Spacer()
-                Button { onSchedule(f) } label: { Label("Schedule here", systemImage: "plus") }
-                    .buttonStyle(.bordered)
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
@@ -509,12 +532,15 @@ struct TimelineList: View {
     }
 
     @ViewBuilder
-    private func timelineRow<M: View>(time: String, title: String, subtitle: String, color: Color, dim: Bool, chip: String? = nil, @ViewBuilder menu: () -> M) -> some View {
+    private func timelineRow<M: View>(time: String, title: String, subtitle: String, color: AnyShapeStyle, dim: Bool, chip: String? = nil, @ViewBuilder menu: () -> M) -> some View {
+        // Something already over is quieter: its color fades and its title takes the secondary color. The words are
+        // not faded further: a whole row at 55% left its gray time and subtitle at about 2.5:1 on every theme.
         HStack(spacing: 12) {
             Text(time).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 96, alignment: .leading)
-            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 4)
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 4).opacity(dim ? 0.5 : 1)
             VStack(alignment: .leading, spacing: 2) {
                 Text(StyleGuard.dashes(title)).font(.body.weight(.medium)).lineLimit(2)
+                    .foregroundStyle(dim ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                 HStack(spacing: 6) {
                     if let chip = chip { SpaceChip(text: chip) }
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
@@ -523,8 +549,7 @@ struct TimelineList: View {
             Spacer()
         }
         .padding(10)
-        .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-        .opacity(dim ? 0.55 : 1)
+        .background(color.opacity(dim ? 0.05 : 0.10), in: RoundedRectangle(cornerRadius: 10))
         .contextMenu { menu() }
     }
 }
@@ -542,12 +567,13 @@ func daysLeftLabel(_ due: Date?) -> String {
     return "\(days) day\(days == 1 ? "" : "s") left"
 }
 
-func daysLeftColor(_ due: Date?) -> Color {
-    guard let d = due else { return .secondary }
+/// Overdue is a problem, a week or less needs a look; as words in the theme's status colors.
+func daysLeftColor(_ due: Date?) -> AnyShapeStyle {
+    guard let d = due else { return AnyShapeStyle(.secondary) }
     let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: d)).day ?? 0
-    if days < 0 { return .red }
-    if days <= 7 { return .orange }
-    return .secondary
+    if days < 0 { return AnyShapeStyle(.dangerText) }
+    if days <= 7 { return AnyShapeStyle(.warnText) }
+    return AnyShapeStyle(.secondary)
 }
 
 /// Pick a `next` task for a free slot. One tap schedules a 3 h block from the slot's start.
@@ -575,7 +601,7 @@ struct SchedulePicker: View {
             List {
                 SwiftUI.Section {
                     Text("\(hours.formatted()) h from \(ISO.date(slot.start)?.formatted(date: .abbreviated, time: .shortened) ?? "")").foregroundStyle(.secondary)
-                    if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
+                    if let e = error { Text(e).font(.caption).foregroundStyle(.dangerText) }
                 }
                 SwiftUI.Section("Next tasks") {
                     if candidates.isEmpty { Text("No tasks in Next").foregroundStyle(.secondary) }
@@ -584,7 +610,7 @@ struct SchedulePicker: View {
                             HStack {
                                 Text(StyleGuard.dashes(t.str("title"))).font(.title3)
                                 Spacer()
-                                if busy && pendingTask == t.id { ProgressView() } else { Image(systemName: "plus.circle").foregroundStyle(Color.accentColor) }
+                                if busy && pendingTask == t.id { ProgressView() } else { Image(systemName: "plus.circle").foregroundStyle(.tint) }
                             }
                             .contentShape(Rectangle())
                         }

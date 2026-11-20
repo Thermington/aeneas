@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // way and are written down here first.
         WatchLink.shared.onHumReceived = { WatchHumRelay.shared.kick() }
         WatchLink.shared.onCaptureReceived = { WatchCaptureRelay.shared.kick() }
+        // A Watch that can write speech down itself asks for the model; a file that did not reach it goes again.
+        WatchLink.shared.onWatchSpeechState = { _ in WatchSpeechSetup.shared.kick() }
+        WatchLink.shared.onSpeechModelTransferFailed = { WatchSpeechSetup.shared.kick() }
+        // Activation finishing, or a Watch paired or its app installed or removed.
+        WatchLink.shared.onStateChanged = { WatchSpeechSetup.shared.kick() }
         WatchLink.shared.onUnheardAnswer = { q, a, session in AnswerNotice.post(question: q, answer: a, session: session) }
         // Each Watch request goes the way the iPhone's own do (the home network while the internet is down), with the
         // Watch's own key. Until the engine has its routes (the app woken in the background for the Watch), and in

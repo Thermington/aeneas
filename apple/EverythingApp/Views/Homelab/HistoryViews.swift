@@ -5,13 +5,14 @@ import EACore
 // Overview. The lines come from EACore's TechHistory, as on the web (web/src/views/History.tsx).
 
 extension HistoryKind {
-    /// A change is green, a failed one or a check going down red, the hub noticing a reading orange.
-    var color: Color {
+    /// A change or a check coming back is fine, a failed change or a check going down a problem, the hub noticing a
+    /// reading needs a look; the rest are gray.
+    var tone: StatusTone? {
         switch self {
-        case .change, .back: return .green
-        case .failed, .down: return .red
-        case .event: return .orange
-        case .running, .notes: return .gray
+        case .change, .back: return .ok
+        case .failed, .down: return .danger
+        case .event: return .warn
+        case .running, .notes: return nil
         }
     }
 }
@@ -47,7 +48,7 @@ struct HistoryRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(item.kind.color).accessibilityHidden(true)
+            Image(systemName: "circle.fill").font(.system(size: 8)).foregroundStyle(item.kind.tone.fill(else: .gray)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 if showHost {
                     Text("\(Text(item.host).font(.body.monospaced()).foregroundStyle(.secondary)) \(StyleGuard.dashes(item.text))")
@@ -57,7 +58,7 @@ struct HistoryRow: View {
                 Text([ISO.date(item.at).map { Homelab.ago($0) } ?? "", item.by?.words ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
                     .font(.caption).foregroundStyle(.secondary)
                 if let d = item.detail, !d.isEmpty {
-                    Text(StyleGuard.dashes(d)).font(.caption).foregroundStyle(item.kind == .failed || item.kind == .down ? Color.red : Color.secondary).lineLimit(3)
+                    Text(StyleGuard.dashes(d)).font(.caption).foregroundStyle(item.kind == .failed || item.kind == .down ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).lineLimit(3)
                 }
                 if let command = item.command {
                     DisclosureGroup(item.rollback == nil ? "Command" : "Command and how to undo it") {
@@ -104,7 +105,7 @@ struct PlannedStepRow: View {
             let undo = entry.string("rollback").flatMap { $0.isEmpty ? nil : "; to undo: \(StyleGuard.dashes($0))" } ?? ""
             Text("Planned \(Homelab.ago(entry.string("at")))\(undo)").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 10) {
-                Button("Done", action: onDone).buttonStyle(.borderedProminent)
+                Button("Done", action: onDone).buttonStyle(.themedProminent)
                 Button("Didn't do it", action: onDrop).buttonStyle(.bordered)
             }
             .controlSize(.small)

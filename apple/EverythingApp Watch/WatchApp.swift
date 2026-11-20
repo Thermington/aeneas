@@ -79,12 +79,18 @@ final class AppModel: ObservableObject {
             let reachable = WatchLink.shared.isReachable
             let becameReachable = reachable && !self.phoneReachable
             self.phoneReachable = reachable
+            // Activation may finish after launch: the iPhone hears which speech model this Watch wants once it can,
+            // and the words it last sent are read.
+            WatchSpeech.shared.linkChanged()
             if becameReachable, self.started { Task { await self.engine.sync(); await self.refreshModules() } }
         }
         WatchLink.shared.onHumDelivered = { [weak self] id in self?.hum.delivered(id) }
         WatchLink.shared.onHumResult = { [weak self] r in self?.hum.apply(r) }
         WatchLink.shared.onCaptureDelivered = { [weak self] id in self?.capture.delivered(id) }
         WatchLink.shared.onCaptureResult = { [weak self] r in self?.capture.apply(r) }
+        // Writing speech down on the Watch: the words to expect, and the model the iPhone carries over.
+        WatchLink.shared.onSpeechHints = { words in WatchSpeech.shared.setHints(words) }
+        WatchLink.shared.onSpeechModelFile = { DispatchQueue.main.async { WatchSpeech.shared.fileArrived() } }
     }
 
     func start() async {
@@ -102,6 +108,10 @@ final class AppModel: ObservableObject {
         ReminderScheduler.shared.registerCategories()
         WatchLink.shared.activate()
         phoneReachable = WatchLink.shared.isReachable
+        WatchSpeech.shared.start()
+        #if DEBUG
+        speechHooks()
+        #endif
         // A Watch that never registered is being set up now: once its modules are known it offers what they need.
         if engine.config.deviceId.isEmpty { engine.config.permissionOfferPending = true }
         await engine.start()
@@ -123,7 +133,7 @@ final class AppModel: ObservableObject {
         // `-captureFor <seconds>`: a capture started by `-listen capture` ends by itself, as Done would end it.
         if let i = args.firstIndex(of: "-captureFor"), i + 1 < args.count, let n = Double(args[i + 1]) {
             Task {
-                while !capture.recorder.recording { try? await Task.sleep(nanoseconds: 200_000_000) }
+                while !capture.recording { try? await Task.sleep(nanoseconds: 200_000_000) }
                 try? await Task.sleep(nanoseconds: UInt64(n * 1_000_000_000))
                 capture.stop()
             }
@@ -142,6 +152,38 @@ final class AppModel: ObservableObject {
         #endif
         // No permission is asked at launch (release rule 2).
     }
+
+    #if DEBUG
+    /// Simulator and timing hooks for writing speech down on the Watch. They run before the first sync, which can wait
+    /// a long time on a simulator whose paired iPhone is not running.
+    private func speechHooks() {
+        let args = ProcessInfo.processInfo.arguments
+        let d = UserDefaults.standard
+        // `-captureSample YES`: the bundled sample as if just recorded, through the Watch's own hearing when it can.
+        if d.bool(forKey: "captureSample") {
+            Task { try? await Task.sleep(nanoseconds: 1_000_000_000); await capture.debugSample() }
+        }
+        // `-captureLive YES`: a capture recorded from a bundled 6 second sample instead of the microphone, with the live
+        // words showing while it plays, then the final pass as after Done.
+        if d.bool(forKey: "captureLive") {
+            Task { try? await Task.sleep(nanoseconds: 1_000_000_000); capture.debugLive() }
+        }
+        // `-captureFiled "Logs: weight 192.2 lb"` (after `-captureSample` or `-captureLive`, or alone): the newest capture saved and then
+        // filed, as the iPhone would report it, after `-captureFiledAfter <seconds>` (2 when not given), so the
+        // Watch's own words can show first. `-captureFiledText "<words>"`: the iPhone's words.
+        if let i = args.firstIndex(of: "-captureFiled"), i + 1 < args.count {
+            let filed = args[i + 1]
+            let wait = args.firstIndex(of: "-captureFiledAfter").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil } ?? 2
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                if capture.recent.isEmpty { capture.debugSaved("I weigh 192.2 today.") }
+                capture.debugFiled(filed, text: d.string(forKey: "captureFiledText"))
+            }
+        }
+        // `-EAWatchHearingBench YES`: time the speech models on this Watch with the bundled sample (see WatchSpeech).
+        if d.bool(forKey: "EAWatchHearingBench") { Task { await WatchSpeech.shared.bench() } }
+    }
+    #endif
 
     /// Unknown or never fetched means on, so nothing disappears while the iPhone is away.
     func isOn(_ m: AppModule) -> Bool { modules.isOn(m) }

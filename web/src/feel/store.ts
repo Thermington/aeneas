@@ -125,6 +125,16 @@ export async function refreshFeel(): Promise<void> {
   }
 }
 
+/** A calendar's color (Theme, Calendar colors), or null for its own. Shown at once; needs the hub to keep it. */
+export async function chooseCalendarColor(key: string, color: string | null): Promise<void> {
+  const c = engine.client;
+  if (!c) throw new Error("Connect to the hub first.");
+  set(mergeFeel(view, { calendars: view.calendars.map((x) => (x.key !== key ? x : color ? { ...x, chosen: color } : (({ chosen: _c, ...rest }) => rest)(x))) }));
+  await flush();
+  const out = await c.setCalendarColor(key, color);
+  set(mergeFeel(viewFrom(out), pending));
+}
+
 /** Upload an image shape (PNG or WebP bytes, already shrunk). Needs the hub; throws when it cannot be reached or refuses. */
 export async function addFeelImage(blob: Blob, name: string): Promise<void> {
   const c = engine.client;

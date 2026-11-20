@@ -53,7 +53,7 @@ struct MusicView: View {
                         .onSubmit { Task { await save() } }
                         .submitLabel(.done)
                     Button("Save") { Task { await save() } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                         .disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 if let p = preview {
@@ -61,7 +61,7 @@ struct MusicView: View {
                     Text("\(p.type.capitalized): \(p.title)\(meta.isEmpty ? "" : ", " + meta.joined(separator: ", "))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let s = saved { Label("Saved \(s)", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green) }
+                if let s = saved { Label("Saved \(s)", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.okText) }
                 if let e = error { MakingErrorLine(text: e) }
             } header: {
                 Text("Quick capture")
@@ -158,7 +158,7 @@ struct MusicView: View {
                 Button { Task { await recorder.start() } } label: {
                     Label { Text(Hum.buttonTitle) } icon: { HumSongGlyph().frame(width: 22, height: 22) }
                 }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                     .tint(.red)
             }
             if let e = humError ?? recorder.error { MakingErrorLine(text: e) }

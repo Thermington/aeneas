@@ -1,3 +1,4 @@
+import type { CalendarColor } from "@everythingapp/shared";
 import { KEYS, SCALES, SHAPES, SYNTHS, THEMES, type Key, type Scale, type ShapeName, type Synth, type Theme } from "./theory";
 
 /** A saved tap palette, chosen as `custom:<id>`. */
@@ -24,6 +25,10 @@ export interface AppTheme {
   background: string;
   surface: string;
   text: string;
+  /** Status colors (fine, needs a look, problem); left out, the classic ones for the theme's mode. */
+  ok?: string;
+  warn?: string;
+  danger?: string;
 }
 
 export type Appearance = "system" | "light" | "dark";
@@ -49,6 +54,8 @@ export interface Feel {
   app_theme: string;
   app_themes: AppTheme[];
   appearance: Appearance;
+  /** Each calendar's color (Theme, Calendar colors): its own as reported, and the owner's choice, which wins. */
+  calendars: CalendarColor[];
 }
 
 export interface FeelView extends Feel {
@@ -102,6 +109,7 @@ export const DEFAULT_FEEL: FeelView = {
   drag_bend: false,
   app_theme: "classic",
   app_themes: [],
+  calendars: [],
   appearance: "system",
   effective: { key: "C", scale: "major_pentatonic", from: null },
 };
@@ -140,7 +148,21 @@ function appTheme(v: unknown): AppTheme | null {
   const n = name(r.name);
   if (typeof r.id !== "string" || !ID.test(r.id) || !n || (r.mode !== "light" && r.mode !== "dark")) return null;
   for (const k of ["accent", "background", "surface", "text"] as const) if (typeof r[k] !== "string" || !HEX.test(r[k] as string)) return null;
-  return { id: r.id, name: n, mode: r.mode, accent: r.accent as string, background: r.background as string, surface: r.surface as string, text: r.text as string };
+  const status = Object.fromEntries((["ok", "warn", "danger"] as const).filter((k) => typeof r[k] === "string" && HEX.test(r[k] as string)).map((k) => [k, r[k] as string]));
+  return { id: r.id, name: n, mode: r.mode, accent: r.accent as string, background: r.background as string, surface: r.surface as string, text: r.text as string, ...status };
+}
+
+/** Calendar colors as the hub keeps them; anything malformed is left out. */
+function calendarColors(v: unknown): CalendarColor[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const hex = (x: unknown) => (typeof x === "string" && HEX.test(x) ? x : undefined);
+  return v.slice(0, 200).flatMap((c): CalendarColor[] => {
+    if (!c || typeof c !== "object") return [];
+    const r = c as Record<string, unknown>;
+    if (typeof r.key !== "string" || !r.key || typeof r.name !== "string") return [];
+    const color = hex(r.color), chosen = hex(r.chosen);
+    return [{ key: r.key, name: r.name.slice(0, 120), ...(typeof r.account === "string" ? { account: r.account } : {}), ...(color ? { color } : {}), ...(chosen ? { chosen } : {}) }];
+  });
 }
 
 /** Every item valid and ids unique, else nothing: a list is replaced whole, so a half list would lose things. */
@@ -181,6 +203,8 @@ export function cleanPatch(raw: unknown): Partial<Feel> {
   const apps = list(r.app_themes, MAX_APP_THEMES, appTheme);
   if (apps) out.app_themes = apps;
   if (r.appearance === "system" || r.appearance === "light" || r.appearance === "dark") out.appearance = r.appearance;
+  const cals = calendarColors(r.calendars);
+  if (cals) out.calendars = cals;
   return out;
 }
 

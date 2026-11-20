@@ -64,7 +64,7 @@ struct HelperOfferCard: View {
                 .accessibilityIdentifier("helpers.accept")
             BigButton(title: "No, thank you") { answer(false) }
                 .disabled(busy)
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundStyle(.dangerText) }
         }
         .helperCard()
     }
@@ -157,7 +157,7 @@ private struct HelperStatusCard: View {
             if let a = helper.accepted_at { Text(HelperTime.since(a)).foregroundStyle(.secondary) }
             BigButton(title: "Stop \(n)'s help", symbol: "hand.raised", role: .destructive) { confirm = true }
                 .disabled(busy)
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundStyle(.dangerText) }
         }
         .helperCard()
         .alert("Stop \(n)'s help?", isPresented: $confirm) {
@@ -225,7 +225,7 @@ private struct HomeDevicesCard: View {
             BigButton(title: busy ? "Looking, about 20 seconds" : "Find the devices in my home", symbol: "magnifyingglass", prominent: true) { look() }
                 .disabled(busy)
                 .accessibilityIdentifier("helpers.scan")
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundStyle(.dangerText) }
             if let s = view.scan, !busy {
                 Text("Found \(s.devices.count) \(s.devices.count == 1 ? "device" : "devices"). \(who) can see this list.").font(.title3.weight(.semibold))
                 Text("Looked \(HelperTime.when(s.at).prefix(1).lowercased() + HelperTime.when(s.at).dropFirst())").foregroundStyle(.secondary)
@@ -304,7 +304,7 @@ private struct PasswordsCard: View {
             Toggle("Show the password as I type", isOn: $show).font(.title3)
             BigButton(title: busy ? "Saving" : "Save password", symbol: "lock", prominent: true) { save() }
                 .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
-            if let m = message { Text(m.text).foregroundStyle(m.ok ? Color.green : Color.red) }
+            if let m = message { Text(m.text).foregroundStyle(m.ok ? StatusStyle.okText : StatusStyle.dangerText) }
         }
         .helperCard()
         .alert("Remove the password \(removing?.title ?? "")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
@@ -395,7 +395,7 @@ struct InvitationCard: View {
                 .font(.title3)
                 .accessibilityIdentifier("setup.invitation.text")
                 .onChange(of: text) { _, t in use(t) }
-            if let note { Text(note).foregroundStyle(.red) }
+            if let note { Text(note).foregroundStyle(.dangerText) }
         }
         .helperCard()
     }

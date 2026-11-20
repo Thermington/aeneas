@@ -26,7 +26,7 @@ struct LogsView: View {
                             guard let v = Double(weight.replacingOccurrences(of: ",", with: ".")) else { return }
                             Task { _ = await engine.log(type: .weight, value: .number(v), unit: "lb"); weight = ""; flash = "Weight \(v) logged" }
                         }
-                        .buttonStyle(.borderedProminent).controlSize(.large).disabled(Double(weight) == nil)
+                        .buttonStyle(.themedProminent).controlSize(.large).disabled(Double(weight) == nil)
                     }
                     // Each weight in its own unit; the chart has every reading in lb.
                     latest(.weight, unit: nil)
@@ -64,7 +64,7 @@ struct LogsView: View {
                             let v = "\(systolic)/\(diastolic)"
                             Task { _ = await engine.log(type: .bp, value: .string(v)); systolic = ""; diastolic = ""; flash = "BP \(v) logged" }
                         }
-                        .buttonStyle(.borderedProminent).controlSize(.large).disabled(Int(systolic) == nil || Int(diastolic) == nil)
+                        .buttonStyle(.themedProminent).controlSize(.large).disabled(Int(systolic) == nil || Int(diastolic) == nil)
                     }
                     latest(.bp, unit: "mmHg")
                     Sparkline(points: engine.logs(type: .bp, days: window).compactMap { e in
@@ -104,7 +104,7 @@ struct LogsView: View {
                             HStack {
                                 Text("\(cur.name), \(elapsedLabel(since: cur.start, now: ctx.date))").font(.title3)
                                 Spacer()
-                                Button("End") { Task { await engine.endActivity(); flash = "Ended \(cur.name)" } }.buttonStyle(.borderedProminent)
+                                Button("End") { Task { await engine.endActivity(); flash = "Ended \(cur.name)" } }.buttonStyle(.themedProminent)
                             }
                         }
                     }

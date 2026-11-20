@@ -922,6 +922,14 @@ export const TOOLS: ToolDef[] = [
         if (!/^(m|min|mins|minutes?)$/i.test(unit ?? "")) value = Math.round(value * 60);
         unit = "min";
       }
+      // A weight said without a unit ("192.2 today") is in the unit of the last weight logged, else pounds, as this
+      // tool's description says; it was stored with no unit at all.
+      if (type === "weight" && typeof value === "number" && !unit) {
+        const last = ctx.store.list({ kind: "log", where: { type: "weight" }, limit: 100000 })
+          .filter((l) => typeof l.fields.unit === "string" && l.fields.unit && typeof l.fields.at === "string")
+          .sort((x, y) => String(y.fields.at).localeCompare(String(x.fields.at)))[0];
+        unit = (last?.fields.unit as string | undefined) ?? "lb";
+      }
       // Caffeine is kept in cups; more than 20 with no unit can only be milligrams (the hub turns mg into cups).
       if (type === "caffeine" && typeof value === "number" && !unit && value > 20) unit = "mg";
       // Only note "end" closes an activity; the model also wrote "ended", "stopped" or "done".

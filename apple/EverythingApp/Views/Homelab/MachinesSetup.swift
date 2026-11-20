@@ -54,15 +54,15 @@ struct AddMachineRows: View {
         }
         HStack(spacing: 8) {
             Button(busy ? "Adding…" : "Add") { submit() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .disabled(!ready)
             if busy {
                 ProgressView().controlSize(.small)
                 Text("Signing in and adding the hub's key. This takes a few seconds.").font(.caption).foregroundStyle(.secondary)
             }
         }
-        if let done { Text(done).font(.callout).foregroundStyle(.green) }
-        if let error { Text(error).font(.callout).foregroundStyle(.red) }
+        if let done { Text(done).font(.callout).foregroundStyle(.okText) }
+        if let error { Text(error).font(.callout).foregroundStyle(.dangerText) }
         Text("The password is used once, to put the hub's key there, and is not kept. The computer needs SSH on: on a Mac, System Settings, General, Sharing, Remote Login; on Windows, Settings, System, Optional features, OpenSSH Server; on Linux, the openssh-server package.")
             .font(.footnote).foregroundStyle(.secondary)
     }
@@ -121,7 +121,7 @@ struct HubKeyRows: View {
         } else {
             Button("Show the hub's key, to add by hand") { Task { await load() } }
                 .buttonStyle(.borderless)
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error { Text(error).font(.caption).foregroundStyle(.dangerText) }
         }
     }
 

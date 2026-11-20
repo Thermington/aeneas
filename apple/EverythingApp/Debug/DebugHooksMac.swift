@@ -17,12 +17,42 @@ import EACore
 ///                              With -EAThisMacSignIn YES its Add machine for this Mac shows, filled in, without
 ///                              opening System Settings, and with -EAScrollTo thisMac This Mac is at the top
 ///   -EAMachine <name>          that machine's page in a window of its own; prints the window number
+///   -EAAppTheme <id>           use that app theme (classic, midnight, paper, ...); -EAAppearance light or dark for Classic
+///   -EAThemeEditor YES         with -EASection settings -EASettingsPage appColors, the theme editor opens on the theme in use
+///   -EAOpenItem <id>           an item's sheet opens, as a link to it does
+///   -EAPrintWindows YES        prints the number of every window of the app (sheets too) once the screen has loaded
+///   -EASettingsWindow <page>   a Settings page (theme, appColors, calendarColors...) in a window of its own
 /// Screenshots are then taken from outside (screencapture -o -l <window id>), which needs Screen Recording.
 @MainActor
 enum DebugHooksMac {
     static func applyLaunchArguments(_ model: AppModel) async {
         let d = UserDefaults.standard
         if d.bool(forKey: "EASample"), !model.isConfigured { await model.startSample() }
+        var theme: [String: JSONValue] = [:]
+        if let t = d.string(forKey: "EAAppTheme"), !t.isEmpty { theme["app_theme"] = .string(t) }
+        if let a = d.string(forKey: "EAAppearance"), ["system", "light", "dark"].contains(a) { theme["appearance"] = .string(a) }
+        if !theme.isEmpty { FeelController.shared.change(theme) }
+        if let id = d.string(forKey: "EAOpenItem"), !id.isEmpty {
+            Task { try? await Task.sleep(for: .seconds(1.5)); model.open(itemId: id) }
+        }
+        if d.bool(forKey: "EAPrintWindows") {
+            Task {
+                // On the sharpest screen first, so a screenshot is at 2x when a Retina display is attached.
+                try? await Task.sleep(for: .seconds(2))
+                if let screen = NSScreen.screens.max(by: { $0.backingScaleFactor < $1.backingScaleFactor }) {
+                    for w in NSApp.windows where w.isVisible && w.canBecomeMain && w.screen != screen {
+                        let f = screen.visibleFrame
+                        w.setFrameOrigin(NSPoint(x: f.midX - w.frame.width / 2, y: max(f.minY, f.maxY - w.frame.height - 40)))
+                    }
+                }
+                try? await Task.sleep(for: .seconds(5))
+                // The main windows and their sheets; the menu bar item's window is left out.
+                for w in NSApp.windows where w.isVisible && (w.canBecomeMain || w.isSheet) {
+                    print("window \(w.windowNumber) \(w.isSheet ? "sheet" : "window") \"\(w.title)\" at \(Int(w.backingScaleFactor))x")
+                }
+                fflush(stdout)
+            }
+        }
         if d.bool(forKey: "EAMenuTest") { Task { await menuSelfTest(model) } }
         if let s = d.string(forKey: "EASection"), let section = Section(rawValue: s) { model.section = section }
         if d.bool(forKey: "EADictationTest") { let s = model.section; Task { await dictationSelfTest(section: s) } }
@@ -33,6 +63,9 @@ enum DebugHooksMac {
         }
         if d.bool(forKey: "EAThisMacTest") {
             Task { await screenWindow(model, title: "Machines", size: NSSize(width: 640, height: 900)) { NavigationStack { MachinesSettingsPage() } } }
+        }
+        if let page = d.string(forKey: "EASettingsWindow").flatMap(SettingsPage.init(rawValue:)) {
+            Task { await screenWindow(model, title: "Settings", size: NSSize(width: 640, height: 860)) { NavigationStack { page.view } } }
         }
         if let name = d.string(forKey: "EAMachine"), !name.isEmpty {
             Task {

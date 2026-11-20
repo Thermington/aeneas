@@ -68,7 +68,7 @@ struct PrivacySettingsView: View {
                     UserDefaults.standard.set(v, forKey: HotKey.settingKey)
                     shortcutTaken = !AppDelegate.applyShortcut(v)
                 }
-                if shortcutTaken { Text("Another app already uses that shortcut. Pick another.").foregroundStyle(.red) }
+                if shortcutTaken { Text("Another app already uses that shortcut. Pick another.").foregroundStyle(.dangerText) }
             } footer: {
                 Text("Opens the quick capture panel from any app. The Windows app offers the same choices.")
             }

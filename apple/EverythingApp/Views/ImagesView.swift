@@ -103,7 +103,7 @@ struct ImageComposerView: View {
                 }
                 SwiftUI.Section {
                     planLine
-                    if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
+                    if let e = error { Text(e).font(.caption).foregroundStyle(.dangerText) }
                 }
             }
             .navigationTitle(referenceId == nil ? "Create image" : "New from image")
@@ -133,11 +133,11 @@ struct ImageComposerView: View {
         if request.prompt.isEmpty {
             Text("Nothing runs until you tap Create.").font(.caption).foregroundStyle(.secondary)
         } else if let e = planError {
-            Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+            Label(e, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.warnText)
         } else if let p = plan {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(p.output.width) x \(p.output.height)  ·  \(jobs.workers.whereLabel(p.eligible_workers ?? []))").font(.callout)
-                if let q = p.queue_reason { Text("Waits: \(q)").font(.caption).foregroundStyle(.orange) }
+                if let q = p.queue_reason { Text("Waits: \(q)").font(.caption).foregroundStyle(.warnText) }
             }
         } else {
             ProgressView()
@@ -205,7 +205,7 @@ struct ImageJobsStrip: View {
                         } else if j.isActive {
                             ProgressView().frame(width: 36, height: 36)
                         } else {
-                            Image(systemName: "exclamationmark.triangle").frame(width: 36, height: 36).foregroundStyle(.orange)
+                            Image(systemName: "exclamationmark.triangle").frame(width: 36, height: 36).foregroundStyle(.warnText)
                         }
                         VStack(alignment: .leading, spacing: 1) {
                             Text(j.plan.prompt_original ?? "Image").font(.subheadline).lineLimit(1)

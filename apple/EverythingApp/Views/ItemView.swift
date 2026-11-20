@@ -43,7 +43,8 @@ struct GenericItemView: View {
 
     /// Fields that are bookkeeping, links (shown under Related) or device state.
     private static let hidden: Set<String> = ["apple", "field_ts", "converted_to", "links", "suggested_tags", "suggested_kind", "sorted_by", "filing",
-                                              "filing_attempts", "external_id", "fired", "snooze_log", "checkins", "attachments", "source", "processed", "thread"]
+                                              "filing_attempts", "external_id", "fired", "snooze_log", "checkins", "attachments", "source", "processed", "thread",
+                                              "calendar_key", "caldav"]
 
     private var rows: [(String, String)] {
         // An all-day event is stored at midnight UTC: its day is the date part, not a local time.

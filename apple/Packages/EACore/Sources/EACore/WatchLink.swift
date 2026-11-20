@@ -28,6 +28,13 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     public var onCaptureDelivered: ((String) -> Void)?
     /// Watch side, on the main thread: what the iPhone heard in a spoken capture and how it was saved.
     public var onCaptureResult: ((WatchCaptureResult) -> Void)?
+    /// Watch side, on the main thread: the words the iPhone says to expect in captures (`SpeechHints`).
+    public var onSpeechHints: (([String]) -> Void)?
+    /// Watch side, on a WatchConnectivity queue: a speech model file has been checked and put in place (or refused).
+    public var onSpeechModelFile: (() -> Void)?
+    /// Watch side, main thread only: captures the Watch is writing down itself. Their recordings wait here until it
+    /// is done (or gives up), so what it heard goes with them; after a relaunch nothing is held and they all go.
+    private var heldCaptures: Set<String> = []
     #endif
 
     #if os(iOS)
@@ -35,6 +42,10 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     public var onHumReceived: (() -> Void)?
     /// Phone side, on the main thread: a spoken capture from the Watch is in `WatchCaptureQueue.local`, ready to hear.
     public var onCaptureReceived: (() -> Void)?
+    /// Phone side, on the main thread: the Watch said which speech model it wants and which files it lacks.
+    public var onWatchSpeechState: ((WatchSpeechState) -> Void)?
+    /// Phone side, on the main thread: a speech model file did not reach the Watch (it is sent again).
+    public var onSpeechModelTransferFailed: (() -> Void)?
     /// iPhone, main thread: the hub answered a question the Watch asked from its screen after the Watch app left it
     /// (the wrist went down while the assistant worked), so the reply may never be shown there. The app posts it as a
     /// notification, which the Watch shows while the iPhone is locked.
@@ -210,9 +221,20 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
         sendQueuedFiles()
     }
 
-    /// The same for a spoken capture: kept in the Watch's queue until WatchConnectivity has delivered it.
-    public func queueCapture(_ capture: WatchVoiceCapture, file: URL) throws {
+    /// The same for a spoken capture: kept in the Watch's queue until WatchConnectivity has delivered it. `hold`: the
+    /// Watch is writing it down itself, so the recording waits (safely in the queue) until `release` adds what it
+    /// heard, or until the next launch if the app is stopped first.
+    public func queueCapture(_ capture: WatchVoiceCapture, file: URL, hold: Bool = false) throws {
         try WatchCaptureQueue.local.add(capture, moving: file)
+        if hold { heldCaptures.insert(capture.id) }
+        sendQueuedFiles()
+    }
+
+    /// The Watch is done writing a held capture down: what it heard (nil when it could not) goes with the recording.
+    /// Call on the main thread.
+    public func release(capture id: String, heard: String?) {
+        guard heldCaptures.remove(id) != nil else { return }
+        if heard != nil { WatchCaptureQueue.local.setHeard(id, heard) }
         sendQueuedFiles()
     }
 
@@ -231,10 +253,49 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
             s.transferFile(hums.audioURL(e.hum.id), metadata: e.hum.metadata)
         }
         let captures = WatchCaptureQueue.local
-        for e in captures.all() where !carrying.contains(e.capture.id) {
+        for e in captures.all() where !carrying.contains(e.capture.id) && !heldCaptures.contains(e.capture.id) {
             guard captures.hasAudio(e.capture) else { captures.remove(e.capture.id); continue }
             Self.log.notice("capture transfer queued \(e.capture.id, privacy: .public) reachable=\(s.isReachable)")
             s.transferFile(captures.audioURL(e.capture), metadata: e.capture.metadata)
+        }
+    }
+
+    /// Speech model files from the iPhone: checked against the pinned size and SHA-256, then put in place. Runs on a
+    /// WatchConnectivity queue, which deletes the file when this returns, so the check happens here. A file that does
+    /// not match is dropped; the Watch still lists it as missing, so the iPhone sends it again.
+    public func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        guard let t = SpeechModelTransfer(metadata: file.metadata), let model = SpeechModel.named(t.model) else { return }
+        let store = SpeechModelStore.local
+        do {
+            // Into the store's own folder first: the check reads the file, and the move then stays on one volume.
+            let staging = store.folder.appendingPathComponent("incoming-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: store.folder, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: file.fileURL, to: staging)
+            try store.accept(staging, as: t.path, for: model)
+            Self.log.notice("speech model file \(t.path, privacy: .public) in place, complete=\(store.isComplete(model))")
+        } catch {
+            recordError("speech model file \(t.path): \(error)")
+        }
+        onSpeechModelFile?()
+    }
+
+    /// Tells the iPhone which speech model this Watch wants and which files it still lacks. The newest state wins and
+    /// waits for the iPhone if it is away.
+    public func updateSpeechState(_ state: WatchSpeechState) {
+        guard let s = session, s.activationState == .activated else { activate(); return }
+        if let had = WatchSpeechState(context: s.applicationContext), had == state { return }
+        do { try s.updateApplicationContext(state.context) } catch { recordError("speech state: \(error.localizedDescription)") }
+    }
+
+    /// The words to expect, as the iPhone last sent them.
+    public var speechHints: [String]? {
+        guard let s = session, s.activationState == .activated else { return nil }
+        return SpeechHints.words(context: s.receivedApplicationContext)
+    }
+
+    public func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        if let words = SpeechHints.words(context: applicationContext) {
+            DispatchQueue.main.async { self.onSpeechHints?(words) }
         }
     }
 
@@ -385,6 +446,56 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
     /// Tells the Watch what was heard in a spoken capture and how it was saved, the same way.
     public func sendCaptureResult(_ r: WatchCaptureResult) async {
         await sendToWatch(r.message, what: "capture result \(r.id) \(r.state.rawValue)")
+    }
+
+    // MARK: Speech on the Watch
+
+    /// What the Watch last said about writing speech down itself: the model it wants and the files it lacks.
+    public var watchSpeechState: WatchSpeechState? {
+        guard let s = session, s.activationState == .activated, s.isPaired, s.isWatchAppInstalled else { return nil }
+        return WatchSpeechState(context: s.receivedApplicationContext)
+    }
+
+    public func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        guard let state = WatchSpeechState(context: applicationContext) else { return }
+        Self.log.notice("watch speech state model=\(state.model ?? "none", privacy: .public) missing=\(state.missing.count) device=\(state.device, privacy: .public)")
+        DispatchQueue.main.async { self.onWatchSpeechState?(state) }
+    }
+
+    /// Sends the words to expect in captures; the Watch keeps the newest list. Nothing is sent when it has not changed.
+    public func sendSpeechHints(_ words: [String]) {
+        guard let s = session, s.activationState == .activated, s.isPaired, s.isWatchAppInstalled else { return }
+        if SpeechHints.words(context: s.applicationContext) == words { return }
+        var context = s.applicationContext
+        for (k, v) in SpeechHints.context(words) { context[k] = v }
+        do { try s.updateApplicationContext(context) } catch { recordError("speech hints: \(error.localizedDescription)") }
+    }
+
+    /// Hands speech model files to WatchConnectivity, which carries them to the Watch in the background, over Wi-Fi
+    /// when it can. A file already on its way is not sent twice. Returns how many went.
+    @discardableResult
+    public func sendSpeechModelFiles(_ model: SpeechModel, paths: [String], store: SpeechModelStore) -> Int {
+        guard let s = session, s.activationState == .activated, s.isPaired, s.isWatchAppInstalled else { return 0 }
+        let carrying = Set(s.outstandingFileTransfers.compactMap { SpeechModelTransfer(metadata: $0.file.metadata) }.map { "\($0.model)/\($0.path)" })
+        var sent = 0
+        for p in paths {
+            guard let f = model.file(p), store.has(model, f), !carrying.contains("\(model.name)/\(p)") else { continue }
+            s.transferFile(store.url(model, f), metadata: SpeechModelTransfer(model: model.name, path: p).metadata)
+            sent += 1
+        }
+        if sent > 0 { Self.log.notice("speech model \(model.name, privacy: .public): \(sent) files handed to WatchConnectivity") }
+        return sent
+    }
+
+    /// Speech model files still on their way to the Watch.
+    public var speechModelFilesInFlight: Int {
+        session?.outstandingFileTransfers.filter { SpeechModelTransfer(metadata: $0.file.metadata) != nil }.count ?? 0
+    }
+
+    public func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+        guard SpeechModelTransfer(metadata: fileTransfer.file.metadata) != nil, let error else { return }
+        recordError("speech model file to the Watch: \(error.localizedDescription)")
+        DispatchQueue.main.async { self.onSpeechModelTransferFailed?() }
     }
 
     private func sendToWatch(_ m: [String: Any], what: String) async {

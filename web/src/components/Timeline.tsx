@@ -1,6 +1,8 @@
 import type { TimelineItem } from "../lib/planner";
 import { fmtTime } from "../lib/time";
 import { linkFor } from "../lib/links";
+import { useFeel } from "../feel/store";
+import { eventColorStyle } from "../lib/eventColor";
 
 /**
  * One day as a vertical list in time order: blocks, commitments (blackouts hatched), events,
@@ -8,6 +10,7 @@ import { linkFor } from "../lib/links";
  * current time marker. Used by Today and by Week on phones.
  */
 export function Timeline({ items, onSchedule, onUnschedule, scheduleLabel = "Schedule here" }: { items: TimelineItem[]; onSchedule?: (start: string, hours: number) => void; onUnschedule?: (taskId: string) => void; scheduleLabel?: string }) {
+  const feel = useFeel();
   if (!items.length) return <div className="muted small">Nothing planned.</div>;
   return (
     <div className="timeline">
@@ -68,7 +71,7 @@ export function Timeline({ items, onSchedule, onUnschedule, scheduleLabel = "Sch
             );
           case "event":
             return (
-              <div key={it.key} className="tl-item event">
+              <div key={it.key} className="tl-item event" style={it.fields ? eventColorStyle(it.fields, feel.calendars) : undefined}>
                 <span className="time">
                   {it.all_day ? "All day" : (
                     <>

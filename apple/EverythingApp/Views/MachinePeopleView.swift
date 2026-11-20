@@ -41,7 +41,7 @@ struct MachinePeopleView: View {
                             HStack {
                                 HubBadge(identity: h.identity, label: h.owner ? "\(h.name) (you)" : h.name)
                                 Spacer()
-                                Text(h.up ? "Running" : "Not answering").font(.caption).foregroundStyle(h.up ? Color.green : Color.orange)
+                                Text(h.up ? "Running" : "Not answering").font(.caption).foregroundStyle(h.up ? StatusStyle.okText : StatusStyle.warnText)
                             }
                             if let a = h.address { Text(a).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                             if !h.owner {
@@ -75,13 +75,13 @@ struct MachinePeopleView: View {
             if let r = request {
                 SwiftUI.Section {
                     if !r.finished { Label(r.step ?? "Waiting for the machine to start on it", systemImage: "hourglass") }
-                    if r.state == "failed" { Text(r.error ?? "That did not work.").foregroundStyle(.red) }
+                    if r.state == "failed" { Text(r.error ?? "That did not work.").foregroundStyle(.dangerText) }
                     if r.state == "done", op == "stop" { Text("\(r.name ?? "Their")’s hub is stopped. Their data stays on this machine.") }
                     if r.state == "done", op != "stop", let p = r.pairing { nextSteps(r, p) }
                 }
                 .themedRow()
             }
-            if let error { Text(error).foregroundStyle(.red).themedRow() }
+            if let error { Text(error).foregroundStyle(.dangerText).themedRow() }
         }
         .formStyle(.grouped)
         .themedScreen()

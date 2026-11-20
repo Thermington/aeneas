@@ -29,6 +29,8 @@ import { linkFor } from "../lib/links";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { Timeline } from "../components/Timeline";
 import { TaskPicker } from "../components/TaskPicker";
+import { useFeel } from "../feel/store";
+import { eventColorStyle } from "../lib/eventColor";
 
 const DRAG_TYPE = "application/x-ea-task";
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -54,6 +56,7 @@ function startDrag(e: DragEvent, task_id: string, hours: number) {
 
 /** Seven columns, rows are hours from day start to day end. Items are placed by percent of the day span. */
 function WeekGrid({ week, onDrop, onPlus, onUnschedule }: { week: PlannerWeek; onDrop: (taskId: string, start: string, hours: number) => void; onPlus: (start: string, hours: number) => void; onUnschedule: (taskId: string) => void }) {
+  const feel = useFeel();
   const rows = hourRows();
   const [over, setOver] = useState<string | null>(null);
   const todayStr = localDate(new Date());
@@ -85,7 +88,7 @@ function WeekGrid({ week, onDrop, onPlus, onUnschedule }: { week: PlannerWeek; o
               <span className="muted">{DAY_SHORT[i]}</span> {date.getDate()}
             </div>
             {d.events.filter((e) => e.fields.all_day === true).map((e) => (
-              <a key={e.id} href={linkFor("event", e.id)} className="wk-allday small" title={`${String(e.fields.title)}, all day`}>
+              <a key={e.id} href={linkFor("event", e.id)} className="wk-allday small" style={eventColorStyle(e.fields as Record<string, unknown>, feel.calendars)} title={`${String(e.fields.title)}, all day`}>
                 {String(e.fields.title)}
               </a>
             ))}
@@ -148,7 +151,7 @@ function WeekGrid({ week, onDrop, onPlus, onUnschedule }: { week: PlannerWeek; o
               const p = place({ start: String(e.fields.start), end: String(e.fields.end) });
               if (!p) return null;
               return (
-                <div key={e.id} className="wk-item event" style={{ top: `${p.top}%`, height: `${p.height}%` }} title={`${String(e.fields.title)}, ${fmtTime(String(e.fields.start))} to ${fmtTime(String(e.fields.end))}`}>
+                <div key={e.id} className="wk-item event" style={{ top: `${p.top}%`, height: `${p.height}%`, ...eventColorStyle(e.fields as Record<string, unknown>, feel.calendars) }} title={`${String(e.fields.title)}, ${fmtTime(String(e.fields.start))} to ${fmtTime(String(e.fields.end))}`}>
                   {String(e.fields.title)}
                 </div>
               );

@@ -62,10 +62,10 @@ struct TailscaleHereView: View {
                 }
             case .connected(let network):
                 Label(network.map { "Connected to \($0)" } ?? "Connected", systemImage: "checkmark.circle")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(.okText)
                 Button("Sign out of Tailscale here", role: .destructive) { confirmSignOut = true }
             case .failed(let message):
-                Label(message, systemImage: "xmark.circle").foregroundStyle(.red).font(.callout)
+                Label(message, systemImage: "xmark.circle").foregroundStyle(.dangerText).font(.callout)
                 Button("Try again") { tailnet.resume() }
             }
         }

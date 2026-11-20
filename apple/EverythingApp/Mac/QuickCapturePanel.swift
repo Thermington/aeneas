@@ -60,7 +60,7 @@ struct QuickCaptureView: View {
                 Text(message ?? engine.statusLabel).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { close() }.keyboardShortcut(.cancelAction)
-                Button("Save") { save() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                Button("Save") { save() }.keyboardShortcut(.defaultAction).buttonStyle(.themedProminent)
             }
             .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
         }

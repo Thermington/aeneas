@@ -206,7 +206,7 @@ private struct AdminPayoffCalc: View {
                 case .success(let r):
                     if r.never {
                         Label("Never. The payment does not cover the interest.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.title3.weight(.semibold)).foregroundStyle(.orange)
+                            .font(.title3.weight(.semibold)).foregroundStyle(.warnText)
                         if let first = r.preview.first { Text("Interest in month 1 is \(money(first.interest)).").foregroundStyle(.secondary) }
                     } else {
                         Answer(big: byMonths ? "\(money(r.payment)) a month" : "\(r.months ?? 0) months",
@@ -279,7 +279,7 @@ private struct AdminUnitCalc: View {
                     case .success(let out):
                         ForEach(Array(out.enumerated()), id: \.offset) { i, x in
                             HStack {
-                                if i == 0 && out.count > 1 { AdminPill(text: "Cheapest", symbol: "star.fill", color: .green) }
+                                if i == 0 && out.count > 1 { AdminPill(text: "Cheapest", symbol: "star.fill", tone: .ok) }
                                 Text(x.name)
                                 Spacer()
                                 Text("$\(String(format: x.per_unit < 1 ? "%.4f" : "%.2f", x.per_unit)) / \(x.base)").monospacedDigit()

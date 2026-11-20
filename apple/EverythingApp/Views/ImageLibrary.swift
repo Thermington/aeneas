@@ -201,7 +201,7 @@ struct ImageSettingsView: View {
                         }
                     }
             } footer: { Text("Shows your photo library in the Image Gallery, so any photo can be a reference for a new image. It also lets the assistant look at your newest photos when you ask about them. A photo leaves the phone only when you use or add it, or ask the assistant about it.") }
-            if let n = note { SwiftUI.Section { Text(n).font(.callout).foregroundStyle(.orange) } }
+            if let n = note { SwiftUI.Section { Text(n).font(.callout).foregroundStyle(.warnText) } }
             #else
             SwiftUI.Section { Text("Created images are kept in the Image Gallery. Saving to Photos and photo library access are iPhone settings.").foregroundStyle(.secondary) }
             #endif

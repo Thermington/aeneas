@@ -12,15 +12,63 @@ struct ThemeColors: Equatable {
     var surface: Color
     var text: Color
 
+    /// Words on the accent (a prominent button, a count on an accent capsule): white where it reads at 4.5:1, else a
+    /// dark ink from the theme, as on the web. White on Forest's green or Ocean's cyan read at about 2:1.
+    var onAccent: Color
+
     init(_ t: AppTheme) {
         spec = t
         accent = FeelController.color(t.accent) ?? .accentColor
         background = FeelController.color(t.background) ?? .clear
         surface = FeelController.color(t.surface) ?? .clear
         text = FeelController.color(t.text) ?? .primary
+        let ink = FeelColor.mix(t.background, "#000000", t.isDark ? 0.4 : 0.85)
+        onAccent = FeelController.color(FeelColor.onFill(t.accent, ink: ink)) ?? .white
     }
 
     var scheme: ColorScheme { spec.isDark ? .dark : .light }
+}
+
+/// Words on the accent color: the theme's choice (`ThemeColors.onAccent`), white in Classic, whose accent is dark
+/// enough for it.
+struct OnAccentStyle: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color { environment.eaTheme?.onAccent ?? .white }
+}
+
+extension ShapeStyle where Self == OnAccentStyle {
+    static var onAccent: OnAccentStyle { OnAccentStyle() }
+}
+
+/// `.borderedProminent` with its words in the theme's color for words on the accent. The system draws them white on
+/// any tint, which on a light accent (Forest, Ocean, Sunset, Neon) left light words on a light fill. Classic is left
+/// to the system.
+struct ThemedProminentButtonStyle: PrimitiveButtonStyle {
+    @Environment(\.eaTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    #if os(macOS)
+    /// In a window of an app in the background the Mac draws the button gray with its own gray words; dark ink on that
+    /// gray would not read.
+    @Environment(\.appearsActive) private var appearsActive
+    private var onAccentFill: Bool { appearsActive }
+    #else
+    private var onAccentFill: Bool { true }
+    #endif
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button(role: configuration.role, action: configuration.trigger) {
+            if let theme, isEnabled, onAccentFill {
+                configuration.label.foregroundStyle(theme.onAccent)
+            } else {
+                configuration.label
+            }
+        }
+        .buttonStyle(.borderedProminent)
+    }
+}
+
+extension PrimitiveButtonStyle where Self == ThemedProminentButtonStyle {
+    /// The prominent button for every screen: see `ThemedProminentButtonStyle`.
+    static var themedProminent: ThemedProminentButtonStyle { ThemedProminentButtonStyle() }
 }
 
 private struct ThemeKey: EnvironmentKey { static let defaultValue: ThemeColors? = nil }

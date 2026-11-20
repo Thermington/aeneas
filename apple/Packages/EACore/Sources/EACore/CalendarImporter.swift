@@ -13,9 +13,7 @@ final class EventKitSource: CalendarEventSource {
     init(store: EKEventStore) { self.store = store }
 
     func calendars() -> [CalendarInfo] {
-        store.calendars(for: .event).map {
-            CalendarInfo(id: $0.calendarIdentifier, title: $0.title, sourceTitle: $0.source?.title ?? "", isExchange: $0.source?.sourceType == .exchange)
-        }.sorted { ($0.sourceTitle, $0.title) < ($1.sourceTitle, $1.title) }
+        store.calendars(for: .event).map(\.info).sorted { ($0.sourceTitle, $0.title) < ($1.sourceTitle, $1.title) }
     }
 
     func occurrences(calendarIds: Set<String>, from: Date, to: Date) -> [CalendarOccurrence] {
@@ -30,7 +28,64 @@ final class EventKitSource: CalendarEventSource {
             // `eventIdentifier` is local to one device and only the fallback.
             let id = ev.calendarItemExternalIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? ev.eventIdentifier ?? ev.calendarItemIdentifier
             return CalendarOccurrence(eventIdentifier: id, calendarId: ev.calendar.calendarIdentifier, title: ev.title ?? "", start: start, end: end,
-                                      allDay: ev.isAllDay, recurring: ev.hasRecurrenceRules)
+                                      allDay: ev.isAllDay, recurring: ev.hasRecurrenceRules, calendarKey: ev.calendar.info.key)
+        }
+    }
+}
+
+extension EKCalendar {
+    /// What the app knows of a calendar: its account, whether it is Exchange, and its own color.
+    var info: CalendarInfo {
+        CalendarInfo(id: calendarIdentifier, title: title, sourceTitle: source?.title ?? "", isExchange: source?.sourceType == .exchange,
+                     color: Self.hex(cgColor))
+    }
+
+    /// A calendar color as `#RRGGBB` in sRGB, as the hub keeps it.
+    static func hex(_ color: CGColor?) -> String? {
+        guard let color, let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let c = color.converted(to: srgb, intent: .defaultIntent, options: nil)?.components, c.count >= 3 else { return nil }
+        return FeelTheme.hex(r: Double(c[0]), g: Double(c[1]), b: Double(c[2]))
+    }
+}
+
+/// Tells the hub which Apple Calendar calendars this device brings events from, with their colors
+/// (`PUT /prefs/feel/calendars`), so Theme, Calendar colors lists them and every device draws their events in them.
+/// The work import and the personal calendar copy each say what they read; the hub hears them together when one is
+/// new or changed, else at most once a day.
+@MainActor
+public final class CalendarColorReporter {
+    public static let shared = CalendarColorReporter()
+    private static let log = Logger(subsystem: SharedConfig.logSubsystem, category: "calendar")
+    static let stateKey = "ea.calendarColorReport"
+
+    /// The whole feel setting the hub answers with, for the app to take the calendars from.
+    public var onFeel: ((FeelSettings) -> Void)?
+
+    private var plan: CalendarReportPlan {
+        get { UserDefaults.standard.data(forKey: Self.stateKey).flatMap { try? JSONDecoder().decode(CalendarReportPlan.self, from: $0) } ?? CalendarReportPlan() }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.stateKey) }
+    }
+
+    /// `part` names who found them (`work`, `personal`). Sent only while the hub answers.
+    public func found(_ calendars: [CalendarInfo], part: String, engine: SyncEngine) async {
+        var p = plan
+        let send = p.found(calendars.compactMap(\.report), part: part)
+        plan = p
+        guard let send, let c = engine.client, engine.hubInReach else { return }
+        do {
+            let feel = try await c.reportCalendars(send)
+            var done = plan
+            done.didSend(send)
+            plan = done
+            onFeel?(feel)
+        } catch {
+            // A hub from before calendar colors answers 404: it is asked again a day later, not on every run.
+            if case HubError.http(404, _) = error {
+                var done = plan
+                done.didSend(send)
+                plan = done
+            }
+            Self.log.notice("calendar colors not reported: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
@@ -171,6 +226,7 @@ public final class CalendarImporter: ObservableObject {
                 return
             }
             let result = await CalendarImportRunner(engine: engine, source: source).run(selected: selected)
+            await CalendarColorReporter.shared.found(source.calendars().filter { selected.contains($0.id) }, part: "work", engine: engine)
             lastResult = result
             config.lastCalendarImport = result.at
             config.lastCalendarImportCount = result.live

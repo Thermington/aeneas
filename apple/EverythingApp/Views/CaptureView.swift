@@ -69,8 +69,8 @@ struct CaptureView: View {
                 }
                 humStatus
 
-                if let e = dictation.error { Text(e).font(.footnote).foregroundStyle(.red) }
-                if let n = dictation.notice { Text(n).font(.footnote).foregroundStyle(.orange) }
+                if let e = dictation.error { Text(e).font(.footnote).foregroundStyle(.dangerText) }
+                if let n = dictation.notice { Text(n).font(.footnote).foregroundStyle(.warnText) }
                 if let m = message {
                     if let id = lastCaptureId, m.hasPrefix("Filed:") {
                         Button { model.open(itemId: id) } label: {
@@ -130,7 +130,7 @@ struct CaptureView: View {
                     Text(dictation.listening ? "Listening. Tap when done." : "Tap to dictate").font(.subheadline)
                 }
                 .frame(maxWidth: .infinity, minHeight: 84)
-                .background(dictation.listening ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                .background(dictation.listening ? AnyShapeStyle(.tint.opacity(0.35)) : AnyShapeStyle(Color.secondary.opacity(0.15)), in: RoundedRectangle(cornerRadius: 16))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -178,7 +178,7 @@ struct CaptureView: View {
 
     @ViewBuilder private var humStatus: some View {
         if let e = hum.error ?? humError {
-            Text(e).font(.footnote).foregroundStyle(.red)
+            Text(e).font(.footnote).foregroundStyle(.dangerText)
         }
         if let take = humUnsent, !hum.recording, !humSending {
             HStack {

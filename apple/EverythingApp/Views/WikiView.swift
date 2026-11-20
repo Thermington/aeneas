@@ -19,7 +19,7 @@ struct WikiView: View {
 
     var body: some View {
         List {
-            if let problem { Text(problem).font(.callout).foregroundStyle(.red) }
+            if let problem { Text(problem).font(.callout).foregroundStyle(.dangerText) }
             if searching {
                 results
             } else if let index {
@@ -128,7 +128,7 @@ private struct WikiSourceRow: View {
             Label(source.name, systemImage: source.isConfluence ? "book.closed" : "folder")
                 .font(.subheadline.weight(.semibold))
             Text(detail).font(.caption).foregroundStyle(.secondary)
-            if let e = source.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.red) }
+            if let e = source.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.dangerText) }
         }
         .padding(.vertical, 2)
     }
@@ -200,7 +200,7 @@ struct WikiPageView: View {
                     header(page)
                     ForEach(blocks.indices, id: \.self) { i in WikiBlockView(block: blocks[i]) }
                 } else if let problem {
-                    Text(problem).foregroundStyle(.red)
+                    Text(problem).foregroundStyle(.dangerText)
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
@@ -505,7 +505,7 @@ private struct WikiMediaSheet: View {
                         ShareLink(item: file) { Label("Share or open", systemImage: "square.and.arrow.up") }
                     }
                 } else if let problem {
-                    Text(problem).foregroundStyle(.red).padding()
+                    Text(problem).foregroundStyle(.dangerText).padding()
                 } else {
                     ProgressView()
                 }

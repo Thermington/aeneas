@@ -212,7 +212,7 @@ struct OpsView: View {
                     } description: {
                         Text("Add a machine the hub can reach, or a check for a machine or a web address by ping, port, web address, certificate or name lookup.")
                     } actions: {
-                        Button("Add machine") { addingMachine = true }.buttonStyle(.borderedProminent)
+                        Button("Add machine") { addingMachine = true }.buttonStyle(.themedProminent)
                         Button("Add check") { creating = true }.buttonStyle(.bordered)
                     }
                 }
@@ -299,7 +299,7 @@ struct ProposeFixButton: View {
                 .controlSize(.small)
                 .disabled(busy || engine.client == nil)
                 .help("The assistant finds the cause and proposes one fix you approve or cancel")
-            if let error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(3) }
+            if let error { Text(error).font(.caption).foregroundStyle(.dangerText).lineLimit(3) }
         }
     }
 
@@ -349,7 +349,7 @@ struct CheckProgress: View {
                 Text("Checking").font(.caption).foregroundStyle(.secondary)
             }
         } else if let error {
-            Text(error).font(.caption).foregroundStyle(.red).lineLimit(3)
+            Text(error).font(.caption).foregroundStyle(.dangerText).lineLimit(3)
         }
     }
 }
@@ -357,11 +357,12 @@ struct CheckProgress: View {
 // MARK: Rows
 
 extension TechTone {
-    var color: Color {
+    /// Fine or a problem in the theme's status colors; muted has none and shows in gray.
+    var status: StatusTone? {
         switch self {
-        case .ok: return .green
-        case .danger: return .red
-        case .muted: return .gray
+        case .ok: return .ok
+        case .danger: return .danger
+        case .muted: return nil
         }
     }
     var symbol: String {
@@ -377,7 +378,7 @@ extension TechTone {
 struct TechStatusPill: View {
     var status: TechStatus
     var body: some View {
-        HomelabPill(text: status.label.prefix(1).uppercased() + status.label.dropFirst(), symbol: status.tone.symbol, color: status.tone.color)
+        HomelabPill(text: status.label.prefix(1).uppercased() + status.label.dropFirst(), symbol: status.tone.symbol, color: .gray, tone: status.tone.status)
     }
 }
 
@@ -391,9 +392,9 @@ struct TechLightRow: View {
         HStack(spacing: 14) {
             Image(systemName: light.tone.symbol)
                 .font(.system(size: 34))
-                .foregroundStyle(light.tone.color)
+                .foregroundStyle(light.tone.status.fill(else: .gray))
             VStack(alignment: .leading, spacing: 3) {
-                Text(light.label).font(.title2.weight(.bold)).foregroundStyle(light.tone == .muted ? Color.primary : light.tone.color)
+                Text(light.label).font(.title2.weight(.bold)).foregroundStyle(light.tone.status.text(else: .primary))
                 if !light.detail.isEmpty { Text(light.detail).font(.subheadline) }
                 if let note { Text(note).font(.caption).foregroundStyle(.secondary) }
                 else if let updated { Text("Updated \(Homelab.ago(updated))").font(.caption).foregroundStyle(.secondary) }
@@ -417,7 +418,7 @@ struct LookRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: look.acknowledged ? MonitorStatus.unknown.symbol : "exclamationmark.triangle.fill")
-                    .foregroundStyle(look.acknowledged ? Color.gray : Color.red)
+                    .foregroundStyle(look.acknowledged ? AnyShapeStyle(.gray) : AnyShapeStyle(.dangerText))
                 Text(StyleGuard.dashes(look.title)).font(.body.weight(.semibold))
                 Spacer(minLength: 6)
                 if let thing {
@@ -430,7 +431,7 @@ struct LookRow: View {
                 HStack(alignment: .top, spacing: 10) {
                     if look.monitorId != nil || look.sensor != nil { ProposeFixButton(monitorId: look.monitorId, sensor: look.sensor) }
                     if let inc = look.incident, acked == nil {
-                        Button("Acknowledge") { onAck(inc) }.buttonStyle(.borderedProminent).controlSize(.small)
+                        Button("Acknowledge") { onAck(inc) }.buttonStyle(.themedProminent).controlSize(.small)
                     }
                 }
             }
@@ -467,7 +468,7 @@ struct ThingRow: View {
                 HStack {
                     Text(Tech.readingLabel(s.str("name"), thing: thing.name))
                     Spacer(minLength: 6)
-                    Text(Tech.readingValue(s)).monospacedDigit().foregroundStyle(Tech.alerting(s) ? Color.red : Color.secondary)
+                    Text(Tech.readingValue(s)).monospacedDigit().foregroundStyle(Tech.alerting(s) ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
                 }
                 .font(.caption)
             }
@@ -485,12 +486,12 @@ struct TechBarRow: View {
             HStack {
                 Text(bar.label)
                 Spacer(minLength: 6)
-                Text(bar.text).monospacedDigit().foregroundStyle(bar.tone == .danger ? Color.red : Color.secondary)
+                Text(bar.text).monospacedDigit().foregroundStyle(bar.tone == .danger ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
             }
             .font(.caption)
             ProgressView(value: bar.value, total: 100)
                 .progressViewStyle(.linear)
-                .tint(bar.tone == .danger ? .red : .accentColor)
+                .tint(bar.tone == .danger ? AnyShapeStyle(.danger) : nil)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(bar.label), \(bar.text)")
@@ -513,7 +514,7 @@ struct MonitorRow: View {
                 if !jobs.isEmpty {
                     BackupJobsList(lines: jobs)
                     if let note = MonitorText.backupNote(monitor, jobs: jobs) {
-                        Text(note).font(.caption).foregroundStyle(away ? Color.orange : status == .down ? Color.red : Color.secondary).lineLimit(3)
+                        Text(note).font(.caption).foregroundStyle(away ? AnyShapeStyle(.warnText) : status == .down ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).lineLimit(3)
                     }
                     Text(MonitorText.checked(monitor)).font(.caption2).foregroundStyle(.secondary)
                 } else {
@@ -522,7 +523,7 @@ struct MonitorRow: View {
                     Text(MonitorText.stats(monitor, uptime: uptime)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     if let d = monitor.string("last_detail"), !d.isEmpty, !(err ?? "").contains(d) { Text(d).font(.caption).lineLimit(2) }
                     // The last check's error: a check that failed short of down, or a hand check of one that is off.
-                    if let err { Text(StyleGuard.dashes(err)).font(.caption).foregroundStyle(status == .down ? Color.red : Color.secondary).lineLimit(2) }
+                    if let err { Text(StyleGuard.dashes(err)).font(.caption).foregroundStyle(status == .down ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).lineLimit(2) }
                 }
                 CheckProgress(checking: checking, error: checkError)
             }
@@ -549,9 +550,9 @@ struct HubBackupRow: View {
                 ForEach(lines) { l in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: l.ok ? MonitorStatus.up.symbol : MonitorStatus.down.symbol)
-                            .foregroundStyle(l.ok ? Color.green : Color.red)
+                            .foregroundStyle(l.ok ? StatusStyle.okText : StatusStyle.dangerText)
                         Text(l.label).fontWeight(.semibold).frame(minWidth: 86, alignment: .leading)
-                        Text(Self.text(l)).foregroundStyle(l.ok ? Color.secondary : Color.red).fixedSize(horizontal: false, vertical: true)
+                        Text(Self.text(l)).foregroundStyle(l.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)).fixedSize(horizontal: false, vertical: true)
                     }
                     .font(.caption)
                     .accessibilityElement(children: .combine)
@@ -594,12 +595,12 @@ struct DownRow: View {
                 // A machine's incident has the machine's error, never this monitor's.
                 let err = MonitorText.error(monitor) ?? (joined ? nil : incident?.string("last_error"))
                 Text("\(monitor.str("type")) \(monitor.str("target"))").font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                if let err, !err.isEmpty { Text(StyleGuard.dashes(err)).font(.subheadline).foregroundStyle(.red).lineLimit(3) }
+                if let err, !err.isEmpty { Text(StyleGuard.dashes(err)).font(.subheadline).foregroundStyle(.dangerText).lineLimit(3) }
                 if let d = monitor.string("last_detail"), !d.isEmpty, !(err ?? "").contains(d) { Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             } else {
                 BackupJobsList(lines: jobs)
                 // A failing job line already says what is wrong; otherwise the error does (ssh refused, away too long).
-                if let note = MonitorText.backupNote(monitor, jobs: jobs) { Text(note).font(.subheadline).foregroundStyle(.red).lineLimit(3) }
+                if let note = MonitorText.backupNote(monitor, jobs: jobs) { Text(note).font(.subheadline).foregroundStyle(.dangerText).lineLimit(3) }
             }
             if let inc = incident {
                 if joined {
@@ -618,7 +619,7 @@ struct DownRow: View {
                 ProposeFixButton(monitorId: monitor.id)
                 if let inc = incident, !joined, inc.string("acknowledged_at") == nil {
                     Button("Acknowledge") { onAck(inc) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                         .controlSize(.small)
                 }
             }
@@ -640,17 +641,17 @@ struct IncidentRow: View {
             HStack {
                 Text(StyleGuard.dashes(incident.str("name"))).font(.body.weight(.medium))
                 Spacer(minLength: 6)
-                HomelabPill(text: open ? "Open" : "Closed", symbol: open ? "exclamationmark.circle.fill" : "checkmark.circle", color: open ? .red : .green)
+                HomelabPill(text: open ? "Open" : "Closed", symbol: open ? "exclamationmark.circle.fill" : "checkmark.circle", tone: open ? .danger : .ok)
             }
             if let err = incident.string("last_error"), !err.isEmpty {
-                Text(StyleGuard.dashes(err)).font(.caption).foregroundStyle(open ? Color.red : Color.secondary).lineLimit(2)
+                Text(StyleGuard.dashes(err)).font(.caption).foregroundStyle(open ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).lineLimit(2)
             }
             if let also = MonitorText.alsoDown(incident, except: alsoExcept) { Text(also).font(.caption) }
             Text(MonitorText.incidentTimes(incident)).font(.caption).foregroundStyle(.secondary)
             if let ack = incident.string("acknowledged_at") {
                 Text(MonitorText.acked(ack, note: incident.string("ack_note"))).font(.caption)
             } else if open, let onAck {
-                Button("Acknowledge", action: onAck).buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Acknowledge", action: onAck).buttonStyle(.themedProminent).controlSize(.small)
             } else {
                 Text("Not acknowledged").font(.caption).foregroundStyle(.secondary)
             }
@@ -780,7 +781,7 @@ struct AckSheet: View {
                     Text(StyleGuard.dashes(incident.str("name"))).font(.headline)
                     // Its monitor's error is the latest; the incident's own was written when it opened.
                     let err = engine.get(incident.str("monitor_id")).flatMap(MonitorText.error) ?? incident.string("last_error")
-                    if let err, !err.isEmpty { Text(StyleGuard.dashes(err)).foregroundStyle(.red) }
+                    if let err, !err.isEmpty { Text(StyleGuard.dashes(err)).foregroundStyle(.dangerText) }
                     Text(MonitorText.downFor(incident)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 SwiftUI.Section {
@@ -802,12 +803,12 @@ struct AckSheet: View {
                         }
                         .frame(minHeight: 36)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                     .disabled(busy || engine.client == nil)
                     if engine.client == nil {
                         Text("Acknowledging needs the hub. Set it up in Settings.").font(.subheadline).foregroundStyle(.secondary)
                     }
-                    if let error { Text(error).font(.subheadline).foregroundStyle(.red) }
+                    if let error { Text(error).font(.subheadline).foregroundStyle(.dangerText) }
                 }
             }
             .formStyle(.grouped)
@@ -865,9 +866,9 @@ struct MonitorDetailView: View {
         List {
             SwiftUI.Section {
                 HStack(spacing: 12) {
-                    Image(systemName: away ? "moon.zzz.fill" : status.symbol).font(.system(size: 30)).foregroundStyle(away ? Color.gray : status.color)
+                    Image(systemName: away ? "moon.zzz.fill" : status.symbol).font(.system(size: 30)).foregroundStyle(away ? AnyShapeStyle(.gray) : status.tone.fill(else: status.color))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(away ? "Away" : status.label).font(.title2.weight(.bold)).foregroundStyle(status == .off || away ? Color.primary : status.color)
+                        Text(away ? "Away" : status.label).font(.title2.weight(.bold)).foregroundStyle(away ? AnyShapeStyle(.primary) : status.tone.text(else: .primary))
                         Text("\(m.str("type")) \(m.str("target"))").font(.callout.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
@@ -883,11 +884,11 @@ struct MonitorDetailView: View {
                     }
                     .frame(minHeight: 32)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .disabled(checking || engine.client == nil)
                 if status == .down { ProposeFixButton(monitorId: m.id) }
                 if engine.client == nil { Text("Checking needs the hub.").font(.caption).foregroundStyle(.secondary) }
-                if let checkError { Text(checkError).font(.subheadline).foregroundStyle(.red) }
+                if let checkError { Text(checkError).font(.subheadline).foregroundStyle(.dangerText) }
             }
 
             if let inc = incident {
@@ -905,7 +906,7 @@ struct MonitorDetailView: View {
                 SwiftUI.Section {
                     BackupJobsList(lines: jobs, showTimes: true)
                     if let note = MonitorText.backupNote(m, jobs: jobs), away {
-                        Text(note).font(.subheadline).foregroundStyle(.orange)
+                        Text(note).font(.subheadline).foregroundStyle(.warnText)
                     }
                 } header: {
                     Text("Jobs")
@@ -921,7 +922,7 @@ struct MonitorDetailView: View {
                 LabeledContent("Last OK", value: m.string("last_ok").map { Homelab.ago($0) } ?? "Never")
                 if let n = m.number("consecutive_fails"), n > 0 { LabeledContent("Failed in a row", value: "\(Int(n))") }
                 if let err = m.string("last_error"), !err.isEmpty {
-                    Text(err).font(.subheadline).foregroundStyle(status == .down ? Color.red : Color.secondary).textSelection(.enabled)
+                    Text(err).font(.subheadline).foregroundStyle(status == .down ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).textSelection(.enabled)
                 }
             }
 
@@ -940,7 +941,7 @@ struct MonitorDetailView: View {
                     if !errors.isEmpty {
                         ForEach(errors, id: \.at) { r in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(r.error ?? "Failed").font(.caption).foregroundStyle(.red)
+                                Text(r.error ?? "Failed").font(.caption).foregroundStyle(.dangerText)
                                 Text(ISO.date(r.at)?.shortDateTime ?? r.at).font(.caption2).foregroundStyle(.secondary)
                             }
                         }
@@ -1069,8 +1070,8 @@ struct UptimeStrip: View {
                 let gap: CGFloat = w > 3 ? 1 : 0
                 for (i, c) in cells.enumerated() {
                     let rect = CGRect(x: CGFloat(i) * w, y: 0, width: max(1, w - gap), height: size.height)
-                    let color: Color = c.ok == nil ? .gray.opacity(0.25) : (c.ok! ? .green : .red)
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: min(2, w / 3)), with: .color(color))
+                    let color: AnyShapeStyle = c.ok == nil ? AnyShapeStyle(.gray.opacity(0.25)) : (c.ok! ? AnyShapeStyle(.ok) : AnyShapeStyle(.danger))
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: min(2, w / 3)), with: .style(color))
                 }
             }
             .frame(height: 26)

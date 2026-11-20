@@ -177,7 +177,7 @@ struct PasswordManagerSection: View {
                         Button("Unlink", role: .destructive) { act { try await $0.unlinkPasswordManager(); return "Unlinked." } }
                     } message: { Text(view.provider == "keepass" ? "The assistant stops being able to use its items. The vault file and its master password stay on the hub." : "The assistant stops being able to use its items.") }
             }
-            if let m = message { Text(m.text).font(.footnote).foregroundStyle(m.ok ? Color.secondary : Color.red) }
+            if let m = message { Text(m.text).font(.footnote).foregroundStyle(m.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)) }
         } header: {
             Text("Password manager")
         } footer: {

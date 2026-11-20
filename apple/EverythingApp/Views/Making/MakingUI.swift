@@ -10,7 +10,9 @@ import AppKit
 struct MakingBadge: View {
     var text: String
     var symbol: String
-    var color: Color
+    var color: Color = .secondary
+    /// Fine, needs a look or a problem: shown in the theme's status colors instead of `color`.
+    var tone: StatusTone? = nil
 
     var body: some View {
         Label(text, systemImage: symbol)
@@ -18,8 +20,7 @@ struct MakingBadge: View {
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(color.opacity(0.16), in: Capsule())
-            .foregroundStyle(color)
+            .statusCapsule(tone, else: color, tint: 0.16)
             .fixedSize()
     }
 }
@@ -27,25 +28,25 @@ struct MakingBadge: View {
 extension MakingBadge {
     static func project(_ status: String) -> MakingBadge {
         switch status {
-        case "parked": return MakingBadge(text: "Parked", symbol: "pause.circle.fill", color: .orange)
+        case "parked": return MakingBadge(text: "Parked", symbol: "pause.circle.fill", tone: .warn)
         case "done": return MakingBadge(text: "Done", symbol: "checkmark.circle.fill", color: .secondary)
-        default: return MakingBadge(text: "Active", symbol: "play.circle.fill", color: .green)
+        default: return MakingBadge(text: "Active", symbol: "play.circle.fill", tone: .ok)
         }
     }
 
     static func music(_ status: String) -> MakingBadge {
         switch status {
-        case "wip": return MakingBadge(text: "In progress", symbol: "hammer.fill", color: .orange)
-        case "done": return MakingBadge(text: "Done", symbol: "checkmark.circle.fill", color: .green)
+        case "wip": return MakingBadge(text: "In progress", symbol: "hammer.fill", tone: .warn)
+        case "done": return MakingBadge(text: "Done", symbol: "checkmark.circle.fill", tone: .ok)
         default: return MakingBadge(text: "Idea", symbol: "lightbulb.fill", color: .purple)
         }
     }
 
     static func quiz(_ r: QuizResult?) -> MakingBadge {
         switch r {
-        case .right: return MakingBadge(text: "Right", symbol: "checkmark.circle.fill", color: .green)
-        case .revealed: return MakingBadge(text: "Revealed", symbol: "eye.circle.fill", color: .orange)
-        case .wrong: return MakingBadge(text: "Wrong", symbol: "xmark.circle.fill", color: .red)
+        case .right: return MakingBadge(text: "Right", symbol: "checkmark.circle.fill", tone: .ok)
+        case .revealed: return MakingBadge(text: "Revealed", symbol: "eye.circle.fill", tone: .warn)
+        case .wrong: return MakingBadge(text: "Wrong", symbol: "xmark.circle.fill", tone: .danger)
         case nil: return MakingBadge(text: "Not asked", symbol: "circle", color: .secondary)
         }
     }
@@ -146,6 +147,6 @@ struct MakingErrorLine: View {
     var body: some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
             .font(.callout)
-            .foregroundStyle(.red)
+            .foregroundStyle(.dangerText)
     }
 }

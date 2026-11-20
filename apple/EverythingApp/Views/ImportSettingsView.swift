@@ -20,7 +20,7 @@ struct ImportSettingsView: View {
             SwiftUI.Section {
                 Toggle("Learn about me from it", isOn: $learn)
                 Button(busy ?? "Choose files to bring in") { picking = true }.disabled(busy != nil || engine.client == nil)
-                if let m = message { Text(m.text).font(.footnote).foregroundStyle(m.ok ? Color.secondary : Color.red) }
+                if let m = message { Text(m.text).font(.footnote).foregroundStyle(m.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)) }
             } header: {
                 Text("Bring your data in")
             } footer: {
@@ -48,7 +48,7 @@ struct ImportSettingsView: View {
                             }
                             Text(summary(j)).font(.footnote)
                             Text(j.state == "failed" ? (j.error ?? "Failed") : j.active || j.state == "stopped" ? j.detail : "Done")
-                                .font(.caption).foregroundStyle(j.state == "failed" ? Color.red : Color.secondary)
+                                .font(.caption).foregroundStyle(j.state == "failed" ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
                             if j.state == "learning", j.learned.total > 0 { ProgressView(value: Double(j.learned.done), total: Double(j.learned.total)) }
                         }
                     }

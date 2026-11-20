@@ -81,7 +81,7 @@ struct JournalView: View {
                 } description: {
                     Text("The assistant logs changes it helps you make. Tap Add entry to log one yourself.")
                 } actions: {
-                    Button("Add entry") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("Add entry") { creating = true }.buttonStyle(.themedProminent)
                 }
             } else if shown.isEmpty {
                 ContentUnavailableView {
@@ -133,8 +133,8 @@ struct JournalRow: View {
         let outcome = JournalOutcome(rawValue: entry.str("outcome")) ?? .done
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                HomelabPill(text: risk.label, symbol: risk.symbol, color: risk.color)
-                HomelabPill(text: outcome.label, symbol: outcome.symbol, color: outcome.color)
+                HomelabPill(text: risk.label, symbol: risk.symbol, tone: risk.tone)
+                HomelabPill(text: outcome.label, symbol: outcome.symbol, color: outcome.color, tone: outcome.tone)
                 if showHost { Text(entry.str("host")).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1) }
                 Spacer(minLength: 0)
                 Text(dateLabel(entry.string("at"))).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -155,7 +155,7 @@ struct JournalRow: View {
             if outcome == .planned {
                 HStack(spacing: 8) {
                     Button("Mark done") { Task { _ = await engine.update(entry.id, fields: ["outcome": "done"]) } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                     Button("Mark reverted") { Task { _ = await engine.update(entry.id, fields: ["outcome": "reverted"]) } }
                         .buttonStyle(.bordered)
                 }
@@ -320,7 +320,7 @@ struct PreflightNote: View {
             Label {
                 Text(LocalizedStringKey("Pre-flight for `" + StyleGuard.dashes(String(hit.command.prefix(120))) + "` (" + hit.name + ")")).font(.subheadline.weight(.semibold))
             } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.warnText)
             }
             ForEach([hit.backup, hit.verify, hit.rollback], id: \.self) { line in
                 Text(LocalizedStringKey(StyleGuard.dashes(line))).font(.callout)

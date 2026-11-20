@@ -30,6 +30,8 @@ public struct FeelSettings: Codable, Equatable, Sendable {
     public var app_themes: [AppTheme]
     /// `system | light | dark`; applies to `classic`.
     public var appearance: String
+    /// Each calendar events come from, with its own color and the owner's choice (Theme, Calendar colors).
+    public var calendars: [CalendarColorEntry]
     /// The key and scale actually played: the setting, or the newest music idea's when following music.
     public var effective: Effective?
     public var options: Options?
@@ -75,23 +77,23 @@ public struct FeelSettings: Codable, Equatable, Sendable {
         motion: true, theme: "aurora", palettes: [], shapes: defaultShapes, images: [], shape_size: 1, density: 1,
         sound: true, volume: 0.4, key: "C", scale: "major_pentatonic", synth: "sine", octave: 4, follow_music: false,
         hold: true, drag_bend: false, app_theme: AppTheme.classicId, app_themes: [], appearance: "system",
-        effective: nil, options: nil)
+        calendars: [], effective: nil, options: nil)
 
     public init(motion: Bool, theme: String, palettes: [FeelPalette], shapes: [String], images: [FeelImage],
                 shape_size: Double, density: Double, sound: Bool, volume: Double, key: String, scale: String,
                 synth: String, octave: Int, follow_music: Bool, hold: Bool, drag_bend: Bool, app_theme: String,
-                app_themes: [AppTheme], appearance: String, effective: Effective?, options: Options?) {
+                app_themes: [AppTheme], appearance: String, calendars: [CalendarColorEntry] = [], effective: Effective?, options: Options?) {
         self.motion = motion; self.theme = theme; self.palettes = palettes; self.shapes = shapes; self.images = images
         self.shape_size = shape_size; self.density = density
         self.sound = sound; self.volume = volume; self.key = key; self.scale = scale; self.synth = synth
         self.octave = octave; self.follow_music = follow_music; self.hold = hold; self.drag_bend = drag_bend
         self.app_theme = app_theme; self.app_themes = app_themes; self.appearance = appearance
-        self.effective = effective; self.options = options
+        self.calendars = calendars; self.effective = effective; self.options = options
     }
 
     enum CodingKeys: String, CodingKey {
         case motion, theme, palettes, shapes, images, shape_size, density, sound, volume, key, scale, synth, octave
-        case follow_music, hold, drag_bend, app_theme, app_themes, appearance, effective, options
+        case follow_music, hold, drag_bend, app_theme, app_themes, appearance, calendars, effective, options
     }
 
     private struct AnyKey: CodingKey {
@@ -129,6 +131,7 @@ public struct FeelSettings: Codable, Equatable, Sendable {
         app_theme = (try? c.decode(String.self, forKey: .app_theme)) ?? d.app_theme
         app_themes = list(.app_themes, AppTheme.self) ?? d.app_themes
         appearance = (try? c.decode(String.self, forKey: .appearance)) ?? d.appearance
+        calendars = list(.calendars, CalendarColorEntry.self) ?? d.calendars
         effective = try? c.decode(Effective.self, forKey: .effective)
         options = try? c.decode(Options.self, forKey: .options)
         if theme == "custom" {
@@ -157,6 +160,7 @@ public struct FeelSettings: Codable, Equatable, Sendable {
         palettes = Self.unique(palettes.compactMap { $0.cleaned }, \.id)
         images = Self.unique(images.filter { FeelID.valid($0.id) }, \.id)
         app_themes = Self.unique(app_themes.compactMap { $0.cleaned }, \.id)
+        calendars = Array(Self.unique(calendars.compactMap { $0.cleaned }, \.key).prefix(CalendarColorEntry.maxCount))
         if !FeelTheme.order.contains(theme), FeelTheme.customId(theme).flatMap({ id in palettes.first { $0.id == id } }) == nil {
             theme = d.theme
         }
@@ -263,10 +267,16 @@ public struct AppTheme: Codable, Equatable, Sendable, Identifiable, Hashable {
     public var background: String
     public var surface: String
     public var text: String
+    /// Status colors: what is fine, what needs a look, what is a problem. Nil uses the classic one for the theme's mode.
+    public var ok: String?
+    public var warn: String?
+    public var danger: String?
 
-    public init(id: String, name: String, mode: String, accent: String, background: String, surface: String, text: String) {
+    public init(id: String, name: String, mode: String, accent: String, background: String, surface: String, text: String,
+                ok: String? = nil, warn: String? = nil, danger: String? = nil) {
         self.id = id; self.name = name; self.mode = mode; self.accent = accent
         self.background = background; self.surface = surface; self.text = text
+        self.ok = ok; self.warn = warn; self.danger = danger
     }
 
     public var isDark: Bool { mode == "dark" }
@@ -296,8 +306,11 @@ public struct AppTheme: Codable, Equatable, Sendable, Identifiable, Hashable {
     var cleaned: AppTheme? {
         guard FeelID.valid(id), mode == "light" || mode == "dark" else { return nil }
         for h in [accent, background, surface, text] where FeelTheme.rgb(h) == nil { return nil }
+        // A broken status color is left out on its own, so the theme keeps the classic one for it instead of being lost.
+        func status(_ h: String?) -> String? { h.flatMap { FeelTheme.rgb($0) == nil ? nil : $0.uppercased() } }
         return AppTheme(id: id, name: FeelID.name(name, fallback: "Theme"), mode: mode, accent: accent.uppercased(),
-                        background: background.uppercased(), surface: surface.uppercased(), text: text.uppercased())
+                        background: background.uppercased(), surface: surface.uppercased(), text: text.uppercased(),
+                        ok: status(ok), warn: status(warn), danger: status(danger))
     }
 
     /// The contrast ratio of text on the weaker of background and surface.
@@ -321,6 +334,111 @@ public enum FeelColor {
 
     /// Black or white, whichever reads better on `hex` (for a label on an accent button).
     public static func onColor(_ hex: String) -> String { contrast(hex, "#000000") >= contrast(hex, "#FFFFFF") ? "#000000" : "#FFFFFF" }
+
+    /// `a` moved toward `b` by `t` (0 is a, 1 is b), as `#RRGGBB`.
+    public static func mix(_ a: String, _ b: String, _ t: Double) -> String {
+        guard let x = FeelTheme.rgb(a), let y = FeelTheme.rgb(b) else { return a }
+        return FeelTheme.hex(r: x.r + (y.r - x.r) * t, g: x.g + (y.g - x.g) * t, b: x.b + (y.b - x.b) * t)
+    }
+
+    /// A status color as words, as the web does (web/src/feel/appTheme.ts): the color itself when it reads at `min` on
+    /// every background given, else moved toward the theme's text color a step at a time until it does (on a light
+    /// page amber becomes a deep brown). When nothing short of the text color reads, the text color.
+    public static func readable(_ color: String, text: String, min: Double = 4.5, on: [String]) -> String {
+        for i in 0...25 {
+            let c = mix(color, text, Double(i) * 0.04)
+            if on.allSatisfy({ contrast(c, $0) >= min }) { return c }
+        }
+        return text
+    }
+
+    /// Words on a colored fill (an accent button, a green "fine" light): white when it reads at 4.5:1, else a dark ink
+    /// from the theme, else whichever of white and black reads better.
+    public static func onFill(_ fill: String, ink: String) -> String {
+        if contrast("#FFFFFF", fill) >= 4.5 { return "#FFFFFF" }
+        if contrast(ink, fill) >= 4.5 { return ink }
+        return contrast("#FFFFFF", fill) >= contrast("#000000", fill) ? "#FFFFFF" : "#000000"
+    }
+}
+
+/// What a status color says: fine, needs a look, or a problem (checks, readings, alerts, deadlines).
+public enum StatusTone: String, CaseIterable, Sendable {
+    case ok, warn, danger
+
+    /// The words Settings uses for it.
+    public var title: String {
+        switch self {
+        case .ok: return "Fine"
+        case .warn: return "Needs a look"
+        case .danger: return "Problem"
+        }
+    }
+}
+
+/// Status colors for a theme. A saved theme may carry its own; any it leaves out, and every built-in theme, use the
+/// classic ones for its mode (the hub's and the web's, so a theme looks the same everywhere). As words they are made
+/// readable on the theme's background and cards; on a fill, the words on it are white or a dark ink.
+public struct StatusPalette: Equatable, Sendable {
+    /// The classic status colors (web/src/feel/appTheme.ts CLASSIC), for themes that do not choose their own.
+    public static let classicLight: [StatusTone: String] = [.ok: "#3A8F5A", .warn: "#C2871A", .danger: "#B4443C"]
+    public static let classicDark: [StatusTone: String] = [.ok: "#6CC08A", .warn: "#E0A84A", .danger: "#E07A73"]
+
+    public static func classic(dark: Bool) -> [StatusTone: String] { dark ? classicDark : classicLight }
+
+    /// The fill colors: dots, bars, borders, lights.
+    public var fill: [StatusTone: String]
+    /// The same colors as words.
+    public var text: [StatusTone: String]
+    /// Words on a fill of each color.
+    public var on: [StatusTone: String]
+
+    /// - Parameters:
+    ///   - fill: the status colors to use.
+    ///   - text: the theme's text color, which words move toward until they read.
+    ///   - backgrounds: what words sit on (the background and the cards).
+    ///   - ink: a dark color from the theme for words on a light fill.
+    public init(fill: [StatusTone: String], text textColor: String, backgrounds: [String], ink: String) {
+        self.fill = fill
+        var t: [StatusTone: String] = [:], o: [StatusTone: String] = [:]
+        for tone in StatusTone.allCases {
+            let c = fill[tone] ?? Self.classicLight[tone]!
+            t[tone] = FeelColor.readable(c, text: textColor, on: backgrounds)
+            o[tone] = FeelColor.onFill(c, ink: ink)
+        }
+        text = t
+        on = o
+    }
+
+    /// A theme's palette: its own status colors, else the classic ones for its mode.
+    public init(theme t: AppTheme) {
+        let base = Self.classic(dark: t.isDark)
+        let fill: [StatusTone: String] = [.ok: t.ok ?? base[.ok]!, .warn: t.warn ?? base[.warn]!, .danger: t.danger ?? base[.danger]!]
+        // The web's dark ink for words on a light fill: the background darkened.
+        let ink = FeelColor.mix(t.background, "#000000", t.isDark ? 0.4 : 0.85)
+        self.init(fill: fill, text: t.text, backgrounds: [t.background, t.surface], ink: ink)
+    }
+}
+
+extension AppTheme {
+    /// The theme's status color for a tone: its own, else the classic one for its mode.
+    public func status(_ tone: StatusTone) -> String {
+        let own: String? = tone == .ok ? ok : tone == .warn ? warn : danger
+        return own ?? StatusPalette.classic(dark: isDark)[tone]!
+    }
+
+    /// Whether the theme chose its own color for a tone.
+    public func hasOwnStatus(_ tone: StatusTone) -> Bool { (tone == .ok ? ok : tone == .warn ? warn : danger) != nil }
+
+    /// The theme with its own color for a tone, or with nil the classic one again.
+    public func withStatus(_ tone: StatusTone, _ hex: String?) -> AppTheme {
+        var t = self
+        switch tone {
+        case .ok: t.ok = hex
+        case .warn: t.warn = hex
+        case .danger: t.danger = hex
+        }
+        return t
+    }
 }
 
 /// Scales, notes and pitches for the tap sounds. Intervals match `hub/src/feel.ts`.

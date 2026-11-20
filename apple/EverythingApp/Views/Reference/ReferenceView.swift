@@ -293,7 +293,7 @@ struct ReferenceView: View {
             }
             .disabled(randomBusy)
             .tag("random")
-            if let randomProblem { Text(randomProblem).font(.caption).foregroundStyle(.orange) }
+            if let randomProblem { Text(randomProblem).font(.caption).foregroundStyle(.warnText) }
         } footer: {
             if !search.sources.isEmpty || !search.langs.isEmpty { Text("From the sources and languages chosen above.") }
         }
@@ -346,7 +346,7 @@ struct ReferenceView: View {
     @ViewBuilder private var results: some View {
         SwiftUI.Section {
             if let p = search.problem, search.resultsFor == search.trimmed {
-                Text(p).font(.callout).foregroundStyle(.orange)
+                Text(p).font(.callout).foregroundStyle(.warnText)
             } else if search.results.isEmpty, search.current {
                 Text("Nothing found for \u{201C}\(search.trimmed)\u{201D}.").foregroundStyle(.secondary)
             }
@@ -605,7 +605,7 @@ struct ReferenceChip: View {
                 .lineLimit(1)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 5)
-                .background(on ? AnyShapeStyle(Color.accentColor.opacity(0.22)) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: Capsule())
+                .background(on ? AnyShapeStyle(.tint.opacity(0.22)) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -630,7 +630,7 @@ struct ReferenceDownloadRow: View {
             }
             Text(ReferenceText.progress(download))
                 .font(.caption)
-                .foregroundStyle(download.state == "failed" ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                .foregroundStyle(download.state == "failed" ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)

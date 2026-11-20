@@ -47,7 +47,7 @@ struct WorkCalendarSection: View {
                 Button(importer.running ? "Importing" : "Import now") { Task { await importer.runNow(reason: "manual") } }
                     .disabled(importer.running || importer.selected.isEmpty)
             }
-            if let e = importer.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+            if let e = importer.lastError { Text(e).font(.caption).foregroundStyle(.dangerText) }
         } header: {
             Text("Work meetings to import")
         } footer: {
@@ -100,7 +100,7 @@ struct AppEventsCalendarSection: View {
                 if let s = mirror.lastSummary, let d = mirror.lastRun {
                     Text("Last copy \(d.shortDateTime): \(s)").font(.caption).foregroundStyle(.secondary)
                 }
-                if let e = mirror.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+                if let e = mirror.lastError { Text(e).font(.caption).foregroundStyle(.dangerText) }
             } else {
                 Text("Allow calendar access below to copy events made in the app into Apple Calendar.").foregroundStyle(.secondary)
             }
@@ -176,11 +176,11 @@ struct WorkCalendarBanner: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(title, systemImage: "calendar.badge.exclamationmark").font(.headline)
             Text(detail).font(.subheadline).foregroundStyle(.secondary)
-            if let b = button { Button(b.0, action: b.1).buttonStyle(.borderedProminent) }
+            if let b = button { Button(b.0, action: b.1).buttonStyle(.themedProminent) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+        .background(.warn.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 #endif

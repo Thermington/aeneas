@@ -62,6 +62,9 @@ export const CaptureFields = z.object({
   thread: z.string().optional(),
   /** Saved with Save while the hub was out of reach: the hub sorts it (diary, then filing) once it arrives. */
   sort: z.boolean().optional(),
+  /** A spoken capture from a Watch that writes speech down itself: what the Watch heard, beside `text` (the iPhone's own
+   *  hearing of the same recording, which is what is saved). The filer reads both. */
+  heard_on_watch: z.string().optional(),
 });
 
 export const NoteFields = z.object({
@@ -140,7 +143,32 @@ export const EventFields = z.object({
   apple: z.object({ id: z.string(), calendar: z.string().optional(), from_apple: z.boolean().optional() }).optional(),
   /** The calendar-server event the hub keeps it in step with (calendar sync, `calendars` module). */
   caldav: z.object({ account: z.string(), calendar: z.string(), uid: z.string(), from_caldav: z.boolean().optional() }).optional(),
+  /** The calendar it is on, as the app that brought it in names it (`apple:<account>/<calendar>`), for its color. */
+  calendar_key: z.string().max(300).optional(),
 });
+
+/**
+ * The calendar an event is on, the key its color is kept under (Theme, Calendar colors): what the app that brought it
+ * in wrote, else the iCloud calendar the hub keeps it in step with, else the Apple calendar an older app named, else
+ * the work calendar for Microsoft 365 events. Null: made in the app and on no calendar (drawn in the theme's accent).
+ */
+export function eventCalendarKey(f: Record<string, unknown>): string | null {
+  if (typeof f.calendar_key === "string" && f.calendar_key) return f.calendar_key;
+  const caldav = f.caldav as { calendar?: unknown } | undefined;
+  if (caldav && typeof caldav.calendar === "string" && caldav.calendar) return `icloud:${caldav.calendar}`;
+  const apple = f.apple as { calendar?: unknown } | undefined;
+  if (apple && typeof apple.calendar === "string" && apple.calendar) return `apple:${apple.calendar}`;
+  if (f.source === "m365") return "work:m365";
+  return null;
+}
+
+/** A calendar's color as Theme, Calendar colors keeps it: the owner's choice, else the calendar's own color. */
+export interface CalendarColor { key: string; name: string; account?: string; color?: string; chosen?: string; seen_at?: string }
+export function calendarColor(key: string | null, calendars: CalendarColor[] | undefined): string | null {
+  if (!key) return null;
+  const c = calendars?.find((x) => x.key === key);
+  return c?.chosen ?? c?.color ?? null;
+}
 
 export const LogFields = z.object({
   type: LogType,
@@ -635,6 +663,8 @@ export const CaptureRequest = z.object({
   auto: z.boolean().optional(),
   /** The id the device gave the capture: the same capture sent again (its reply was lost) is the one the hub has. */
   id: z.guid().optional(),
+  /** What the Watch itself heard of a spoken capture whose `text` the iPhone wrote down: a second hearing for the filer. */
+  heard_on_watch: z.string().max(8000).optional(),
 });
 
 export const ChatMessage = z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string() });

@@ -71,7 +71,7 @@ struct HostsView: View {
                 } description: {
                     Text("Tap + and type a machine name to start its fix notes, change log and snippets.")
                 } actions: {
-                    Button("Add machine") { newName = ""; asking = true }.buttonStyle(.borderedProminent)
+                    Button("Add machine") { newName = ""; asking = true }.buttonStyle(.themedProminent)
                 }
             }
         }
@@ -101,9 +101,9 @@ struct HostRow: View {
             }
             Spacer(minLength: 6)
             if down > 0 {
-                HomelabPill(text: "\(down) down", symbol: MonitorStatus.down.symbol, color: .red)
+                HomelabPill(text: "\(down) down", symbol: MonitorStatus.down.symbol, tone: .danger)
             } else if !monitors.isEmpty, up == monitors.count {
-                HomelabPill(text: up == 1 ? "Up" : "\(up) up", symbol: MonitorStatus.up.symbol, color: .green)
+                HomelabPill(text: up == 1 ? "Up" : "\(up) up", symbol: MonitorStatus.up.symbol, tone: .ok)
             } else if !monitors.isEmpty {
                 HomelabPill(text: "\(monitors.count - up) unknown", symbol: MonitorStatus.unknown.symbol, color: .gray)
             }
@@ -271,7 +271,7 @@ struct HostDetailView: View {
                         Text("No readings yet. With Sensors on, the hub reads its CPU, memory, disks and temperatures every 10 minutes.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
-                    if let sensorError { Text(sensorError).font(.caption).foregroundStyle(.red) }
+                    if let sensorError { Text(sensorError).font(.caption).foregroundStyle(.dangerText) }
                     ForEach(readings) { s in readingCard(s, on: me) }
                 } header: {
                     Text("Now")
@@ -475,7 +475,7 @@ struct PurposeRows: View {
             TextField("What it is for", text: $text, prompt: Text("Proxmox host for the domain controllers; backups go to the NAS at night"), axis: .vertical)
                 .lineLimit(3...8)
             HStack(spacing: 12) {
-                Button("Save") { Task { await save() } }.buttonStyle(.borderedProminent)
+                Button("Save") { Task { await save() } }.buttonStyle(.themedProminent)
                 Button("Cancel") { editing = false }.buttonStyle(.bordered)
             }
             .controlSize(.small)
@@ -551,7 +551,7 @@ struct RunbookDetailView: View {
                 HStack(spacing: 6) {
                     HomelabPill(text: rb.str("host"), symbol: "server.rack")
                     if let v = f?.last_verified {
-                        HomelabPill(text: "Verified \(Homelab.ago(v))", symbol: "checkmark.seal", color: .green)
+                        HomelabPill(text: "Verified \(Homelab.ago(v))", symbol: "checkmark.seal", tone: .ok)
                     } else {
                         HomelabPill(text: "Not verified", symbol: "seal", color: .secondary)
                     }
@@ -746,7 +746,7 @@ struct RunbookEditor: View {
         NavigationStack {
             Form {
                 if let conflict {
-                    SwiftUI.Section { Text(conflict).font(.subheadline).foregroundStyle(.red) }
+                    SwiftUI.Section { Text(conflict).font(.subheadline).foregroundStyle(.dangerText) }
                 }
                 SwiftUI.Section {
                     TextField("Title", text: $title).font(.title3)
@@ -772,7 +772,7 @@ struct RunbookEditor: View {
                                 TextField("Label", text: $c.label)
                                 Button(role: .destructive) { commands.removeAll { $0.id == c.id } } label: { Image(systemName: "minus.circle.fill") }
                                     .buttonStyle(.borderless)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(.dangerText)
                                     .accessibilityLabel("Remove \(c.label.isEmpty ? "command" : c.label)")
                             }
                             HStack {

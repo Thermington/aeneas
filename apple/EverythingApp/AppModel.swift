@@ -336,6 +336,7 @@ final class AppModel: ObservableObject {
             // Hums from the Watch that could not reach the hub before go now, and captures not written down yet.
             WatchHumRelay.shared.kick()
             WatchCaptureRelay.shared.kick()
+            WatchSpeechSetup.shared.kick()
             await healthImportIfDue()
             #endif
             return
@@ -374,6 +375,7 @@ final class AppModel: ObservableObject {
         await sendPendingShares()
         WatchHumRelay.shared.kick()
         WatchCaptureRelay.shared.kick()
+        WatchSpeechSetup.shared.kick()
         #endif
     }
 

@@ -774,6 +774,19 @@ test("log_health without a value repeats the last log of that type, and refuses 
   } finally { t.cleanup(); }
 });
 
+test("log_health: a weight said without a unit takes the unit of the last weight, else pounds", async () => {
+  const t = makeHub();
+  try {
+    const a = api(t);
+    const ctx = ctxFor(t, "weight-unit-1");
+    await runTool(a, { name: "log_health", arguments: { type: "weight", value: 192.2 } }, ctx);
+    assert.equal(t.hub.store.list({ kind: "log", where: { type: "weight" } })[0].fields.unit, "lb", "pounds when nothing says otherwise");
+    t.hub.store.create("log", { type: "weight", value: 87.1, unit: "kg", at: new Date(Date.now() + 60_000).toISOString() });
+    await runTool(a, { name: "log_health", arguments: { type: "weight", value: 86.9 } }, ctx);
+    assert.equal(t.hub.store.list({ kind: "log", where: { type: "weight" } }).find((l) => l.fields.value === 86.9)?.fields.unit, "kg", "the unit of the last weight");
+  } finally { t.cleanup(); }
+});
+
 test("ops_action check gives the current result of a monitor checked moments ago instead of running it again", async () => {
   const t = makeHub();
   try {

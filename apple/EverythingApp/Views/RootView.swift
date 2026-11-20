@@ -71,6 +71,11 @@ struct RootView: View {
             }
             .environmentObject(model)
             .environmentObject(engine)
+            #if os(macOS)
+            // A Mac sheet takes its content's size, and a list has none of its own: without a size it opened with only
+            // its title and Done.
+            .frame(minWidth: 480, idealWidth: 560, minHeight: 480, idealHeight: 620)
+            #endif
         }
         .overlay(alignment: .top) {
             if let c = model.activityCheckin {
@@ -327,7 +332,7 @@ struct SplitRoot: View {
             .onChange(of: here) { _, _ in shut = nil }
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 6) {
-                    Circle().fill(engine.status == .online ? Color.green : Color.orange).frame(width: 8, height: 8)
+                    Circle().fill(engine.status == .online ? StatusStyle.ok : StatusStyle.warn).frame(width: 8, height: 8)
                     Text(engine.statusLabel).font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button { model.section = .settings } label: { Image(systemName: "gearshape") }

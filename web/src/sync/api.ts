@@ -1158,6 +1158,10 @@ export class HubClient {
   setFeel(patch: Partial<Feel>) {
     return this.req<FeelView>("PUT", "/prefs/feel", patch);
   }
+  /** A calendar's color chosen in Theme, Calendar colors; null goes back to the calendar's own color. */
+  setCalendarColor(key: string, color: string | null) {
+    return this.req<FeelView>("PUT", "/prefs/feel/calendar-color", { key, color });
+  }
 
   /** Add an image shape: the raw PNG or WebP as the body. 413 when too big, 415 for another type, 422 when full. */
   async uploadFeelImage(blob: Blob, name: string): Promise<FeelView> {

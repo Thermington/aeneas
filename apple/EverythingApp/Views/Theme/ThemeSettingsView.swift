@@ -20,6 +20,9 @@ struct ThemeSettingsView: View {
                 NavigationLink { NoteSoundsView() } label: {
                     SettingsRow(title: "Note sounds", symbol: "music.note", summary: soundSummary, warning: FeelSynth.blocked)
                 }
+                NavigationLink { CalendarColorsView() } label: {
+                    SettingsRow(title: "Calendar colors", symbol: "calendar", summary: CalendarColorsView.summary(s.calendars))
+                }
             } footer: {
                 Text("Shared with every device through the hub.")
             }
@@ -63,6 +66,82 @@ struct ThemeSettingsView: View {
     }
 }
 
+// MARK: Calendar colors
+
+/// Theme, Calendar colors: each calendar events come from, in the color its calendar gives it (Apple Calendar or
+/// iCloud, as an app or the hub's sync reported it), or in one chosen here, which every device then uses. The same
+/// page as the web's.
+struct CalendarColorsView: View {
+    @ObservedObject private var feel = FeelController.shared
+
+    private var calendars: [CalendarColorEntry] { feel.settings.calendars }
+
+    /// The line under Calendar colors in Theme.
+    static func summary(_ calendars: [CalendarColorEntry]) -> String {
+        let n = calendars.count
+        guard n > 0 else { return "None yet" }
+        let mine = calendars.filter { $0.chosen != nil }.count
+        return "\(n) \(n == 1 ? "calendar" : "calendars")" + (mine > 0 ? ", \(mine) in colors you chose" : ", as their calendars color them")
+    }
+
+    /// Accounts in the order they first appear, the calendars of each by name.
+    private var groups: [(account: String, calendars: [CalendarColorEntry])] {
+        var order: [String] = []
+        for c in calendars where !order.contains(c.account ?? "") { order.append(c.account ?? "") }
+        return order.map { a in
+            (a, calendars.filter { ($0.account ?? "") == a }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
+        }
+    }
+
+    var body: some View {
+        Form {
+            SwiftUI.Section {
+                Text("Events are drawn in their calendar's color on every device: the color Apple Calendar or iCloud gives it, or one you choose here. Events made in Aeneas on no calendar use the theme's accent.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if calendars.isEmpty {
+                    Text("No calendars yet. They appear once the iPhone, iPad or Mac app reads Apple Calendar, or the hub syncs iCloud calendars.")
+                        .foregroundStyle(.secondary)
+                }
+                if let e = feel.calendarColorError {
+                    Text(e).font(.footnote).foregroundStyle(.dangerText)
+                }
+            }
+            .themedRow()
+            ForEach(groups, id: \.account) { g in
+                SwiftUI.Section {
+                    ForEach(g.calendars) { c in row(c) }
+                } header: {
+                    if groups.count > 1 { Text(g.account.isEmpty ? "Other" : g.account) }
+                }
+                .themedRow()
+            }
+        }
+        .formStyle(.grouped)
+        .themedScreen()
+        .navigationTitle("Calendar colors")
+        .task { await feel.refresh() }
+    }
+
+    private func row(_ c: CalendarColorEntry) -> some View {
+        HStack(spacing: 12) {
+            ColorPicker(selection: Binding(get: { FeelController.color(c.shown ?? "#888888") ?? .gray },
+                                           set: { feel.chooseCalendarColor(key: c.key, color: FeelController.hex($0)) }),
+                        supportsOpacity: false) { EmptyView() }
+                .labelsHidden()
+                .accessibilityLabel("Color for \(c.name)")
+            Text(c.name)
+            Spacer(minLength: 8)
+            if c.chosen != nil {
+                Button(c.color != nil ? "Use its own color" : "Clear") { feel.chooseCalendarColor(key: c.key, color: nil) }
+                    .buttonStyle(.borderless)
+                    .font(.subheadline)
+            } else {
+                Text(c.color != nil ? "Its own color" : "No color of its own").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 // MARK: App colors
 
 /// Appearance for Classic, then every theme as a small live preview; tap one to use it.
@@ -76,6 +155,9 @@ struct AppColorsView: View {
 
     private var s: FeelSettings { feel.settings }
     private let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
+    #if DEBUG
+    static var debugEditorShown = false
+    #endif
 
     var body: some View {
         Form {
@@ -122,6 +204,17 @@ struct AppColorsView: View {
         .themedScreen()
         .navigationTitle("App colors")
         .sheet(item: $editing) { d in AppThemeEditor(draft: d) }
+        .onAppear {
+            #if DEBUG
+            // `-EAThemeEditor YES` (DebugHooks): the editor on the theme in use, once, for screenshots.
+            if UserDefaults.standard.bool(forKey: "EAThemeEditor"), !Self.debugEditorShown {
+                Self.debugEditorShown = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if let t = s.activeAppTheme { duplicate(t, edit: true) } else { newTheme() }
+                }
+            }
+            #endif
+        }
         .alert("Rename theme", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Save") {
@@ -209,10 +302,16 @@ struct ThemeSwatch {
     var surface: Color
     var text: Color
     var accent: Color
+    /// Fine, needs a look and problem as words, for the editor's preview.
+    var status: [StatusTone: Color] = [:]
+    /// Words on the accent, as the theme's buttons draw them.
+    var onAccent: Color = .white
 
     init(_ t: AppTheme) {
         let c = ThemeColors(t)
-        background = c.background; surface = c.surface; text = c.text; accent = c.accent
+        background = c.background; surface = c.surface; text = c.text; accent = c.accent; onAccent = c.onAccent
+        let p = StatusPalette(theme: t)
+        for tone in StatusTone.allCases { status[tone] = p.text[tone].flatMap(FeelController.color) }
     }
 
     init(background: Color, surface: Color, text: Color, accent: Color) {
@@ -245,19 +344,27 @@ struct ThemeCard: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Today").font(large ? .headline : .caption.weight(.semibold)).foregroundStyle(swatch.text)
                         Text("Water the plants").font(large ? .subheadline : .caption2).foregroundStyle(swatch.text.opacity(0.7))
+                        if large, !swatch.status.isEmpty {
+                            HStack(spacing: 12) {
+                                ForEach(StatusTone.allCases, id: \.self) { tone in
+                                    Text(tone.title).font(.subheadline.weight(.medium)).foregroundStyle(swatch.status[tone] ?? swatch.text)
+                                }
+                            }
+                            .padding(.top, 2)
+                        }
                     }
                     .padding(large ? 12 : 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(swatch.surface, in: RoundedRectangle(cornerRadius: 8))
                     Text("Done")
                         .font(large ? .subheadline.weight(.semibold) : .caption2.weight(.semibold))
-                        .foregroundStyle(Self.onAccent(swatch.accent))
+                        .foregroundStyle(swatch.onAccent)
                         .padding(.horizontal, large ? 16 : 10).padding(.vertical, large ? 7 : 4)
                         .background(swatch.accent, in: Capsule())
                 }
                 .padding(large ? 14 : 10)
             }
-            .frame(height: large ? 170 : 104)
+            .frame(height: large ? (swatch.status.isEmpty ? 170 : 194) : 104)
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary.opacity(0.15)), lineWidth: selected ? 3 : 1))
             if !large {
                 HStack(spacing: 4) {
@@ -269,10 +376,6 @@ struct ThemeCard: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(name)
-    }
-
-    static func onAccent(_ c: Color) -> Color {
-        FeelColor.onColor(FeelController.hex(c)) == "#000000" ? .black : .white
     }
 }
 
@@ -290,13 +393,14 @@ struct AppThemeEditor: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
                 SwiftUI.Section {
                     ThemeCard(swatch: ThemeSwatch(t), name: t.name, selected: false, large: true)
                         .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
                     if !t.isReadable {
                         Label("Text may be hard to read on these colors.", systemImage: "exclamationmark.triangle")
-                            .font(.footnote).foregroundStyle(.orange)
+                            .font(.footnote).foregroundStyle(.warnText)
                     }
                 }
                 .themedRow()
@@ -310,7 +414,7 @@ struct AppThemeEditor: View {
                 }
                 .themedRow()
                 SwiftUI.Section {
-                    colorRow("Accent", \.accent)
+                    colorRow("Accent", \.accent).id("colors")
                     colorRow("Background", \.background)
                     colorRow("Surface", \.surface)
                     colorRow("Text", \.text)
@@ -318,6 +422,26 @@ struct AppThemeEditor: View {
                     Text("Accent colors buttons and links. Surface is the cards and rows that sit on the background.")
                 }
                 .themedRow()
+                SwiftUI.Section {
+                    ForEach(StatusTone.allCases, id: \.self) { tone in statusRow(tone) }
+                    if StatusTone.allCases.contains(where: t.hasOwnStatus) {
+                        Button("Classic status colors") { t.ok = nil; t.warn = nil; t.danger = nil }
+                    }
+                } header: {
+                    Text("Status colors")
+                } footer: {
+                    Text("Used for what is fine, what needs a look and what is a problem. As words they are darkened or lightened as far as needed to read on this theme.")
+                }
+                .themedRow()
+            }
+            .onAppear {
+                #if DEBUG
+                // `-EAScrollTo status` (DebugHooks): the colors and status colors in view, for screenshots.
+                if UserDefaults.standard.string(forKey: "EAScrollTo") == "status" {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { proxy.scrollTo("colors", anchor: .top) }
+                }
+                #endif
+            }
             }
             .formStyle(.grouped)
             .themedScreen()
@@ -331,13 +455,27 @@ struct AppThemeEditor: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 560)
+        // Tall enough on the Mac for the preview, the four colors and the status colors without scrolling.
+        .frame(minWidth: 420, minHeight: 680)
         #endif
     }
 
     private func colorRow(_ label: String, _ kp: WritableKeyPath<AppTheme, String>) -> some View {
         ColorPicker(label, selection: Binding(get: { FeelController.color(t[keyPath: kp]) ?? .gray }, set: { t[keyPath: kp] = FeelController.hex($0) }),
                     supportsOpacity: false)
+    }
+
+    /// One status color: the theme's own, or the classic one for its mode until one is chosen.
+    private func statusRow(_ tone: StatusTone) -> some View {
+        ColorPicker(selection: Binding(get: { FeelController.color(t.status(tone)) ?? .gray },
+                                       set: { t = t.withStatus(tone, FeelController.hex($0)) }),
+                    supportsOpacity: false) {
+            HStack {
+                Text(tone.title)
+                Spacer()
+                Text(t.hasOwnStatus(tone) ? t.status(tone) : "Classic").font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func save() {

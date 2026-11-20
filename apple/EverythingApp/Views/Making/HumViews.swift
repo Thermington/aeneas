@@ -89,7 +89,7 @@ struct HumRecordingPanel: View {
                     .buttonStyle(.bordered)
                 Spacer()
                 Button { recorder.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
             }
         }
         .padding(.vertical, 4)
@@ -389,7 +389,7 @@ struct HumIdeaSections: View {
                 } label: {
                     Label(player.playing == .notes ? "Stop" : "Play", systemImage: player.playing == .notes ? "stop.fill" : "play.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 recordingButton
             }
             if let e = player.error { MakingErrorLine(text: e) }
@@ -517,7 +517,7 @@ struct HumDragChip: View {
         .font(.callout)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
         .onDrag { Hum.dragProvider(url) }
         .help("Drag onto a MIDI track in your DAW")
         .accessibilityLabel("MIDI file \(url.lastPathComponent), drag onto a track")

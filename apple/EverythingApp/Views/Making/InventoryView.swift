@@ -53,7 +53,7 @@ struct InventoryView: View {
                 } description: {
                     Text("Tap Add item for each part, tool or material you have. Project parts with the same name count as on hand.")
                 } actions: {
-                    Button("Add item") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("Add item") { creating = true }.buttonStyle(.themedProminent)
                 }
             } else if groups.isEmpty {
                 ContentUnavailableView.search(text: query)

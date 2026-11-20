@@ -97,10 +97,10 @@ struct WeekView: View {
                         VStack(spacing: 2) {
                             Text(date.formatted(.dateTime.weekday(.abbreviated))).font(.caption2)
                             Text(date.formatted(.dateTime.day())).font(.headline)
-                            Circle().fill(d.blocks.isEmpty ? Color.clear : Color.accentColor).frame(width: 5, height: 5)
+                            Circle().fill(d.blocks.isEmpty ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.tint)).frame(width: 5, height: 5)
                         }
                         .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(selectedDay == d.date ? Color.accentColor.opacity(0.25) : (isToday ? Color.secondary.opacity(0.12) : Color.clear), in: RoundedRectangle(cornerRadius: 10))
+                        .background(selectedDay == d.date ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(isToday ? Color.secondary.opacity(0.12) : Color.clear), in: RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
                 }
@@ -129,6 +129,8 @@ struct WeekView: View {
 /// Seven columns for the day window. Hours run down the left.
 struct WeekGrid: View {
     @EnvironmentObject var engine: SyncEngine
+    /// Calendar colors, so a color chosen in Theme redraws the week at once.
+    @ObservedObject private var feel = FeelController.shared
     var week: PlannerWeek
     var onSchedule: (FreeSlot) -> Void
 
@@ -149,10 +151,13 @@ struct WeekGrid: View {
                         Text(date.formatted(.dateTime.day())).font(.headline)
                         // All-day plans mark the day here, as calendars show them, not as a block over the hours.
                         ForEach(d.events.filter { $0.bool("all_day") == true }) { e in
+                            // Its calendar's color, else the accent: a tint under the words and a solid bar beside them.
+                            let color = EventColor.style(e, calendars: feel.settings.calendars)
                             Text(StyleGuard.dashes(e.str("title"))).font(.caption2).lineLimit(1)
-                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                .padding(.leading, 7).padding(.trailing, 4).padding(.vertical, 1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.purple.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+                                .background(color.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
+                                .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 4, bottomLeadingRadius: 4).fill(color).frame(width: 3) }
                                 .padding(.horizontal, 2).padding(.top, 2)
                                 .help(e.str("title"))
                                 .accessibilityLabel("All day: " + e.str("title"))
@@ -160,7 +165,7 @@ struct WeekGrid: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                    .background(Calendar.current.isDateInToday(date) ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .background(Calendar.current.isDateInToday(date) ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(Color.clear), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
             Divider()
@@ -229,9 +234,10 @@ struct WeekGrid: View {
                             RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.35))
                                 .overlay(Text(c.title).font(.caption2).foregroundStyle(.primary).padding(4), alignment: .topLeading)
                         } else {
-                            RoundedRectangle(cornerRadius: 6).fill(Color.green.opacity(0.10))
-                                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.green.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                                .overlay(Text(c.title).font(.caption2).foregroundStyle(.green).padding(4), alignment: .bottomTrailing)
+                            // A preferred time, as on the web: a dashed outline in the accent with quiet words. Green
+                            // words were hard to read on a light theme.
+                            RoundedRectangle(cornerRadius: 6).strokeBorder(.tint.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                .overlay(Text(c.title).font(.caption2).foregroundStyle(.secondary).padding(4), alignment: .bottomTrailing)
                         }
                     }
                     .frame(height: f.h)
@@ -241,11 +247,16 @@ struct WeekGrid: View {
             }
             ForEach(d.events) { e in
                 if !(e.bool("all_day") ?? false), let f = frame(e.str("start"), e.str("end"), day: day) {
-                    RoundedRectangle(cornerRadius: 6).fill(Color.purple.opacity(0.25))
+                    // Its calendar's color, else the accent, as on the web: a light tint under the words (which keep
+                    // the theme's text color), a thin border and a solid bar on the left.
+                    let color = EventColor.style(e, calendars: feel.settings.calendars)
+                    RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color, lineWidth: 1))
+                        .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6).fill(color).frame(width: 3) }
                         .overlay(VStack(alignment: .leading, spacing: 2) {
                             if e.space == .work { SpaceChip(text: "Work", compact: true) }
                             Text(StyleGuard.dashes(e.str("title"))).font(.caption2)
-                        }.padding(4), alignment: .topLeading)
+                        }.padding(.vertical, 4).padding(.leading, 7).padding(.trailing, 4), alignment: .topLeading)
                         .frame(height: f.h).offset(y: f.y)
                         .accessibilityLabel((e.space == .work ? "Work, " : "") + e.str("title"))
                 }
@@ -254,11 +265,11 @@ struct WeekGrid: View {
                 if let f = frame(s.start, s.end, day: day) {
                     Button { onSchedule(s) } label: {
                         RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.accentColor.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                            .strokeBorder(.tint.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
                             .overlay(VStack(spacing: 2) {
                                 Image(systemName: "plus.circle").font(.title3)
                                 Text("\(s.hours.formatted()) h").font(.caption2)
-                            }.foregroundStyle(Color.accentColor))
+                            }.foregroundStyle(.tint))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -274,8 +285,8 @@ struct WeekGrid: View {
                     }
                     .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(Color.accentColor.opacity(b.status == .doing ? 0.45 : 0.25), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 1))
+                    .background(.tint.opacity(b.status == .doing ? 0.45 : 0.25), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.tint, lineWidth: 1))
                     .frame(height: f.h).offset(y: f.y)
                     .contextMenu {
                         Button("Unschedule") { Task { await engine.unschedule(taskId: b.task_id) } }
@@ -287,7 +298,7 @@ struct WeekGrid: View {
             ForEach(d.reminders) { r in
                 if let at = r.alertDate {
                     HStack(spacing: 3) { Image(systemName: "bell.fill").font(.caption2); Text(r.str("title")).font(.caption2).lineLimit(1) }
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.warnText)
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(.thinMaterial, in: Capsule())
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -298,8 +309,8 @@ struct WeekGrid: View {
             if Calendar.current.isDateInToday(day) {
                 TimelineView(.periodic(from: .now, by: 60)) { ctx in
                     HStack(spacing: 0) {
-                        Circle().fill(Color.red).frame(width: 8, height: 8)
-                        Rectangle().fill(Color.red).frame(height: 2)
+                        Circle().fill(.danger).frame(width: 8, height: 8)
+                        Rectangle().fill(.danger).frame(height: 2)
                     }
                     .offset(y: y(for: ctx.date) - 4)
                 }
@@ -307,7 +318,7 @@ struct WeekGrid: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .clipped()
-        .background(Calendar.current.isDateInToday(day) ? Color.accentColor.opacity(0.05) : Color.clear)
+        .background(Calendar.current.isDateInToday(day) ? AnyShapeStyle(.tint.opacity(0.05)) : AnyShapeStyle(Color.clear))
     }
 }
 

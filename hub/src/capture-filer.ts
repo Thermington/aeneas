@@ -65,7 +65,7 @@ export function similarTasks(store: Store, text: string): string[] {
     .map(({ t }) => `"${String(t.fields.title ?? "")}" (id ${t.id})`);
 }
 
-export function filingPrompt(text: string, at: Date, hint?: string, events: string[] = [], tasks: string[] = [], folders: string[] = [], names?: { owner: string; pet: string }, on: ModuleCheck = () => true): string {
+export function filingPrompt(text: string, at: Date, hint?: string, events: string[] = [], tasks: string[] = [], folders: string[] = [], names?: { owner: string; pet: string }, on: ModuleCheck = () => true, heardOnWatch?: string): string {
   // The hub's own words are written about `{{owner}}` and `{{pet}}` and sent about the owner and their pet; what the owner
   // wrote, their events, tasks and folders go in as they are.
   const T = (s: string) => (names ? personalize(s, names.owner, names.pet) : s);
@@ -77,6 +77,10 @@ export function filingPrompt(text: string, at: Date, hint?: string, events: stri
   return [
     `${T("[Capture to file] {{owner}} wrote this quick note to self on")} ${when}: "${text.trim()}"`,
     `Their day then was ${near(0)} (before 4 AM still counts as the day before), so yesterday was ${near(-1)}, the day before ${near(-2)}, tomorrow ${near(1)}.`,
+    // A capture spoken on a Watch that writes speech down itself was heard twice, by the Watch and by the iPhone (whose
+    // words are the note above): "Highway 192.2 today" on one can be "I weigh 192.2 today" on the other. After the day
+    // line, so older stored prompts and this one read back the same way (captureInPrompt).
+    heardOnWatch?.trim() ? `${T("{{owner}} said it aloud and two devices wrote it down: the note above is the phone's hearing, and the watch heard")} "${heardOnWatch.trim()}". ${T("Where the two differ, file what {{owner}} most likely said; never file both.")}` : "",
     T("It is already saved in that day's diary; never edit the diary. File it where it belongs, with your tools, without asking anything and without chatting:"),
     T("a plan with a day or part of a day becomes a calendar event (follow the Plans rule; name who is involved); a time given, even a bare hour (\"Saturday at 7\"), makes it a timed event starting then (a bare hour is PM unless it reads as morning), never all day;"),
     T("something {{owner}} already did with a day or with people (went somewhere, saw someone, an outing, a show, a meal out) becomes an all-day calendar event on the day it happened (Halloween, last night, yesterday; otherwise that diary day), its title the whole outing in a few words (what they did, with whom, and what came after: \"Apple picking with Jamie and Devon, then Thai food and 2 movies\"), since an event has no notes;"),
@@ -187,7 +191,7 @@ export async function fileCapture(hub: Hub, captureId: string): Promise<Entity |
     }
     // A chat in progress goes first (up to 2 minutes): filing beside it slowed the reply the owner was waiting for.
     for (const until = Date.now() + 120_000; !hub.ai.quiet(0) && Date.now() < until;) await new Promise((r) => setTimeout(r, 2_000));
-    const out = await withPriority("filing", () => hub.ai.chat({ session_id: thread, messages: [{ role: "user", content: filingPrompt(text, new Date(cap.created_at), hint, nearbyEvents(hub.store, new Date(cap.created_at)), similarTasks(hub.store, text), noteFolders(hub.store), { owner: hub.profile.get().name, pet: hub.profile.get().pet }, hub.modules.check) }], ...(seen.length ? { images: seen } : {}), store_as: text.trim(), task_type: "general", no_web: true, filing: true }));
+    const out = await withPriority("filing", () => hub.ai.chat({ session_id: thread, messages: [{ role: "user", content: filingPrompt(text, new Date(cap.created_at), hint, nearbyEvents(hub.store, new Date(cap.created_at)), similarTasks(hub.store, text), noteFolders(hub.store), { owner: hub.profile.get().name, pet: hub.profile.get().pet }, hub.modules.check, typeof cap.fields.heard_on_watch === "string" ? cap.fields.heard_on_watch : undefined) }], ...(seen.length ? { images: seen } : {}), store_as: text.trim(), task_type: "general", no_web: true, filing: true }));
     hub.ai.sessions.rename(thread, captureTitle(text));
     const wrote = (out.actions ?? []).filter((a) => a.ok && a.writes);
     // The store has each item's true kind (a tool result may carry an item's own "kind" field, e.g. a restaurant).

@@ -35,7 +35,7 @@ struct CareerView: View {
                         ForEach(items) { a in row(a) }
                     } header: {
                         HStack {
-                            Label(stage.title, systemImage: stage.symbol).foregroundStyle(stage.color)
+                            Label(stage.title, systemImage: stage.symbol).foregroundStyle(stage.tone.text(else: stage.color))
                             Spacer()
                             Text("\(items.count)").monospacedDigit().foregroundStyle(.secondary)
                         }
@@ -64,7 +64,7 @@ struct CareerView: View {
                 } description: {
                     Text("Tap + and type the company and the role, or tell the assistant.")
                 } actions: {
-                    Button("Add application") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("Add application") { creating = true }.buttonStyle(.themedProminent)
                 }
             }
         }
@@ -94,11 +94,11 @@ struct CareerView: View {
         let at = a.date("next_at")
         let overdue = (at ?? .distantFuture) < Date()
         return HStack(spacing: 12) {
-            Image(systemName: overdue ? "exclamationmark.circle.fill" : "calendar").font(.title2).foregroundStyle(overdue ? Color.red : Color.accentColor)
+            Image(systemName: overdue ? "exclamationmark.circle.fill" : "calendar").font(.title2).foregroundStyle(overdue ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.tint))
             VStack(alignment: .leading, spacing: 2) {
                 Text(StyleGuard.dashes(a.str("company"))).font(.body.weight(.semibold))
                 Text(StyleGuard.dashes(a.string("next_step") ?? "Next step")).font(.subheadline)
-                if let d = at { Text(overdue ? "Overdue, \(d.shortDateTime)" : d.shortDateTime).font(.caption).foregroundStyle(overdue ? Color.red : Color.secondary) }
+                if let d = at { Text(overdue ? "Overdue, \(d.shortDateTime)" : d.shortDateTime).font(.caption).foregroundStyle(overdue ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)) }
             }
         }
     }
@@ -146,7 +146,7 @@ struct AdminApplicationRow: View {
                 Text(StyleGuard.dashes(app.str("company"))).font(.body.weight(.semibold))
                 Spacer()
                 if let r = app.string("remote"), !r.isEmpty { Text(r.capitalized).font(.caption).foregroundStyle(.secondary) }
-                AdminPill(text: stage.title, symbol: stage.symbol, color: stage.color)
+                AdminPill(text: stage.title, symbol: stage.symbol, color: stage.color, tone: stage.tone)
             }
             Text(StyleGuard.dashes(app.str("role"))).font(.subheadline).foregroundStyle(.secondary)
             if app.string("next_step") != nil || at != nil {
@@ -155,7 +155,7 @@ struct AdminApplicationRow: View {
                     Text([app.string("next_step").map(StyleGuard.dashes), at.map { (overdue ? "overdue, " : "") + $0.shortDateTime }].compactMap { $0 }.joined(separator: ", "))
                 }
                 .font(.caption)
-                .foregroundStyle(overdue ? Color.red : Color.secondary)
+                .foregroundStyle(overdue ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
             }
         }
         .padding(.vertical, 2)
@@ -272,13 +272,13 @@ struct AdminApplicationDetail: View {
                     }
                     .pickerStyle(.menu)
                     Spacer()
-                    AdminPill(text: stage.title, symbol: stage.symbol, color: stage.color)
+                    AdminPill(text: stage.title, symbol: stage.symbol, color: stage.color, tone: stage.tone)
                 }
                 if let n = stage.next {
                     Button { setStage(e, n) } label: {
                         Label("Move to \(n.title)", systemImage: n.symbol).frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                     .tint(n.color)
                 }
             }

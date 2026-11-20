@@ -178,6 +178,15 @@ enum AdminStage: String, CaseIterable, Identifiable {
         }
     }
 
+    /// An offer or a yes is good news and a no bad news, in the theme's status colors; the other stages keep their own.
+    var tone: StatusTone? {
+        switch self {
+        case .offer, .accepted: return .ok
+        case .rejected: return .danger
+        default: return nil
+        }
+    }
+
     var symbol: String {
         switch self {
         case .saved: return "bookmark"
@@ -250,6 +259,8 @@ struct AdminPill: View {
     var text: String
     var symbol: String? = nil
     var color: Color = .secondary
+    /// Fine, needs a look or a problem: shown in the theme's status colors instead of `color`.
+    var tone: StatusTone? = nil
 
     var body: some View {
         HStack(spacing: 4) {
@@ -258,8 +269,7 @@ struct AdminPill: View {
         }
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(color.opacity(0.15), in: Capsule())
-        .foregroundStyle(color)
+        .statusCapsule(tone, else: color, tint: 0.15)
         .fixedSize()
     }
 }
@@ -273,7 +283,7 @@ struct AdminMessage: View {
     var body: some View {
         Label(text, systemImage: tone == .error ? "exclamationmark.triangle" : (tone == .ok ? "checkmark.circle" : "info.circle"))
             .font(.callout)
-            .foregroundStyle(tone == .error ? Color.red : (tone == .ok ? Color.green : Color.secondary))
+            .foregroundStyle(tone == .error ? AnyShapeStyle(.dangerText) : (tone == .ok ? AnyShapeStyle(.okText) : AnyShapeStyle(.secondary)))
     }
 }
 

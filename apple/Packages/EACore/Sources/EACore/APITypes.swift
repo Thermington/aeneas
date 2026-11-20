@@ -232,8 +232,11 @@ public struct CaptureRequest: Codable, Sendable {
     public var auto: Bool?
     /// The capture's own id: sent again after a lost reply, the hub answers with the capture it already has.
     public var id: String?
-    public init(text: String, source: Source, attachments: [Attachment]? = nil, auto: Bool? = nil, id: String? = nil) {
+    /// What the Watch itself heard of a spoken capture, beside the iPhone's `text`: a second hearing for the filer.
+    public var heard_on_watch: String?
+    public init(text: String, source: Source, attachments: [Attachment]? = nil, auto: Bool? = nil, id: String? = nil, heard_on_watch: String? = nil) {
         self.text = text; self.source = source; self.attachments = attachments; self.auto = auto; self.id = id
+        self.heard_on_watch = heard_on_watch
     }
 }
 

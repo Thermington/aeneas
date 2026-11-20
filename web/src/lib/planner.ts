@@ -376,7 +376,7 @@ export function fmtDaysLeft(days: number): string {
 export type TimelineItem =
   | { kind: "block"; key: string; start: string; end: string; title: string; task_id: string; status: string }
   | { kind: "commitment"; key: string; start: string; end: string; title: string; type: RuleType; rule_id: string }
-  | { kind: "event"; key: string; start: string; end: string; title: string; id: string; location?: string; all_day?: boolean }
+  | { kind: "event"; key: string; start: string; end: string; title: string; id: string; location?: string; all_day?: boolean; fields?: Record<string, unknown> }
   | { kind: "reminder"; key: string; start: string; title: string; id: string }
   | { kind: "free"; key: string; start: string; end: string; hours: number }
   | { kind: "now"; key: string; start: string };
@@ -386,7 +386,7 @@ export function timeline(day: { blocks: Block[]; commitments: Commitment[]; even
   const items: TimelineItem[] = [];
   for (const b of day.blocks) items.push({ kind: "block", key: `b:${b.task_id}:${b.start}`, start: b.start, end: b.end, title: b.title, task_id: b.task_id, status: b.status });
   for (const c of day.commitments) items.push({ kind: "commitment", key: `c:${c.rule_id}:${c.start}`, start: c.start, end: c.end, title: c.title, type: c.type, rule_id: c.rule_id });
-  for (const e of day.events ?? []) items.push({ kind: "event", key: `e:${e.id}`, ...spanOf(e), title: String(e.fields.title ?? ""), id: e.id, location: e.fields.location as string | undefined, ...(e.fields.all_day === true ? { all_day: true } : {}) });
+  for (const e of day.events ?? []) items.push({ kind: "event", key: `e:${e.id}`, ...spanOf(e), title: String(e.fields.title ?? ""), id: e.id, location: e.fields.location as string | undefined, ...(e.fields.all_day === true ? { all_day: true } : {}), fields: e.fields as Record<string, unknown> });
   for (const r of day.reminders) items.push({ kind: "reminder", key: `r:${r.id}`, start: taskAlertAt(r.fields) ?? "", title: String(r.fields.title ?? ""), id: r.id });
   for (const f of day.free_slots) items.push({ kind: "free", key: `f:${f.start}`, start: f.start, end: f.end, hours: f.hours });
   if (now) items.push({ kind: "now", key: "now", start: now.toISOString() });

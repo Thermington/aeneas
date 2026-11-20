@@ -28,10 +28,16 @@ export const ALLOWED = new Set([
 
 /**
  * The Swift packages the Apple apps may use, each looked at by a person (release rule 5) with its license: any other
- * remote package fails the check. iroh-ffi is Direct link on iPhone, iPad and Mac (EALink).
+ * remote package fails the check. iroh-ffi is Direct link on iPhone, iPad and Mac (EALink). WhisperKit writes speech
+ * down on the Apple Watch (EAWhisper): argmax's code is MIT, and the Hub and Tokenizers files it took from Hugging Face's
+ * swift-transformers (Sources/ArgmaxCore/External, listed in its NOTICES) are Apache-2.0, so both apply. WhisperKit's
+ * own manifest pins swift-argument-parser for its command line tool, which the Watch app does not link; it is listed
+ * because Swift Package Manager pins it all the same.
  */
 export const APPROVED_SWIFT = new Map([
   ["https://github.com/n0-computer/iroh-ffi", "MIT OR Apache-2.0"],
+  ["https://github.com/argmaxinc/WhisperKit", "MIT AND Apache-2.0"],
+  ["https://github.com/apple/swift-argument-parser", "Apache-2.0 WITH Swift-exception"],
 ]);
 
 /** What is wrong with one Package.resolved: a remote pin that is not approved, or an approved one whose license is not allowed. */

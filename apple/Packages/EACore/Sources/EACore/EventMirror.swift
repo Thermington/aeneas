@@ -126,7 +126,8 @@ public enum EventMirror {
     ///   - events: every event entity on this device, deleted ones included (an event deleted in the app is not brought back).
     ///   - settled: whether this device takes the event now; the iPhone waits until it is two minutes old, so the Mac's
     ///     copy of an event made in the app has its link on the hub first.
-    public static func adopt(found: [AppleEvent], calendarTitle: String, events: [Entity], now: Date = Date(),
+    ///   - calendarKey: the calendar's key (`EventCalendar.appleKey`), written as the event's `calendar_key`.
+    public static func adopt(found: [AppleEvent], calendarTitle: String, calendarKey: String? = nil, events: [Entity], now: Date = Date(),
                              settled: (AppleEvent) -> Bool = { _ in true }) -> [Adoption] {
         let linked = Set(events.compactMap(appleId))
         let ids = Set(events.map(\.id))
@@ -139,10 +140,11 @@ public enum EventMirror {
             guard !ids.contains(id), !live.contains(where: { $0["title"] == af["title"] && $0["start"] == af["start"] }),
                   let d = dates(af) else { continue }
             let when = stored(af) ?? (ISO.string(d.start), ISO.string(d.end))
-            let f: [String: JSONValue] = [
+            var f: [String: JSONValue] = [
                 "title": .string(a.title), "start": .string(when.start), "end": .string(when.end), "all_day": .bool(a.allDay),
                 "apple": .object(["id": .string(a.externalId), "calendar": .string(calendarTitle), "from_apple": .bool(true)]),
             ]
+            if let calendarKey { f["calendar_key"] = .string(calendarKey) }
             out.append(Adoption(patch: Patch(id: id, kind: .event, space: .personal, ts: ISO.string(now), fields: f, create: true),
                                 state: SyncedEvent(appleId: a.externalId, fields: af, calendarId: a.calendarId)))
         }
@@ -234,9 +236,13 @@ public enum EventMirror {
     ///     (its account signed out or switched off) is left alone rather than deleted in the app.
     ///   - moveTarget: where an event in another calendar is moved to; nil leaves it. Defaults to `target`; a device
     ///     only moves to a calendar the owner chose, or two devices with different defaults move one back and forth.
+    ///   - calendarKey: a calendar's key (`EventCalendar.appleKey`) by this device's calendar id, written as the
+    ///     event's `calendar_key` when it has none or this device saw it move to another calendar. Another device may
+    ///     name the account differently; rewriting the key on every run would make the two take turns for good.
     public static func plan(events: [Entity], apple: [String: AppleEvent], state: [String: SyncedEvent], now: Date = Date(),
                             target: (Entity) -> String? = { _ in "" }, present: Set<String>? = nil,
-                            moveTarget: ((Entity) -> String?)? = nil, creates: (Entity) -> Bool) -> EventMirrorPlan {
+                            moveTarget: ((Entity) -> String?)? = nil, calendarKey: (String) -> String? = { _ in nil },
+                            creates: (Entity) -> Bool) -> EventMirrorPlan {
         var p = EventMirrorPlan()
         // Old events are left alone: nobody needs last month's dinner written into the calendar now.
         let horizon = now.addingTimeInterval(-7 * 86400)
@@ -272,7 +278,17 @@ public enum EventMirror {
                 p.moves.append(.init(entityId: e.id, localId: a.localId, fields: appleNewer ? af : ef, calendarId: cal))
                 continue
             }
-            if ef == af { p.state[e.id] = SyncedEvent(appleId: aid, fields: ef, calendarId: a.calendarId); continue }
+            // The calendar it is in now, as its color's key, when that is news for the event.
+            var key: [String: JSONValue] = [:]
+            if !a.calendarId.isEmpty, let k = calendarKey(a.calendarId), k != e.str("calendar_key"),
+               e.str("calendar_key").isEmpty || (snap?.calendarId != nil && snap?.calendarId != a.calendarId) {
+                key["calendar_key"] = .string(k)
+            }
+            if ef == af {
+                p.state[e.id] = SyncedEvent(appleId: aid, fields: ef, calendarId: a.calendarId)
+                if !key.isEmpty { p.patches.append(Patch(id: e.id, kind: .event, ts: ISO.now(), fields: key)) }
+                continue
+            }
             let appChanged = snap.map { $0.fields != ef } ?? true
             let appleChanged = snap.map { $0.fields != af } ?? true
             let appWins: Bool
@@ -282,10 +298,12 @@ public enum EventMirror {
             if appWins {
                 p.writes.append(.init(localId: a.localId, entityId: e.id, fields: ef))
                 p.state[e.id] = SyncedEvent(appleId: aid, fields: ef, calendarId: a.calendarId)
+                if !key.isEmpty { p.patches.append(Patch(id: e.id, kind: .event, ts: ISO.now(), fields: key)) }
             } else {
                 guard let when = stored(af) else { continue }
                 var f: [String: JSONValue] = ["title": .string(a.title), "start": .string(when.start), "end": .string(when.end), "all_day": .bool(a.allDay)]
                 if a.title.isEmpty { f.removeValue(forKey: "title") }
+                f.merge(key) { _, k in k }
                 p.patches.append(Patch(id: e.id, kind: .event, ts: ISO.now(), fields: f))
                 p.state[e.id] = SyncedEvent(appleId: aid, fields: af, calendarId: a.calendarId)
             }

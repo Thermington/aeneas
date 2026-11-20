@@ -893,7 +893,9 @@ function seed() {
   const otherDay = (today.getDay() + 6) % 7 === 1 ? 3 : 1; // a weekday that is not today
   create("task", { title: "Flash the new firmware on the bench PSU", status: "scheduled", order: 8, block: { start: dayAt(otherDay, 14), end: dayAt(otherDay, 17) } });
   create("task", { title: "Draft the lamp timer design note", status: "scheduled", order: 9, block: { start: dayAt(5, 10), end: dayAt(5, 13, 30) } });
-  create("event", { title: "Dentist", start: dayAt(otherDay, 11), end: dayAt(otherDay, 12), source: "eventkit", location: "Main St" });
+  create("event", { title: "Dentist", start: dayAt(otherDay, 11), end: dayAt(otherDay, 12), source: "eventkit", location: "Main St", calendar_key: "apple:iCloud/Home" });
+  create("event", { title: "Dinner at Mom's", start: dayAt(4, 18), end: dayAt(4, 20), source: "eventkit", calendar_key: "apple:iCloud/Family" });
+  create("event", { title: "Bouldering", start: atMinutes(today, 19 * 60).toISOString(), end: atMinutes(today, 20 * 60 + 30).toISOString(), source: "eventkit", calendar_key: "apple:Google/Climbing club" });
   create("event", { title: "Team sync", start: atMinutes(today, 16 * 60).toISOString(), end: atMinutes(today, 16 * 60 + 30).toISOString(), source: "m365" }, "work");
   create("plan_rule", { title: "Standup", type: "commitment", days: ["mon", "tue", "wed", "thu", "fri"], start: "09:30", end: "10:00", active: true });
   create("plan_rule", { title: "Choir rehearsal", type: "blackout", days: ["mon", "wed"], start: "17:00", end: "20:00", alternating_anchor: localDate(mon), note: "every other week", active: true });
@@ -1240,7 +1242,13 @@ for (const n of allNotes()) {
 
 // ---------- feel ----------
 const { effective: _defaultEffective, ...feelDefaults } = DEFAULT_FEEL;
-let feel: Feel = { ...feelDefaults };
+// Calendars as the Apple apps report them (Theme, Calendar colors): Family has a color chosen in the app.
+let feel: Feel = { ...feelDefaults, calendars: [
+  { key: "apple:iCloud/Home", name: "Home", account: "iCloud", color: "#1BADF8" },
+  { key: "apple:iCloud/Family", name: "Family", account: "iCloud", color: "#FF2968", chosen: "#34C759" },
+  { key: "apple:Google/Climbing club", name: "Climbing club", account: "Google", color: "#A2845E" },
+  { key: "work:m365", name: "Work calendar", account: "Work", color: "#FF9500" },
+] };
 
 /** GET /prefs/feel: the setting, plus the key actually played (the newest keyed music idea's when following music). */
 function feelView() {
@@ -1414,6 +1422,13 @@ const server = http.createServer(async (req, res) => {
     if (path === "/prefs/feel" && req.method === "PUT") {
       const err = setFeel(await readBody(req));
       return err ? json(res, 422, { error: err }) : json(res, 200, feelView());
+    }
+    if (path === "/prefs/feel/calendar-color" && req.method === "PUT") {
+      const b = await readBody(req);
+      const cur = feel.calendars.find((c) => c.key === b.key);
+      if (!cur) return json(res, 404, { error: "no calendar with that key" });
+      feel = { ...feel, calendars: feel.calendars.map((c) => (c.key !== b.key ? c : b.color ? { ...c, chosen: String(b.color).toUpperCase() } : (({ chosen: _c, ...rest }) => rest)(c))) };
+      return json(res, 200, feelView());
     }
     if (path === "/prefs/feel/images" && req.method === "POST") {
       const type = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();

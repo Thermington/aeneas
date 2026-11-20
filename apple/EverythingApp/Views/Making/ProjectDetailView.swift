@@ -169,7 +169,7 @@ struct ProjectDetailView: View {
                 .focused($dodFocused)
                 .onSubmit { saveDod(current) }
             if changed {
-                Button("Save") { saveDod(current) }.buttonStyle(.borderedProminent)
+                Button("Save") { saveDod(current) }.buttonStyle(.themedProminent)
             }
         } header: {
             Text("Definition of done")
@@ -218,7 +218,7 @@ struct ProjectDetailView: View {
             Button {
                 Task { await engine.markDone(t.id) }
             } label: {
-                Image(systemName: isDone ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(isDone ? Color.green : Color.secondary)
+                Image(systemName: isDone ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(isDone ? AnyShapeStyle(.okText) : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.borderless)
             .disabled(isDone)
@@ -282,9 +282,9 @@ struct ProjectDetailView: View {
                     }
                     Spacer(minLength: 6)
                     if r.missing > 0 {
-                        MakingBadge(text: "\(Making.num(r.missing)) missing", symbol: "exclamationmark.circle.fill", color: .orange)
+                        MakingBadge(text: "\(Making.num(r.missing)) missing", symbol: "exclamationmark.circle.fill", tone: .warn)
                     } else {
-                        MakingBadge(text: "On hand", symbol: "checkmark.circle.fill", color: .green)
+                        MakingBadge(text: "On hand", symbol: "checkmark.circle.fill", tone: .ok)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -295,7 +295,7 @@ struct ProjectDetailView: View {
                 }
                 .disabled(busy)
             }
-            if let m = partsMessage { Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout) }
+            if let m = partsMessage { Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(.okText).font(.callout) }
             Button { editing = true } label: { Label("Edit parts", systemImage: "pencil") }
             NavigationLink { InventoryView() } label: { Label("Inventory", systemImage: "shippingbox") }
         } header: {

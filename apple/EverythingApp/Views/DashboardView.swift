@@ -20,7 +20,7 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
-                if let problem { Text(problem).font(.callout).foregroundStyle(.red) }
+                if let problem { Text(problem).font(.callout).foregroundStyle(.dangerText) }
                 if board != nil && tiles.isEmpty {
                     Text("No tiles yet. Add one to chart weight, sleep, tasks done, a sensor or anything else the hub keeps.")
                         .foregroundStyle(.secondary)
@@ -238,7 +238,7 @@ struct MetricPicker: View {
     var body: some View {
         NavigationStack {
             List {
-                if let problem { Text(problem).foregroundStyle(.red) }
+                if let problem { Text(problem).foregroundStyle(.dangerText) }
                 if metrics == nil && problem == nil { ProgressView() }
                 if let m = metrics, m.isEmpty {
                     Text("Nothing to chart yet. Log something, finish a task or connect a sensor and it shows up here.").foregroundStyle(.secondary)

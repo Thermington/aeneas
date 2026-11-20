@@ -108,7 +108,7 @@ struct GamesView: View {
                         .font(.title3.weight(.semibold))
                         .frame(maxWidth: .infinity, minHeight: 44)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                     .disabled(busy || players.isEmpty || games.isEmpty)
                     if let err = error { AdminMessage(tone: .error, text: err) }
                     else if games.isEmpty { Text("Add a game below first, with who owns it.").foregroundStyle(.secondary) }
@@ -142,7 +142,7 @@ struct GamesView: View {
     private func result(_ p: GamePick) -> some View {
         SwiftUI.Section("The pick") {
             if let name = played {
-                Label("\(name) marked played.", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.title3)
+                Label("\(name) marked played.", systemImage: "checkmark.circle.fill").foregroundStyle(.okText).font(.title3)
             } else if let g = p.pick {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(StyleGuard.dashes(g.str("name"))).font(.largeTitle.weight(.bold))
@@ -153,7 +153,7 @@ struct GamesView: View {
                 .padding(.vertical, 4)
                 HStack(spacing: 12) {
                     Button { markPlayed(g) } label: { Label("Played", systemImage: "checkmark").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                     Button { ask(exclude: excluded + [g.id]) } label: { Label("Another", systemImage: "arrow.triangle.2.circlepath").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
@@ -222,8 +222,8 @@ struct AdminToggleChip: View {
             .font(.body.weight(.medium))
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(on ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.12), in: Capsule())
-            .foregroundStyle(on ? Color.accentColor : Color.primary)
+            .background(on ? AnyShapeStyle(.tint.opacity(0.22)) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: Capsule())
+            .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.primary))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(text)

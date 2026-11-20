@@ -418,7 +418,7 @@ struct ReferencePreviewCard: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
             if let onOpen {
-                Button("Open", action: onOpen).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button("Open", action: onOpen).buttonStyle(.themedProminent).keyboardShortcut(.defaultAction)
             }
         }
         .padding(14)
@@ -546,7 +546,7 @@ struct ReferenceFindBar: View {
             if let count {
                 Text(count == 0 ? "Not found" : "\(max(index, 1)) of \(count)")
                     .font(.caption)
-                    .foregroundStyle(count == 0 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(count == 0 ? AnyShapeStyle(.warnText) : AnyShapeStyle(.secondary))
                     .monospacedDigit()
             }
             Button { onFind(true) } label: { Image(systemName: "chevron.up") }

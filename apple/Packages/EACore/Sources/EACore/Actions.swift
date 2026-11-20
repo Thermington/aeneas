@@ -141,15 +141,18 @@ extension SyncEngine {
     /// files it. Offline: a local capture with `sort: true`, pushed later through the outbox; the hub sorts it on arrival,
     /// so nothing saved away from the hub waits in Unsorted Info. `id`: the capture's own id when it already has one (a
     /// share sent again), so the hub answers with the capture it may already have instead of saving a second copy.
+    /// `heardOnWatch`: what the Watch itself heard of a spoken capture whose `text` the iPhone wrote down, kept on the
+    /// capture so the filer has both hearings.
     @discardableResult
-    public func capture(_ text: String, attachments: [Attachment]? = nil, source: Source? = nil, transcriptConfidence: Double? = nil, id captureId: String? = nil) async -> Entity? {
+    public func capture(_ text: String, attachments: [Attachment]? = nil, source: Source? = nil, transcriptConfidence: Double? = nil, id captureId: String? = nil, heardOnWatch: String? = nil) async -> Entity? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let src = source ?? captureSource
         let id = captureId ?? UUID().uuidString.lowercased()
+        let watchWords = heardOnWatch.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
         if let c = client, status != .unconfigured {
             do {
-                let resp = try await c.capture(CaptureRequest(text: trimmed, source: src, attachments: attachments, auto: true, id: id))
+                let resp = try await c.capture(CaptureRequest(text: trimmed, source: src, attachments: attachments, auto: true, id: id, heard_on_watch: watchWords))
                 await absorb(resp.capture)
                 for e in resp.created ?? [] { await absorb(e) }
                 moment(.create, kind: resp.created?.first?.kind ?? .capture)
@@ -181,6 +184,7 @@ extension SyncEngine {
         ]
         if let a = attachments, !a.isEmpty, let v = try? JSONCoding.value(a) { fields["attachments"] = v }
         if let tc = transcriptConfidence { fields["transcript_confidence"] = .number(tc) }
+        if let w = watchWords { fields["heard_on_watch"] = .string(w) }
         return await create(kind: .capture, fields: fields, id: id)
     }
 

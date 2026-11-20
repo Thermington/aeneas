@@ -34,7 +34,7 @@ struct HubUpdateSection: View {
                     }
                 } else {
                     if i.checked_at != nil, i.behind == 0, i.reason == nil {
-                        Text("Up to date.").font(.callout).foregroundStyle(.green)
+                        Text("Up to date.").font(.callout).foregroundStyle(.okText)
                     }
                     if i.behind > 0 {
                         Text(i.behind == 1 ? "1 change is newer than this hub:" : "\(i.behind) changes are newer than this hub:").font(.callout)
@@ -44,7 +44,7 @@ struct HubUpdateSection: View {
                     if let run = i.last_run, !run.running {
                         Text("Last update \(ISO.date(run.at)?.shortDateTime ?? run.at): \(run.message)")
                             .font(.caption)
-                            .foregroundStyle(run.state == "failed" || run.state == "rolled_back" ? .orange : .secondary)
+                            .foregroundStyle(run.state == "failed" || run.state == "rolled_back" ? AnyShapeStyle(.warnText) : AnyShapeStyle(.secondary))
                     }
                     if i.installed_with_git {
                         Button(busy ? "Checking" : "Check for updates") { Task { await check() } }.disabled(busy)
@@ -58,7 +58,7 @@ struct HubUpdateSection: View {
             } else {
                 Text(engine.client == nil ? "Hub not configured." : (error ?? "Loading")).foregroundStyle(.secondary)
             }
-            if info != nil, let e = error { Text(e).font(.caption).foregroundStyle(.orange) }
+            if info != nil, let e = error { Text(e).font(.caption).foregroundStyle(.warnText) }
         }
         .task { await load() }
         .task(id: watching) { await watch() }

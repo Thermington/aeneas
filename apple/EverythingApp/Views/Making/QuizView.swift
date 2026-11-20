@@ -73,12 +73,12 @@ struct QuizView: View {
     }
 
     private func dot(_ r: QuizResult?, current: Bool) -> some View {
-        let (symbol, color, label): (String, Color, String) = {
+        let (symbol, color, label): (String, AnyShapeStyle, String) = {
             switch r {
-            case .right: return ("checkmark.circle.fill", .green, "right")
-            case .revealed: return ("eye.circle.fill", .orange, "revealed")
-            case .wrong: return ("xmark.circle.fill", .red, "wrong")
-            case nil: return current ? ("circle.inset.filled", .blue, "current") : ("circle", .secondary, "not asked yet")
+            case .right: return ("checkmark.circle.fill", AnyShapeStyle(.ok), "right")
+            case .revealed: return ("eye.circle.fill", AnyShapeStyle(.warn), "revealed")
+            case .wrong: return ("xmark.circle.fill", AnyShapeStyle(.danger), "wrong")
+            case nil: return current ? ("circle.inset.filled", AnyShapeStyle(Color.blue), "current") : ("circle", AnyShapeStyle(.secondary), "not asked yet")
             }
         }()
         return Image(systemName: symbol).foregroundStyle(color).font(.title3).accessibilityLabel(label)
@@ -107,7 +107,7 @@ struct QuizView: View {
             Button { Task { await act(.know) } } label: {
                 Label("I know it", systemImage: "checkmark").font(.title3.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.themedProminent)
             .tint(.green)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
@@ -147,7 +147,7 @@ struct QuizView: View {
                 Label(st.phase == .done ? "See results" : "Next question", systemImage: "arrow.right")
                     .font(.title3.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.themedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
         }
@@ -159,11 +159,11 @@ struct QuizView: View {
     private func doneCard(_ st: Making.QuizState, _ items: [Making.QuizItem]) -> some View {
         let c = Making.quizCounts(st.results)
         return VStack(alignment: .leading, spacing: 14) {
-            Label("Done for tonight", systemImage: "checkmark.seal.fill").font(.title2.weight(.semibold)).foregroundStyle(.green)
+            Label("Done for tonight", systemImage: "checkmark.seal.fill").font(.title2.weight(.semibold)).foregroundStyle(.okText)
             HStack(spacing: 8) {
-                MakingBadge(text: "\(c.right) right", symbol: "checkmark.circle.fill", color: .green)
-                MakingBadge(text: "\(c.revealed) revealed", symbol: "eye.circle.fill", color: .orange)
-                MakingBadge(text: "\(c.wrong) wrong", symbol: "xmark.circle.fill", color: .red)
+                MakingBadge(text: "\(c.right) right", symbol: "checkmark.circle.fill", tone: .ok)
+                MakingBadge(text: "\(c.revealed) revealed", symbol: "eye.circle.fill", tone: .warn)
+                MakingBadge(text: "\(c.wrong) wrong", symbol: "xmark.circle.fill", tone: .danger)
             }
             Divider()
             ForEach(Array(items.enumerated()), id: \.offset) { i, it in
@@ -192,7 +192,7 @@ struct QuizView: View {
                 .foregroundStyle(.secondary)
             if engine.client != nil {
                 Button(building ? "Making it" : "Make today's quiz") { Task { await build() } }
-                    .buttonStyle(.borderedProminent).disabled(building)
+                    .buttonStyle(.themedProminent).disabled(building)
             }
             if let s = streak { Text(s == 0 ? "No streak yet." : "\(s) day streak.").font(.callout) }
         }

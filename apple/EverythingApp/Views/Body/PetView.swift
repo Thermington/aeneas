@@ -272,13 +272,13 @@ struct CustodyCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label(c.withMe ? "With you" : "At the other home", systemImage: c.withMe ? "house.fill" : "arrow.left.arrow.right")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(c.withMe ? Color.green : Color.orange)
+                    .foregroundStyle(c.withMe ? StatusStyle.okText : StatusStyle.warnText)
                 Text("Since \(BodyFmt.day(c.since)). Next handoff \(BodyFmt.day(c.next)), \(BodyFmt.inDays(c.next)), \(PetCustody.cycleWords(c.cycleDays)).")
                     .font(.subheadline).foregroundStyle(.secondary)
                 Button { log(withMe: !c.withMe, cycle: c.cycleDays) } label: {
                     Label(c.withMe ? "Dropped him off" : "Picked him up", systemImage: c.withMe ? "car.fill" : "house.fill").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .controlSize(.large)
                 .disabled(busy)
                 Picker("Repeats", selection: Binding(get: { c.cycleDays }, set: { setCycle($0, on: c) })) {
@@ -298,7 +298,7 @@ struct CustodyCard: View {
                     .font(.subheadline).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Button { log(withMe: true, cycle: PetCustody.defaultCycleDays) } label: { Label("With me", systemImage: "house.fill").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.themedProminent)
                     Button { log(withMe: false, cycle: PetCustody.defaultCycleDays) } label: { Label("At the other home", systemImage: "arrow.left.arrow.right").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
@@ -422,7 +422,7 @@ private struct PetDueRow: View {
     var body: some View {
         let d = event.date("next_due") ?? Date()
         let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: d)).day ?? 0
-        let color: Color = days <= 1 ? .red : (days <= 7 ? .orange : .secondary)
+        let color: AnyShapeStyle = days <= 1 ? AnyShapeStyle(.dangerText) : (days <= 7 ? AnyShapeStyle(.warnText) : AnyShapeStyle(.secondary))
         HStack(spacing: 10) {
             BodyTag(text: petTypeLabel(event.str("type")), color: petTypeColor(event.str("type")))
             Text(StyleGuard.dashes(event.str("note"))).lineLimit(1)

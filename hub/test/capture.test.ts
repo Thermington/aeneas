@@ -263,3 +263,30 @@ test("a capture sent again with its own id (its reply was lost) is the one the h
     assert.equal((await t.api("/capture", { method: "POST", json: { text: "y", source: "watch", id: note.id } })).status, 409);
   } finally { t.cleanup(); }
 });
+
+test("a capture spoken on a Watch that writes speech down keeps the Watch's hearing, and the filer reads both", async () => {
+  const t = makeHub();
+  const b = scripted([() => ({ calls: [{ name: "log", arguments: { type: "weight", value: 192.2, unit: "lb" } }] }), () => ({ text: "Logged weight 192.2 lb." })]);
+  setBackendOverride(b);
+  try {
+    const res = await t.api("/capture", { method: "POST", json: { text: "Highway 192.2 today.", heard_on_watch: " I weigh 192.2 today. ", source: "watch", auto: true } });
+    assert.equal(res.status, 201);
+    const cap = ((await res.json()) as CaptureResponse).capture;
+    // The iPhone's words are the capture and its diary line; the Watch's are kept beside them.
+    assert.equal(cap.fields.text, "Highway 192.2 today.");
+    assert.equal(cap.fields.heard_on_watch, "I weigh 192.2 today.");
+    assert.match(String(t.hub.store.get(String(cap.fields.diary_id))!.fields.body), /Highway 192\.2 today\./);
+    await queueFiling(t.hub, "none");
+    const prompt = b.seen[0].at(-1)!.content;
+    assert.match(prompt, /"Highway 192\.2 today\."/);
+    assert.match(prompt, /the watch heard "I weigh 192\.2 today\."\. Where the two differ, file what .+ most likely said; never file both\./);
+    // The capture still reads back from a stored prompt as before.
+    assert.equal(captureInPrompt(filingPrompt("Highway 192.2 today.", new Date(), undefined, [], [], [], undefined, () => true, "I weigh 192.2 today.")), "Highway 192.2 today.");
+    // The same words twice, or none from the Watch: nothing extra kept, nothing extra said.
+    const same = ((await (await t.api("/capture", { method: "POST", json: { text: "Buy milk", heard_on_watch: "buy milk", source: "watch", auto: true } })).json()) as CaptureResponse).capture;
+    assert.equal(same.fields.heard_on_watch, undefined);
+    assert.doesNotMatch(filingPrompt("Buy milk", new Date()), /watch heard/);
+    // Too long to be one spoken capture's hearing: refused like any bad body.
+    assert.equal((await t.api("/capture", { method: "POST", json: { text: "x", heard_on_watch: "y".repeat(8001), source: "watch" } })).status, 422);
+  } finally { setBackendOverride(null); t.cleanup(); }
+});

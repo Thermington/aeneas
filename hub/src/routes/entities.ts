@@ -15,6 +15,7 @@ import { feelView } from "../feel.js";
 import { entitiesCsv } from "../csv.js";
 import { dayKey } from "../metrics.js";
 import { inAppUnits } from "../health.js";
+import { modelPin, prepareSpeechModel, speechModelFile } from "../speechmodels.js";
 
 const RESERVED_QUERY = new Set(["kind", "space", "limit", "include_deleted", "token", "key"]);
 
@@ -100,7 +101,11 @@ export function entityRoutes() {
         return c.json({ capture: had, suggested_kind: String(had.fields.suggested_kind ?? "none") }, 200);
       }
     }
-    const capture = hub.store.create("capture", { text: body.text, source: body.source, ...(body.attachments ? { attachments: body.attachments } : {}), processed: false, suggested_kind: "none" }, "personal", body.id);
+    // A Watch that writes speech down itself sends its own hearing beside the iPhone's: kept for the filer, unless it
+    // says the same.
+    const heard = body.heard_on_watch?.trim();
+    const second = heard && heard.toLowerCase() !== body.text.trim().toLowerCase() ? { heard_on_watch: heard } : {};
+    const capture = hub.store.create("capture", { text: body.text, source: body.source, ...(body.attachments ? { attachments: body.attachments } : {}), ...second, processed: false, suggested_kind: "none" }, "personal", body.id);
     if (!body.auto) return c.json({ capture, suggested_kind: "none" }, 201);
     const sorted = sortCapture(hub, capture);
     return c.json({ capture: sorted.capture, suggested_kind: sorted.suggested, ...(sorted.created.length ? { created: sorted.created } : {}) }, 201);
@@ -154,6 +159,32 @@ export function entityRoutes() {
     return c.json(feelView(hub));
   });
   // Image shapes: the raw PNG or WebP as the body, `?name=` for its label. Shrink to about 256 px before sending.
+  // Calendar colors (Theme, Calendar colors): an app reports the calendars it brings events from, with their colors;
+  // the owner picks a color for one, or null for its own.
+  r.put("/prefs/feel/calendars", async (c) => {
+    const body = await readJsonObject(c);
+    if (!Array.isArray(body.calendars) || body.calendars.length > 100) throw new StoreError(422, "calendars is a list of at most 100 { key, name, account?, color? }");
+    c.get("hub").feel.reportCalendars(body.calendars as Array<{ key: string; name: string }>);
+    return c.json(feelView(c.get("hub")));
+  });
+  r.put("/prefs/feel/calendar-color", async (c) => {
+    const body = await readJsonObject(c);
+    if (typeof body.key !== "string" || !(body.color === null || typeof body.color === "string")) throw new StoreError(422, "key and color (#rrggbb or null) are required");
+    c.get("hub").feel.chooseCalendarColor(body.key, body.color as string | null);
+    return c.json(feelView(c.get("hub")));
+  });
+  // The Watch's speech model, fetched by the hub from Hugging Face and handed to the iPhones (speechmodels.ts).
+  r.get("/speech-models/:name", (c) => {
+    const m = modelPin(c.req.param("name"));
+    if (!m) throw new StoreError(404, "no such speech model");
+    return c.json({ ...prepareSpeechModel(c.get("hub"), m), files: m.files });
+  });
+  r.get("/speech-models/:name/file", (c) => {
+    const m = modelPin(c.req.param("name"));
+    if (!m) throw new StoreError(404, "no such speech model");
+    const bytes = speechModelFile(c.get("hub"), m, c.req.query("path") ?? "");
+    return c.body(new Uint8Array(bytes), 200, { "content-type": "application/octet-stream", "content-length": String(bytes.length) });
+  });
   r.post("/prefs/feel/images", async (c) => {
     const hub = c.get("hub");
     const type = (c.req.header("content-type") ?? "").split(";")[0].trim().toLowerCase();

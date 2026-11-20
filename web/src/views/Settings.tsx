@@ -14,7 +14,7 @@ import { applySetupFile, type SetupFileResult } from "../tauri/setupFile";
 import { checkForUpdate, manifestCheck, promptInstall, shellVersion, subscribePwa, type PwaState } from "../pwa";
 import { fmtDateTime } from "../lib/time";
 import { useFeel } from "../feel/store";
-import { AppColors, AppThemeEditor, ThemeHome, themeSummaries } from "./settings/Theme";
+import { AppColors, AppThemeEditor, CalendarColors, ThemeHome, themeSummaries } from "./settings/Theme";
 import { PaletteEditor, TapEffects } from "./settings/TapEffects";
 import { NoteSounds } from "./settings/NoteSounds";
 import { NavRow, SubPage, Toggle, errorText } from "./settings/common";
@@ -59,6 +59,7 @@ export function Settings({ parts, params }: { parts: string[]; params: URLSearch
     if (b === "taps" && c) return <PaletteEditor key={`${c}-${params.get("from") ?? ""}`} id={c} from={params.get("from")} />;
     if (b === "taps") return <TapEffects />;
     if (b === "sounds") return <NoteSounds />;
+    if (b === "calendars") return <CalendarColors />;
     return <ThemeHome />;
   }
   if (a === "connection") return <Connection />;

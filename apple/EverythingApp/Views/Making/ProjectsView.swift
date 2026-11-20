@@ -62,7 +62,7 @@ struct ProjectsView: View {
                 } description: {
                     Text("Tap New project, give it a name and one sentence for when it is done.")
                 } actions: {
-                    Button("New project") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("New project") { creating = true }.buttonStyle(.themedProminent)
                     NavigationLink("Open inventory") { InventoryView() }
                 }
             }
@@ -133,9 +133,9 @@ struct ProjectRow: View {
                 if next > 0 { Label("\(next) next", systemImage: "list.bullet") }
                 if !rows.isEmpty {
                     if missing > 0 {
-                        Label("\(missing) of \(rows.count) parts missing", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                        Label("\(missing) of \(rows.count) parts missing", systemImage: "exclamationmark.circle").foregroundStyle(.warnText)
                     } else {
-                        Label("All \(rows.count) parts on hand", systemImage: "checkmark.circle").foregroundStyle(.green)
+                        Label("All \(rows.count) parts on hand", systemImage: "checkmark.circle").foregroundStyle(.okText)
                     }
                 }
                 // A feed (Codex, the repo) usually knows about more recent work than the last assistant chat.

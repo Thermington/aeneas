@@ -3,6 +3,8 @@ import EACore
 
 /// Large, terse, high-contrast controls. One screen shows one thing.
 struct BigButton: View {
+    /// The theme's accent for a prominent one: on the Mac, Color.accentColor is the system's accent, not the theme's.
+    @Environment(\.eaTheme) private var theme
     var title: String
     var symbol: String? = nil
     var role: ButtonRole? = nil
@@ -20,7 +22,7 @@ struct BigButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.bordered)
-        .tint(prominent ? Color.accentColor : nil)
+        .tint(prominent ? (theme?.accent ?? Color.accentColor) : nil)
         .controlSize(.large)
     }
 }
@@ -59,13 +61,13 @@ struct SampleBanner: View {
                     leaving = true
                     Task { await model.endSample(); leaving = false }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .disabled(leaving)
                 .accessibilityIdentifier("sample.leave")
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
@@ -82,12 +84,12 @@ struct CheckinBanner: View {
             Text(StyleGuard.dashes(checkin.title)).font(.body.weight(.semibold)).lineLimit(2)
             Spacer(minLength: 4)
             Button("Still on it", action: still).buttonStyle(.bordered)
-            Button("Stop", action: stop).buttonStyle(.borderedProminent).tint(.orange)
+            Button("Stop", action: stop).buttonStyle(.themedProminent).tint(.orange)
         }
         .controlSize(.small)
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.orange.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.warn.opacity(0.5)))
         .shadow(radius: 6, y: 2)
         .accessibilityElement(children: .contain)
     }
@@ -130,7 +132,7 @@ struct Chip: View {
                 .font(.body.weight(.medium))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(selected ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.15), in: Capsule())
+                .background(selected ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(Color.secondary.opacity(0.15)), in: Capsule())
         }
         .buttonStyle(.plain)
     }

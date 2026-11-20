@@ -1,8 +1,8 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { go } from "../../lib/router";
 import { useMediaQuery } from "../../lib/useMediaQuery";
-import { getFeel, soundHere, updateFeel, useFeel } from "../../feel/store";
-import { allAppThemes, appThemeName, classicColors, contrast, resolveAppTheme, themeVars, type ThemeColors } from "../../feel/appTheme";
+import { chooseCalendarColor, getFeel, soundHere, updateFeel, useFeel } from "../../feel/store";
+import { CLASSIC, allAppThemes, appThemeName, classicColors, contrast, resolveAppTheme, themeVars, type ThemeColors } from "../../feel/appTheme";
 import { newId, paletteName, type AppTheme, type Appearance, type FeelView } from "../../feel/prefs";
 import { SCALE_NAMES, SYNTH_NAMES, THEME_NAMES } from "../../feel/theory";
 import { NavRow, Segmented, SubPage } from "./common";
@@ -28,7 +28,59 @@ export function ThemeHome() {
         <NavRow href="/settings/theme/colors" title="App colors" summary={s.colors} />
         <NavRow href="/settings/theme/taps" title="Tap effects" summary={s.taps} />
         <NavRow href="/settings/theme/sounds" title="Note sounds" summary={s.sounds} />
+        <NavRow href="/settings/theme/calendars" title="Calendar colors" summary={calendarsSummary(f)} />
       </nav>
+    </SubPage>
+  );
+}
+
+function calendarsSummary(f: FeelView): string {
+  const n = f.calendars.length;
+  if (!n) return "None yet";
+  const mine = f.calendars.filter((c) => c.chosen).length;
+  return `${n} ${n === 1 ? "calendar" : "calendars"}${mine ? `, ${mine} in colors you chose` : ", as their calendars color them"}`;
+}
+
+/**
+ * Theme, Calendar colors: each calendar events come from, in the color its calendar gives it (Apple Calendar or
+ * iCloud, as an app or the hub's sync reported it), or in one chosen here, which every device then uses.
+ */
+export function CalendarColors() {
+  const f = useFeel();
+  const [err, setErr] = useState("");
+  const pick = (key: string, color: string | null) => {
+    setErr("");
+    chooseCalendarColor(key, color).catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  };
+  const accounts = [...new Set(f.calendars.map((c) => c.account ?? ""))];
+  return (
+    <SubPage path="/settings/theme/calendars" title="Calendar colors">
+      <div className="muted small">
+        Events are drawn in their calendar's color on every device: the color Apple Calendar or iCloud gives it, or one you choose here. Events made in Aeneas on no calendar use the theme's accent.
+      </div>
+      {f.calendars.length === 0 && <div className="muted">No calendars yet. They appear once the iPhone, iPad or Mac app reads Apple Calendar, or the hub syncs iCloud calendars.</div>}
+      {accounts.map((acct) => (
+        <section key={acct || "none"} className="col">
+          {accounts.length > 1 && <h2 className="settings-h">{acct || "Other"}</h2>}
+          {f.calendars.filter((c) => (c.account ?? "") === acct).sort((a, b) => a.name.localeCompare(b.name)).map((c) => {
+            const shown = c.chosen ?? c.color ?? "#888888";
+            return (
+              <div key={c.key} className="row between cal-color-row">
+                <label className="row">
+                  <input type="color" value={shown.toLowerCase()} aria-label={`Color for ${c.name}`} onChange={(e) => pick(c.key, e.target.value.toUpperCase())} />
+                  <span>{c.name}</span>
+                </label>
+                {c.chosen ? (
+                  <button type="button" className="ghost small" onClick={() => pick(c.key, null)}>{c.color ? "Use its own color" : "Clear"}</button>
+                ) : (
+                  <span className="muted small">{c.color ? "Its own color" : "No color of its own"}</span>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      ))}
+      {err && <div className="error small">{err}</div>}
     </SubPage>
   );
 }
@@ -168,6 +220,13 @@ const COLOR_FIELDS: Array<{ key: "accent" | "background" | "surface" | "text"; l
   { key: "text", label: "Text" },
 ];
 
+/** Status colors: what is fine, what needs a look, what is a problem (checks, readings, alerts, deadlines). */
+const STATUS_FIELDS: Array<{ key: "ok" | "warn" | "danger"; label: string }> = [
+  { key: "ok", label: "Fine" },
+  { key: "warn", label: "Needs a look" },
+  { key: "danger", label: "Problem" },
+];
+
 /** Make or change a saved app theme. `id` is a saved theme's id, or "new" to start from the theme in use. */
 export function AppThemeEditor({ id }: { id: string }) {
   const f = useFeel();
@@ -238,6 +297,29 @@ export function AppThemeEditor({ id }: { id: string }) {
             ))}
           </div>
           {!readable && <div className="error">Text and background are close in brightness, so words may be hard to read.</div>}
+          <div>
+            <label>Status colors</label>
+            <div className="muted small">Used for what is fine, what needs a look and what is a problem. As words they are darkened or lightened as far as needed to read on this theme.</div>
+          </div>
+          <div className="color-fields">
+            {STATUS_FIELDS.map((c) => {
+              const value = draft[c.key] ?? (draft.mode === "dark" ? CLASSIC.dark : CLASSIC.light)[c.key];
+              return (
+                <label key={c.key} className="color-field">
+                  <input type="color" value={value.toLowerCase()} onChange={(e) => edit({ [c.key]: e.target.value.toUpperCase() })} />
+                  <span>
+                    <span className="cf-name">{c.label}</span>
+                    <span className="mono small muted">{draft[c.key] ? value.toUpperCase() : "Classic"}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {STATUS_FIELDS.some((c) => draft[c.key]) && (
+            <div className="row">
+              <button type="button" className="ghost small" onClick={() => setDraft((d) => (d ? (({ ok: _o, warn: _w, danger: _d, ...rest }) => rest)(d) : d))}>Classic status colors</button>
+            </div>
+          )}
         </div>
         <ThemeLivePreview t={draft} name={name || "Theme"} />
       </div>
@@ -275,6 +357,11 @@ function ThemeLivePreview({ t, name }: { t: ThemeColors; name: string }) {
             Later
           </button>
           <span style={{ color: "var(--accent)" }}>A link</span>
+        </div>
+        <div className="row">
+          <span className="chip static tone-ok">fine</span>
+          <span className="chip static tone-warn">needs a look</span>
+          <span className="chip static tone-danger">problem</span>
         </div>
       </div>
     </div>

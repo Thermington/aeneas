@@ -116,6 +116,9 @@ test("calendar sync: server events come in, app events go out, and edits and del
 
     const r1 = (await syncCalendarsNow(t.hub))[0];
     assert.equal(r1.error, undefined);
+    // The chosen calendars' own colors are kept for Theme, Calendar colors, under the key their events name.
+    const colors = t.hub.feel.get().calendars;
+    assert.deepEqual(colors.map((c) => [c.key, c.account, c.color]).sort(), [[`icloud:${CAL}`, "you@icloud.com", "#FF2968"], [`icloud:${HOLIDAYS}`, "you@icloud.com", "#FF2968"]].sort());
     const all = events(t);
     const dentistE = all.find((e) => e.fields.title === "Dentist")!;
     assert.deepEqual(dentistE.fields.caldav, { account: "you@icloud.com", calendar: CAL, uid: "dentist-1", from_caldav: true });

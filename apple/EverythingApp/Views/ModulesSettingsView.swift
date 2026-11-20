@@ -20,7 +20,7 @@ struct ModulesSettingsView: View {
             SwiftUI.Section {
                 Text("Switch off what you do not use. Off hides it on every device and stops its background work; nothing is erased.")
                     .font(.callout).foregroundStyle(.secondary)
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+                if let error { Text(error).font(.caption).foregroundStyle(.dangerText) }
             }
             .themedRow()
             if engine.client == nil {
@@ -42,7 +42,7 @@ struct ModulesSettingsView: View {
                                 .disabled(pending[m.id] != nil)
                             // Under the switch that did not change: the screen's top can be out of sight.
                             if let refused, refused.id == m.id {
-                                Text(refused.text).font(.caption).foregroundStyle(.orange)
+                                Text(refused.text).font(.caption).foregroundStyle(.warnText)
                             }
                         }
                     } label: {

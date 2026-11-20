@@ -32,7 +32,7 @@ export const THEMES = ["aurora", "sunset", "ocean", "forest", "neon", "candy", "
 export const SHAPES = ["triangle", "square", "circle", "hexagon", "diamond", "star", "ring", "spark"] as const;
 
 /** Built-in app color themes. `classic` changes nothing (the system look, light or dark per `appearance`). */
-export interface AppTheme { id: string; name: string; mode: "light" | "dark"; accent: string; background: string; surface: string; text: string }
+export interface AppTheme { id: string; name: string; mode: "light" | "dark"; accent: string; background: string; surface: string; text: string; ok?: string; warn?: string; danger?: string }
 export const APP_THEMES: Array<AppTheme | { id: "classic"; name: string }> = [
   { id: "classic", name: "Classic" },
   { id: "midnight", name: "Midnight", mode: "dark", accent: "#7C5CFF", background: "#0E1020", surface: "#181B33", text: "#E8E9F3" },
@@ -50,7 +50,23 @@ const Name = z.string().trim().min(1).max(40);
 
 export const Palette = z.object({ id: Id, name: Name, colors: z.array(Hex).min(1).max(8) });
 export const ImageShape = z.object({ id: Id, name: Name, enabled: z.boolean(), type: z.enum(["image/png", "image/webp"]) });
-export const CustomAppTheme = z.object({ id: Id, name: Name, mode: z.enum(["light", "dark"]), accent: Hex, background: Hex, surface: Hex, text: Hex });
+/** `ok`, `warn`, `danger`: the theme's status colors (fine, needs a look, problem); left out, the classic ones for its mode. */
+export const CustomAppTheme = z.object({ id: Id, name: Name, mode: z.enum(["light", "dark"]), accent: Hex, background: Hex, surface: Hex, text: Hex, ok: Hex.optional(), warn: Hex.optional(), danger: Hex.optional() });
+
+/**
+ * A calendar's color (Theme, Calendar colors; since 2026-11-20): `color` is the one it has where it lives, as an app
+ * that reads Apple Calendar or the hub's iCloud sync last reported it; `chosen` is the owner's, which wins. `key` is
+ * what events name (eventCalendarKey in @everythingapp/shared).
+ */
+export const CalendarColorEntry = z.object({
+  key: z.string().min(1).max(300),
+  name: z.string().trim().min(1).max(120),
+  account: z.string().max(120).optional(),
+  color: Hex.optional(),
+  chosen: Hex.optional(),
+  seen_at: z.string().max(40).optional(),
+});
+export type CalendarColorEntry = z.infer<typeof CalendarColorEntry>;
 
 export const Feel = z.object({
   motion: z.boolean(),
@@ -79,6 +95,7 @@ export const Feel = z.object({
   app_theme: z.string(),
   app_themes: z.array(CustomAppTheme).max(20),
   appearance: z.enum(["system", "light", "dark"]),
+  calendars: z.array(CalendarColorEntry).max(200),
 });
 export type Feel = z.infer<typeof Feel>;
 
@@ -102,6 +119,7 @@ export const DEFAULT_FEEL: Feel = {
   app_theme: "classic",
   app_themes: [],
   appearance: "system",
+  calendars: [],
 };
 
 /**
@@ -170,6 +188,41 @@ export class FeelStore {
       fs.rmSync(tmp, { force: true });
       throw e;
     }
+  }
+
+  // ---- calendar colors ----
+
+  /**
+   * The calendars an app or the hub's iCloud sync found, with their own colors: each is added or brought up to date
+   * (name, account, color); the owner's choice stays. At most 200 are kept: the longest unseen without a choice go.
+   */
+  reportCalendars(list: Array<{ key: string; name: string; account?: string; color?: string }>, now: Date = new Date()): Feel {
+    const f = this.get();
+    const at = now.toISOString();
+    const out = f.calendars.map((c) => ({ ...c }));
+    for (const r of list) {
+      const given = CalendarColorEntry.omit({ chosen: true, seen_at: true }).safeParse(r);
+      if (!given.success) throw new StoreError(422, `calendars: ${given.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`);
+      const cur = out.find((c) => c.key === given.data.key);
+      // A report without a color (a calendar server that keeps none) leaves the one known before.
+      const color = given.data.color?.toUpperCase() ?? cur?.color;
+      const next = { ...given.data, ...(color ? { color } : {}), seen_at: at };
+      if (cur) Object.assign(cur, next); else out.push(next);
+    }
+    while (out.length > 200) {
+      const drop = out.filter((c) => !c.chosen).sort((a, b) => String(a.seen_at ?? "").localeCompare(String(b.seen_at ?? "")))[0] ?? out[0];
+      out.splice(out.indexOf(drop), 1);
+    }
+    return this.set({ calendars: out });
+  }
+
+  /** The owner's color for one calendar, or back to its own color with null. */
+  chooseCalendarColor(key: string, color: string | null): Feel {
+    const f = this.get();
+    const cur = f.calendars.find((c) => c.key === key);
+    if (!cur) throw new StoreError(404, "no calendar with that key");
+    if (color !== null && !/^#[0-9a-fA-F]{6}$/.test(color)) throw new StoreError(422, "color is #rrggbb, or null for the calendar's own color");
+    return this.set({ calendars: f.calendars.map((c) => (c.key !== key ? c : color === null ? (({ chosen: _c, ...rest }) => rest)(c) : { ...c, chosen: color.toUpperCase() })) });
   }
 
   // ---- image shapes ----

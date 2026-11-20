@@ -15,6 +15,9 @@ test("Swift pins: approved packages pass, any other remote package fails", () =>
   const pin = (location) => JSON.stringify({ pins: [{ identity: "x", location, state: { version: "1.0.0" } }] });
   assert.deepEqual(swiftPinProblems(pin("https://github.com/n0-computer/iroh-ffi"), "a/Package.resolved"), []);
   assert.deepEqual(swiftPinProblems(pin("https://github.com/n0-computer/iroh-ffi.git"), "a/Package.resolved"), []);
+  // The Watch's speech model runner and the package its manifest pins with it.
+  assert.deepEqual(swiftPinProblems(pin("https://github.com/argmaxinc/WhisperKit"), "a/Package.resolved"), []);
+  assert.deepEqual(swiftPinProblems(pin("https://github.com/apple/swift-argument-parser.git"), "a/Package.resolved"), []);
   assert.match(swiftPinProblems(pin("https://github.com/someone/other"), "a/Package.resolved")[0], /not an approved Swift package/);
   assert.deepEqual(swiftPinProblems(JSON.stringify({ pins: [] }), "a/Package.resolved"), []);
 });

@@ -47,7 +47,7 @@ struct ProceduresView: View {
                 } description: {
                     Text("Tap New procedure and paste steps from anywhere. Numbered lines become steps and code blocks become commands you can copy.")
                 } actions: {
-                    Button("New procedure") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("New procedure") { creating = true }.buttonStyle(.themedProminent)
                 }
             } else if open.isEmpty && !showFinished {
                 VStack {
@@ -81,7 +81,7 @@ struct ProcedureRow: View {
             Text(StyleGuard.dashes(f.title ?? "Procedure")).font(.headline)
             HStack(spacing: 8) {
                 if p.done {
-                    MakingBadge(text: "Finished", symbol: "checkmark.circle.fill", color: .green)
+                    MakingBadge(text: "Finished", symbol: "checkmark.circle.fill", tone: .ok)
                     if let r = Making.relative(f.done_at) { Text(r).font(.caption).foregroundStyle(.secondary) }
                 } else {
                     MakingBadge(text: "Step \(p.current + 1) of \(p.total)", symbol: "play.circle.fill", color: .blue)
@@ -347,7 +347,7 @@ struct ProcedureRunnerView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             ProgressView(value: Double(p.done ? p.total : p.current), total: Double(max(1, p.total)))
-                .tint(p.done ? .green : .blue)
+                .tint(p.done ? AnyShapeStyle(.ok) : AnyShapeStyle(Color.blue))
         }
     }
 
@@ -373,7 +373,7 @@ struct ProcedureRunnerView: View {
                     .font(.title3.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.themedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(busy)
@@ -393,7 +393,7 @@ struct ProcedureRunnerView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Finished", systemImage: "checkmark.circle.fill")
                 .font(.title.weight(.semibold))
-                .foregroundStyle(.green)
+                .foregroundStyle(.okText)
             Text("\(Making.plural(p.total, "step")) done\(Making.relative(f.done_at).map { ", \($0)" } ?? "").")
                 .foregroundStyle(.secondary)
             Button { confirmReset = true } label: {
@@ -416,7 +416,7 @@ struct ProcedureRunnerView: View {
                     let isCurrent = !p.done && i == p.current
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: isDone ? "checkmark.circle.fill" : isCurrent ? "arrow.right.circle.fill" : "circle")
-                            .foregroundStyle(isDone ? Color.green : isCurrent ? Color.blue : Color.secondary)
+                            .foregroundStyle(isDone ? AnyShapeStyle(.okText) : isCurrent ? AnyShapeStyle(Color.blue) : AnyShapeStyle(.secondary))
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(i + 1). \(StyleGuard.dashes(s.text))")
                                 .fontWeight(isCurrent ? .semibold : .regular)

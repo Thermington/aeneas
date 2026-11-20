@@ -3,6 +3,7 @@ import EACore
 
 /// Unprocessed captures with convert buttons, then the last week's captures and where the assistant filed each one.
 struct InboxView: View {
+    @Environment(\.eaTheme) private var theme
     @State private var showFiled = false
     @EnvironmentObject var engine: SyncEngine
     @EnvironmentObject var model: AppModel
@@ -44,7 +45,7 @@ struct InboxView: View {
                                     }
                                     // The chat that filed it: tell the assistant what it got wrong there.
                                     .swipeActions(edge: .leading) {
-                                        if let thread = cap.string("thread") { Button("Fix") { model.openChat(thread) }.tint(.accentColor) }
+                                        if let thread = cap.string("thread") { Button("Fix") { model.openChat(thread) }.tint(theme?.accent ?? Color.accentColor) }
                                     }
                                     .contextMenu {
                                         if let thread = cap.string("thread") { Button("Fix the filing", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(thread) } }

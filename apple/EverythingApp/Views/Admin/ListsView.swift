@@ -60,7 +60,7 @@ struct ListsView: View {
                             } label: {
                                 if usingTemplate == t.id { ProgressView().controlSize(.small) } else { Text("Use") }
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.themedProminent)
                             .disabled(usingTemplate != nil)
                             .accessibilityLabel("Use \(t.str("title"))")
                         }
@@ -134,13 +134,13 @@ struct AdminListRow: View {
                 Text(StyleGuard.dashes(list.str("title"))).font(.body)
                 Spacer()
                 if p.total > 0 && p.done == p.total && !states {
-                    AdminPill(text: "Done", symbol: "checkmark", color: .green)
+                    AdminPill(text: "Done", symbol: "checkmark", tone: .ok)
                 } else {
                     Text(states ? "\(p.done) of \(p.total) states" : "\(p.done) of \(p.total)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
             if p.total > 0 {
-                ProgressView(value: Double(p.done), total: Double(p.total)).tint(p.done == p.total ? .green : .accentColor)
+                ProgressView(value: Double(p.done), total: Double(p.total)).tint(p.done == p.total ? AnyShapeStyle(.ok) : nil)
             }
         }
         .padding(.vertical, 2)
@@ -193,7 +193,7 @@ struct AdminListDetail: View {
                     } label: {
                         Label(using ? "Starting" : "Use this template", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                     .controlSize(.large)
                     .disabled(using)
                 } else if !states {
@@ -202,9 +202,9 @@ struct AdminListDetail: View {
                             Text("\(p.done) of \(p.total) done").font(.title3.weight(.semibold).monospacedDigit())
                             Spacer()
                             if AdminChecklist.isArchived(e) { AdminPill(text: "Archived", symbol: "archivebox", color: .indigo) }
-                            else if p.total > 0 && p.done == p.total { AdminPill(text: "All done", symbol: "checkmark", color: .green) }
+                            else if p.total > 0 && p.done == p.total { AdminPill(text: "All done", symbol: "checkmark", tone: .ok) }
                         }
-                        if p.total > 0 { ProgressView(value: Double(p.done), total: Double(p.total)).tint(p.done == p.total ? .green : .accentColor) }
+                        if p.total > 0 { ProgressView(value: Double(p.done), total: Double(p.total)).tint(p.done == p.total ? AnyShapeStyle(.ok) : nil) }
                     }
                 }
                 if let err = error { AdminMessage(tone: .error, text: err) }
@@ -278,7 +278,7 @@ struct AdminListDetail: View {
                 } else {
                     Image(systemName: it.done ? "checkmark.circle.fill" : "circle")
                         .font(.title2)
-                        .foregroundStyle(it.done ? Color.green : Color.secondary)
+                        .foregroundStyle(it.done ? AnyShapeStyle(.okText) : AnyShapeStyle(.secondary))
                         .frame(width: 28)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -318,9 +318,9 @@ struct AdminListDetail: View {
                             Text(c.code).font(.callout.weight(.semibold).monospaced())
                         }
                         .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(c.done ? Color.green.opacity(0.22) : Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(c.done ? Color.green.opacity(0.7) : Color.secondary.opacity(0.25)))
-                        .foregroundStyle(c.done ? Color.green : Color.primary)
+                        .background(c.done ? AnyShapeStyle(.ok.opacity(0.22)) : AnyShapeStyle(Color.secondary.opacity(0.10)), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(c.done ? AnyShapeStyle(.ok.opacity(0.7)) : AnyShapeStyle(Color.secondary.opacity(0.25))))
+                        .foregroundStyle(c.done ? AnyShapeStyle(.okText) : AnyShapeStyle(.primary))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

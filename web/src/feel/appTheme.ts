@@ -6,7 +6,7 @@ import { APP_THEMES, type AppTheme, type Appearance, type Feel } from "./prefs";
  * second surface, text on the accent) so everything stays readable.
  */
 
-export type ThemeColors = Pick<AppTheme, "mode" | "accent" | "background" | "surface" | "text">;
+export type ThemeColors = Pick<AppTheme, "mode" | "accent" | "background" | "surface" | "text" | "ok" | "warn" | "danger">;
 
 /** The classic light and dark tokens, for previews of Classic and for the status colors of other themes. */
 export const CLASSIC = {
@@ -58,6 +58,18 @@ function softened(text: string, toward: string, t: number, min: number, on: stri
   return text;
 }
 
+/**
+ * A status color as words: the color itself when it reads at `min` on every background given, else moved toward the
+ * theme's text color, step by step, until it does (on a light page warn's amber becomes a deep brown, for example).
+ */
+export function readable(color: string, text: string, min: number, on: string[]): string {
+  for (let k = 0; k <= 1.0001; k += 0.04) {
+    const c = mix(color, text, k);
+    if (on.every((b) => contrast(c, b) >= min)) return c;
+  }
+  return text;
+}
+
 /** Text on an accent button: white when it reads, else a dark ink from the theme, else whichever of white or black reads better. */
 function onAccent(accent: string, ink: string): string {
   const white = "#ffffff";
@@ -70,21 +82,29 @@ function onAccent(accent: string, ink: string): string {
 export function themeVars(t: ThemeColors): Record<string, string> {
   const dark = t.mode === "dark";
   const base = dark ? CLASSIC.dark : CLASSIC.light;
-  const on = [t.background, t.surface];
+  const surface2 = mix(t.surface, t.text, dark ? 0.09 : 0.07);
+  // Words sit on the page, on cards and on the second card color (rows, commitments), so each must read on all three.
+  const on = [t.background, t.surface, surface2];
   const ink = mix(t.background, "#000000", dark ? 0.4 : 0.85);
   return {
     "--bg": t.background,
     "--surface": t.surface,
-    "--surface-2": mix(t.surface, t.text, dark ? 0.09 : 0.07),
+    "--surface-2": surface2,
     "--text": t.text,
     "--text-2": softened(t.text, t.surface, 0.25, 4.5, on),
     "--muted": softened(t.text, t.surface, 0.42, 4.5, on),
     "--border": mix(t.surface, t.text, dark ? 0.18 : 0.15),
     "--accent": t.accent,
     "--accent-text": onAccent(t.accent, ink),
-    "--danger": base.danger,
-    "--ok": base.ok,
-    "--warn": base.warn,
+    "--link": readable(t.accent, t.text, 4.5, on),
+    "--danger": t.danger ?? base.danger,
+    "--ok": t.ok ?? base.ok,
+    "--warn": t.warn ?? base.warn,
+    "--danger-text": readable(t.danger ?? base.danger, t.text, 4.5, on),
+    "--ok-text": readable(t.ok ?? base.ok, t.text, 4.5, on),
+    "--warn-text": readable(t.warn ?? base.warn, t.text, 4.5, on),
+    "--ok-strong": t.ok ?? base.ok,
+    "--on-ok": onAccent(t.ok ?? base.ok, ink),
     "color-scheme": t.mode,
   };
 }

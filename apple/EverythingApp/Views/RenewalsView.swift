@@ -102,7 +102,7 @@ struct WatchRow: View {
                             Image(systemName: p.ok == true ? "checkmark.shield" : (p.ok == false ? "exclamationmark.shield" : "shield"))
                             Text(p.text).lineLimit(1)
                         }
-                        .foregroundStyle(p.ok == false ? Color.red : Color.secondary)
+                        .foregroundStyle(p.ok == false ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary))
                     }
                 }
                 .font(.caption).foregroundStyle(.secondary)
@@ -113,7 +113,7 @@ struct WatchRow: View {
             Spacer(minLength: 8)
             // Autopay renews by itself; only a renewal the owner has to do gets the button.
             if f?.autopay != true {
-                Button("Renewed") { Task { await engine.renewWatch(watch.id) } }.buttonStyle(.borderedProminent).fixedSize()
+                Button("Renewed") { Task { await engine.renewWatch(watch.id) } }.buttonStyle(.themedProminent).fixedSize()
             }
         }
         .padding(.vertical, 4)
@@ -166,7 +166,7 @@ struct WatchEditView: View {
                         .textInputAutocapitalization(.never).keyboardType(.URL)
                         #endif
                     if let f = watch?.decoded(WatchFields.self), let p = f.probe_url, !p.isEmpty {
-                        if let e = f.last_probe_error, !e.isEmpty { Text("Last probe failed: \(e)").font(.caption).foregroundStyle(.red) }
+                        if let e = f.last_probe_error, !e.isEmpty { Text("Last probe failed: \(e)").font(.caption).foregroundStyle(.dangerText) }
                         else if let d = ISO.date(f.last_probe) { Text("Last probed \(d.shortDateTime), due set from the certificate").font(.caption).foregroundStyle(.secondary) }
                     }
                 }

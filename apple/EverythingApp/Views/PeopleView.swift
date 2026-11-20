@@ -270,7 +270,7 @@ struct PeopleSettingsView: View {
                 Text("Turn this on for one device only, ideally the Mac. Contacts are copied both ways: details the assistant saves reach Apple Contacts, and edits there reach the app. Removing someone here never deletes their contact card.")
             }
             if let s = sync.lastSummary, enabled { SwiftUI.Section("Last sync") { Text(s).font(.callout); if let r = sync.lastRun { Text(r.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) } } }
-            if let e = sync.lastError ?? note { SwiftUI.Section { Text(e).foregroundStyle(.orange) } }
+            if let e = sync.lastError ?? note { SwiftUI.Section { Text(e).foregroundStyle(.warnText) } }
         }
         .navigationTitle("People")
     }

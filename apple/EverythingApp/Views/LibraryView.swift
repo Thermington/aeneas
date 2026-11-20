@@ -56,7 +56,7 @@ struct LibraryAreaRow: View {
                     .font(.caption.weight(.semibold)).monospacedDigit()
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(Capsule().fill(.tint))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.onAccent)
                     .accessibilityLabel("\(waiting) to sort")
             }
             Image(systemName: "chevron.right")

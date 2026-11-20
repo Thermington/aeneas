@@ -30,7 +30,7 @@ struct MenuBarView: View {
             Divider()
             TextField("Capture", text: $text, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1...4).onSubmit { save() }
             HStack {
-                Button("Save") { save() }.buttonStyle(.borderedProminent)
+                Button("Save") { save() }.buttonStyle(.themedProminent)
                 Spacer()
                 Text(message ?? engine.statusLabel).font(.caption).foregroundStyle(.secondary)
             }

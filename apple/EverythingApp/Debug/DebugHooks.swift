@@ -19,6 +19,10 @@ import EACore
 ///   -EAAddMachine YES            with -EASection ops, the Overview opens Add machine
 ///   -EAReadingSpan 7             reading cards start on 7 days (24, 7, 30 or 90)
 ///   -EAMachinesStart YES         Set up Machines shows, as when Machines is switched on in Settings, Modules
+///   -EAAppTheme <id>             use that app theme (classic, midnight, paper, daylight, forest, ocean, sunset, neon), as
+///                                choosing it in Settings does; with -EAAppearance light or dark, Classic's appearance
+///   -EAThemeEditor YES           with -EASettingsPage appColors, the theme editor opens on the theme in use
+///   -EAOpenItem <id>             an item's sheet opens, as a link to it does
 @MainActor
 enum DebugHooks {
     /// The machine page `-EAMachine` asked for opens once, not again each time the Overview shows.
@@ -27,6 +31,10 @@ enum DebugHooks {
     static func applyLaunchArguments(_ model: AppModel) async {
         let d = UserDefaults.standard
         if d.bool(forKey: "EASample"), !model.isConfigured { await model.startSample() }
+        applyTheme()
+        if let id = d.string(forKey: "EAOpenItem"), !id.isEmpty {
+            Task { try? await Task.sleep(for: .seconds(1.5)); model.open(itemId: id) }
+        }
         if d.bool(forKey: "EASeedWorkCalendar") { await seedWorkCalendar() }
         if let s = d.string(forKey: "EASection"), let section = Section(rawValue: s) { model.section = section }
         // The link a QR scan or the camera opens, without the system's "Open in Aeneas?" tap (automated tests).
@@ -35,6 +43,15 @@ enum DebugHooks {
         if d.bool(forKey: "EAHumSample") { await humSample(model) }
         if let name = d.string(forKey: "EAWatchCaptureFile") { watchCaptureFile(name) }
         if d.bool(forKey: "EAMachinesStart") { model.machinesStart = true }
+    }
+
+    /// `-EAAppTheme <id>` and `-EAAppearance <light|dark>`: the theme and Classic's appearance, as Settings sets them.
+    static func applyTheme() {
+        let d = UserDefaults.standard
+        var patch: [String: JSONValue] = [:]
+        if let t = d.string(forKey: "EAAppTheme"), !t.isEmpty { patch["app_theme"] = .string(t) }
+        if let a = d.string(forKey: "EAAppearance"), ["system", "light", "dark"].contains(a) { patch["appearance"] = .string(a) }
+        if !patch.isEmpty { FeelController.shared.change(patch) }
     }
 
     /// A spoken capture as if it had come from the Watch: `-EAWatchCaptureFile <name>` takes that file from this app's

@@ -96,7 +96,7 @@ struct MachinesForm: View {
                     HubKeyRows()
                 }
             } footer: {
-                if let error { Text(error).foregroundStyle(.red) }
+                if let error { Text(error).foregroundStyle(.dangerText) }
             }
             #if os(macOS)
             if thisMac {

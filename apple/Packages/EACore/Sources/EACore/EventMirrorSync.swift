@@ -113,7 +113,8 @@ public final class EventMirrorSync: ObservableObject {
         let creates: (Entity) -> Bool = { e in (ISO.date(e.updated_at) ?? now) < now.addingTimeInterval(-120) }
         #endif
         let cals = store.calendars(for: .event)
-        let infos = cals.map { CalendarInfo(id: $0.calendarIdentifier, title: $0.title, sourceTitle: $0.source?.title ?? "", isExchange: $0.source?.sourceType == .exchange) }
+        let infos = cals.map(\.info)
+        let infoById = Dictionary(infos.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let writable = Set(cals.filter { $0.allowsContentModifications && $0.type != .birthday && $0.type != .subscription }.map(\.calendarIdentifier))
         let work = SharedConfig.shared.workCalendarIds ?? []
         let personalCal = EventMirror.calendar(for: .personal, facts: engine.facts, calendars: infos, writable: writable, defaultId: store.defaultCalendarForNewEvents?.calendarIdentifier, work: work)
@@ -123,7 +124,8 @@ public final class EventMirrorSync: ObservableObject {
         let personalChosen = EventMirror.named(.personal, facts: engine.facts) != nil
         let plan = EventMirror.plan(events: all, apple: apple, state: state, now: now, target: { $0.space == .work ? workCal : personalCal },
                                     present: Set(cals.map(\.calendarIdentifier)),
-                                    moveTarget: { $0.space == .work ? workCal : (personalChosen ? personalCal : nil) }, creates: creates)
+                                    moveTarget: { $0.space == .work ? workCal : (personalChosen ? personalCal : nil) },
+                                    calendarKey: { infoById[$0]?.key }, creates: creates)
         var newState = state
         for (k, v) in plan.state { newState[k] = v }
         var made = 0, written = 0, removed = 0, moved = 0
@@ -200,13 +202,22 @@ public final class EventMirrorSync: ObservableObject {
             let settled: (AppleEvent) -> Bool = { ($0.modified ?? .distantPast) < now.addingTimeInterval(-120) }
             #endif
             let found = singleEvents(in: ekCal, now: now)
-            for a in EventMirror.adopt(found: found, calendarTitle: ekCal.title, events: events, now: now, settled: settled) {
+            for a in EventMirror.adopt(found: found, calendarTitle: ekCal.title, calendarKey: ekCal.info.key, events: events, now: now, settled: settled) {
                 _ = await engine.apply(a.patch)
                 newState[a.patch.id] = a.state
                 adopted += 1
             }
             let r = await CalendarImportRunner(engine: engine, source: EventKitSource(store: store), space: .personal, include: \.recurring).run(selected: [cal], now: now)
             repeating = r.inserted + r.updated + r.deleted
+        }
+        // The calendars events come into the app from, or are kept in step with from here: the personal calendar
+        // while this device brings its events in, and each calendar holding an event linked from here.
+        var used = Set(apple.values.map(\.calendarId))
+        for c in plan.creates { used.insert(c.calendarId) }
+        for m in plan.moves { used.insert(m.calendarId) }
+        if !hubKeeps, let cal = personalCal, !work.contains(cal) { used.insert(cal) }
+        if engine.hubInReach {
+            await CalendarColorReporter.shared.found(infos.filter { used.contains($0.id) }, part: "personal", engine: engine)
         }
         state = newState
         lastRun = Date()
@@ -239,7 +250,10 @@ public final class EventMirrorSync: ObservableObject {
             do { try store.save(ev, span: .thisEvent, commit: true); made = true } catch { lastError = error.localizedDescription; return nil }
         }
         let aid = ev.calendarItemExternalIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? ev.calendarItemIdentifier
-        _ = await engine.update(entityId, fields: ["apple": .object(["id": .string(aid), "calendar": .string(cal.title)])])
+        var link: [String: JSONValue] = ["apple": .object(["id": .string(aid), "calendar": .string(cal.title)])]
+        // The calendar it is now in, for its color on every device.
+        if let key = cal.info.key { link["calendar_key"] = .string(key) }
+        _ = await engine.update(entityId, fields: link)
         state[entityId] = SyncedEvent(appleId: aid, fields: f, calendarId: cal.calendarIdentifier)
         return made
     }

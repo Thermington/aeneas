@@ -88,7 +88,7 @@ struct SnippetsView: View {
                 } description: {
                     Text("Save a command once with {{name}} where values change, then fill them in and copy it next time.")
                 } actions: {
-                    Button("New snippet") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("New snippet") { creating = true }.buttonStyle(.themedProminent)
                 }
             } else if shown.isEmpty {
                 ContentUnavailableView.search(text: query)
@@ -200,7 +200,7 @@ struct SnippetDetailView: View {
                     }
                     .frame(minHeight: 36)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .disabled(busy)
                 // Shell snippets can be tried on their host: read-only ones run at once, others go through the assistant.
                 if Self.runnable(e) {
@@ -210,7 +210,7 @@ struct SnippetDetailView: View {
                     .buttonStyle(.bordered)
                     .disabled(busy || engine.client == nil)
                 }
-                if let error { Text(error).font(.subheadline).foregroundStyle(.red) }
+                if let error { Text(error).font(.subheadline).foregroundStyle(.dangerText) }
                 if let ran {
                     Text("Ran on \(ran.host), exit \(ran.exit_code.map(String.init) ?? "none")").font(.caption).foregroundStyle(.secondary)
                     CommandBlock(text: ran.output.isEmpty ? "(no output)" : ran.output)
@@ -366,7 +366,7 @@ struct SnippetEditor: View {
                                 TextField("Name", text: $p.name).font(.callout.monospaced())
                                 Button(role: .destructive) { params.removeAll { $0.id == p.id } } label: { Image(systemName: "minus.circle.fill") }
                                     .buttonStyle(.borderless)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(.dangerText)
                                     .accessibilityLabel("Remove \(p.name.isEmpty ? "parameter" : p.name)")
                             }
                             TextField("Default", text: $p.defaultValue, prompt: Text("Default, optional")).font(.callout.monospaced())

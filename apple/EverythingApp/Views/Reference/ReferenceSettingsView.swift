@@ -35,7 +35,7 @@ struct ReferenceSettingsView: View {
     private var form: some View {
         Form {
             if let problem {
-                SwiftUI.Section { Text(problem).font(.callout).foregroundStyle(.orange) }.themedRow()
+                SwiftUI.Section { Text(problem).font(.callout).foregroundStyle(.warnText) }.themedRow()
             }
             if let s = settings {
                 space
@@ -77,7 +77,7 @@ struct ReferenceSettingsView: View {
                 LabeledContent("Free on the hub", value: ReferenceText.size(p.free_bytes))
                 if p.free_bytes > 0, p.to_download_bytes > 0 {
                     ProgressView(value: min(1, Double(p.to_download_bytes) / Double(p.free_bytes)))
-                        .tint(p.fits ? nil : .orange)
+                        .tint(p.fits ? nil : AnyShapeStyle(.warn))
                         .accessibilityLabel("Still to download, against the free space")
                 }
                 if let r = library.status?.reader { LabeledContent("Reader on the hub", value: Self.readerState(r)) }

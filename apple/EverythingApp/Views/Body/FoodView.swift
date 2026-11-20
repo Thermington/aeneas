@@ -93,7 +93,7 @@ struct FoodView: View {
                 Button { Task { await ask(exclude: []) } } label: {
                     Label(busy ? "Picking" : "Pick for me", systemImage: "sparkles").frame(minWidth: 120)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.themedProminent)
                 .controlSize(.large)
                 .disabled(busy || (!budget.isEmpty && BodyFmt.parse(budget) == nil))
             }
@@ -106,7 +106,7 @@ struct FoodView: View {
             if let name = ordered {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Ordered \(StyleGuard.dashes(name)). Done for this \(meal).", systemImage: "checkmark.circle.fill")
-                        .font(.headline).foregroundStyle(.green)
+                        .font(.headline).foregroundStyle(.okText)
                     Button("Pick again") { reset() }.buttonStyle(.bordered)
                 }
                 .padding(.vertical, 4)
@@ -141,7 +141,7 @@ struct FoodView: View {
             }
             HStack(spacing: 10) {
                 Button { Task { await order(p) } } label: { Label("Order this", systemImage: "checkmark").frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.themedProminent)
                 Button { Task { await ask(exclude: excluded + [p.id]) } } label: { Label("Another", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered)
             }
@@ -212,7 +212,7 @@ struct FoodOptionRow: View {
             HStack(spacing: 8) {
                 Text(StyleGuard.dashes(option.str("name"))).font(.headline).strikethrough(avoid).lineLimit(2)
                 Spacer(minLength: 4)
-                if avoid { BodyStatusPill(text: "Avoid", symbol: "nosign", color: .red) }
+                if avoid { BodyStatusPill(text: "Avoid", symbol: "nosign", tone: .danger) }
             }
             HStack(spacing: 8) {
                 BodyTag(text: option.str("kind").capitalized)

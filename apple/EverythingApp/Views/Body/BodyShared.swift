@@ -49,15 +49,16 @@ enum BodyFmt {
 struct BodyStatusPill: View {
     var text: String
     var symbol: String
-    var color: Color
+    var color: Color = .secondary
+    /// Fine, needs a look or a problem: shown in the theme's status colors instead of `color`.
+    var tone: StatusTone? = nil
 
     var body: some View {
         Label(text, systemImage: symbol)
             .font(.subheadline.weight(.semibold))
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(color.opacity(0.16), in: Capsule())
-            .foregroundStyle(color)
+            .statusCapsule(tone, else: color, tint: 0.16)
             .fixedSize()
     }
 }
@@ -88,7 +89,7 @@ struct BodyFlashRow: View {
     var undo: (() -> Void)?
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.okText)
             Text(flash.text).font(.subheadline)
             Spacer(minLength: 4)
             if let u = undo { Button("Undo", action: u).buttonStyle(.borderless) }
@@ -102,6 +103,6 @@ struct BodyErrorRow: View {
     var body: some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
             .font(.subheadline)
-            .foregroundStyle(.red)
+            .foregroundStyle(.dangerText)
     }
 }

@@ -83,6 +83,10 @@ final class FeelController: ObservableObject {
         }
         #endif
         images.sync(settings.images, client: engine.client)
+        #if os(iOS) || os(macOS)
+        // The hub answers a calendar report with the whole setting: its calendars are the news.
+        CalendarColorReporter.shared.onFeel = { [weak self] f in self?.adoptCalendars(f.calendars) }
+        #endif
     }
 
     // MARK: setting
@@ -90,7 +94,13 @@ final class FeelController: ObservableObject {
     /// Send anything changed offline, then take the hub's copy. Called at launch and on return to the foreground.
     func refresh() async {
         guard let c = engine?.client else { return }
-        if !config.feelPending.isEmpty { await sendPending(); return }
+        if !config.feelPending.isEmpty {
+            await sendPending()
+            // A change the hub has not taken yet keeps the rest of the setting as it is here; the calendars, which no
+            // change from here sends, still come from the hub.
+            if !config.feelPending.isEmpty, let f = try? await c.feel() { adoptCalendars(f.calendars) }
+            return
+        }
         if let f = try? await c.feel(), config.feelPending.isEmpty { adopt(f) }
     }
 
@@ -141,6 +151,46 @@ final class FeelController: ObservableObject {
         if f != settings { settings = f }
         config.feel = f
         images.sync(f.images, client: engine?.client)
+    }
+
+    // MARK: calendar colors
+
+    /// The calendars as the hub has them now; the rest of the setting stays as it is here (it may hold a change not
+    /// sent yet).
+    func adoptCalendars(_ calendars: [CalendarColorEntry]) {
+        guard calendars != settings.calendars else { return }
+        settings.calendars = calendars
+        config.feel = settings
+    }
+
+    private var calendarColorSends: [String: Task<Void, Never>] = [:]
+    /// Why the last calendar color did not reach the hub, for Theme, Calendar colors to say.
+    @Published private(set) var calendarColorError: String?
+
+    /// The owner's color for a calendar, or nil for its own again: shown at once, sent to the hub after a short pause
+    /// (a color well sends a stream of colors while it is dragged). Every device then draws its events in it.
+    func chooseCalendarColor(key: String, color: String?) {
+        calendarColorError = nil
+        settings.calendars = settings.calendars.map { c in
+            guard c.key == key else { return c }
+            var n = c
+            n.chosen = color?.uppercased()
+            return n
+        }
+        config.feel = settings
+        calendarColorSends[key]?.cancel()
+        calendarColorSends[key] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard let c = self.engine?.client else { self.calendarColorError = "Connect to the hub first."; return }
+            do {
+                let f = try await c.setCalendarColor(key: key, color: color?.uppercased())
+                guard !Task.isCancelled else { return }
+                self.adoptCalendars(f.calendars)
+            } catch {
+                self.calendarColorError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     static func list<T: Encodable>(_ xs: [T]) -> JSONValue { .array(xs.compactMap { try? JSONCoding.value($0) }) }

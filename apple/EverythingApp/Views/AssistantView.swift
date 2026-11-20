@@ -305,7 +305,7 @@ struct AssistantView: View {
                     if let p = pending, !busy {
                         ApprovalCard(action: p, onRun: { approve(p) }, onCancel: { decline(p) }).id("approval")
                     }
-                    if let e = error { Text(e).foregroundStyle(.red).font(.footnote) }
+                    if let e = error { Text(e).foregroundStyle(.dangerText).font(.footnote) }
                 }
                 .padding(.vertical, 4)
             }
@@ -346,9 +346,9 @@ struct AssistantView: View {
                 Label(dictation.transcript.isEmpty ? (sendOnPause ? "Listening. It sends when you stop talking." : "Listening. Tap the mic again when you are done.") : dictation.transcript, systemImage: "waveform")
                     .font(.callout).foregroundStyle(.secondary).lineLimit(4)
             } else if let e = dictation.error {
-                Text(e).font(.caption).foregroundStyle(.orange)
+                Text(e).font(.caption).foregroundStyle(.warnText)
             } else if let n = dictation.notice {
-                Text(n).font(.caption).foregroundStyle(.orange)
+                Text(n).font(.caption).foregroundStyle(.warnText)
             }
             ImageJobsStrip()
             HStack(alignment: .bottom, spacing: 8) {
@@ -372,7 +372,7 @@ struct AssistantView: View {
                 if model.isOn(.voice) {
                     Button { tapMic() } label: {
                         Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.circle").font(.system(size: 30))
-                            .foregroundStyle(dictation.listening ? Color.red : Color.accentColor)
+                            .foregroundStyle(dictation.listening ? AnyShapeStyle(Color.red) : AnyShapeStyle(.tint))
                     }
                     .buttonStyle(.borderless)
                     // The first tap asks for the microphone; a refusal leaves it off until it is allowed in Settings.
@@ -699,7 +699,7 @@ struct ChatBubble: View {
                 }
                 .font(.body)
                 .padding(12)
-                .background(message.role == .user ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .background(message.role == .user ? AnyShapeStyle(.tint.opacity(0.2)) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: RoundedRectangle(cornerRadius: 12))
             }
             if let ids = message.images, !ids.isEmpty {
                 HStack {
@@ -726,7 +726,7 @@ struct ChatBubble: View {
             }
             if let acts = message.actions?.filter(\.writes), !acts.isEmpty {
                 Label(acts.map { ToolAction.label($0.tool) + ($0.ok ? "" : " failed") }.joined(separator: ", "), systemImage: "checkmark.circle")
-                    .font(.caption).foregroundStyle(acts.allSatisfy(\.ok) ? Color.green : Color.orange)
+                    .font(.caption).foregroundStyle(acts.allSatisfy(\.ok) ? StatusStyle.okText : StatusStyle.warnText)
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
@@ -746,15 +746,15 @@ struct ApprovalCard: View {
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             if let p = action.preflight {
-                VStack(alignment: .leading, spacing: 2) { Text(p.backup); Text(p.verify); Text(p.rollback) }.font(.caption).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) { Text(p.backup); Text(p.verify); Text(p.rollback) }.font(.caption).foregroundStyle(.warnText)
             }
             HStack {
-                Button("Run it", action: onRun).buttonStyle(.borderedProminent)
+                Button("Run it", action: onRun).buttonStyle(.themedProminent)
                 Button("Cancel", role: .cancel, action: onCancel).buttonStyle(.bordered)
             }
         }
         .padding(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(action.risk == "high" ? Color.red : Color.orange, lineWidth: 1.5))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(action.risk == "high" ? StatusStyle.danger : StatusStyle.warn, lineWidth: 1.5))
     }
 }
 

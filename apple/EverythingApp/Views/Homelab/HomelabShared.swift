@@ -165,14 +165,16 @@ enum MonitorStatus: String {
         case .off: return "pause.circle"
         }
     }
-    var color: Color {
+    /// Up is fine and down a problem, in the theme's status colors; unknown and off have none.
+    var tone: StatusTone? {
         switch self {
-        case .up: return .green
-        case .down: return .red
-        case .unknown: return .gray
-        case .off: return .secondary
+        case .up: return .ok
+        case .down: return .danger
+        case .unknown, .off: return nil
         }
     }
+    /// The color when there is no status tone.
+    var color: Color { self == .unknown ? .gray : .secondary }
     /// Sort order on the board: down first, off last.
     var rank: Int {
         switch self {
@@ -247,11 +249,11 @@ struct BackupJobsList: View {
             ForEach(lines) { l in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: l.ok ? MonitorStatus.up.symbol : MonitorStatus.down.symbol)
-                        .foregroundStyle(l.ok ? Color.green : Color.red)
+                        .foregroundStyle(l.ok ? StatusStyle.okText : StatusStyle.dangerText)
                     Text(l.label).fontWeight(.semibold).frame(minWidth: 86, alignment: .leading)
                     VStack(alignment: .leading, spacing: 1) {
                         // Wraps instead of being cut off in a list row.
-                        Text(l.text).foregroundStyle(l.ok ? Color.secondary : Color.red).fixedSize(horizontal: false, vertical: true)
+                        Text(l.text).foregroundStyle(l.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)).fixedSize(horizontal: false, vertical: true)
                         if showTimes, let at = l.at { Text(at.shortDateTime).foregroundStyle(.secondary) }
                     }
                 }
@@ -266,11 +268,12 @@ enum JournalRisk: String, CaseIterable, Identifiable {
     case low, medium, high
     var id: String { rawValue }
     var label: String { rawValue.capitalized + " risk" }
-    var color: Color {
+    /// Low risk is fine, medium needs a look, high is a problem.
+    var tone: StatusTone {
         switch self {
-        case .low: return .green
-        case .medium: return .orange
-        case .high: return .red
+        case .low: return .ok
+        case .medium: return .warn
+        case .high: return .danger
         }
     }
     var symbol: String {
@@ -288,16 +291,16 @@ enum JournalOutcome: String, CaseIterable, Identifiable {
     case planned, running, done, failed, interrupted, reverted
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
-    var color: Color {
+    /// Done is fine, failed a problem, cut off or undone needs a look; planned and running are in blue.
+    var tone: StatusTone? {
         switch self {
-        case .planned: return .blue
-        case .running: return .blue
-        case .done: return .green
-        case .failed: return .red
-        case .interrupted: return .orange
-        case .reverted: return .orange
+        case .planned, .running: return nil
+        case .done: return .ok
+        case .failed: return .danger
+        case .interrupted, .reverted: return .warn
         }
     }
+    var color: Color { .blue }
     var symbol: String {
         switch self {
         case .planned: return "clock"
@@ -317,6 +320,8 @@ struct HomelabPill: View {
     var text: String
     var symbol: String? = nil
     var color: Color = .secondary
+    /// Fine, needs a look or a problem: shown in the theme's status colors instead of `color`.
+    var tone: StatusTone? = nil
 
     var body: some View {
         HStack(spacing: 4) {
@@ -325,15 +330,14 @@ struct HomelabPill: View {
         }
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .foregroundStyle(color)
-        .background(color.opacity(0.14), in: Capsule())
+        .statusCapsule(tone, else: color, tint: 0.14)
         .fixedSize()
     }
 }
 
 struct MonitorStatusPill: View {
     var status: MonitorStatus
-    var body: some View { HomelabPill(text: status.label, symbol: status.symbol, color: status.color) }
+    var body: some View { HomelabPill(text: status.label, symbol: status.symbol, color: status.color, tone: status.tone) }
 }
 
 /// Copies `text` and says "Copied" for a moment.
@@ -342,6 +346,7 @@ struct HomelabCopyButton: View {
     var title: String = "Copy"
     var prominent = false
     @State private var copied = false
+    @Environment(\.eaTheme) private var theme
 
     var body: some View {
         Button {
@@ -352,7 +357,7 @@ struct HomelabCopyButton: View {
             Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
         }
         .buttonStyle(.bordered)
-        .tint(prominent ? .accentColor : nil)
+        .tint(prominent ? (theme?.accent ?? Color.accentColor) : nil)
         .accessibilityLabel(copied ? "Copied" : title)
     }
 }

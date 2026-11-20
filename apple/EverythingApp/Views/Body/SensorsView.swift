@@ -77,10 +77,10 @@ struct SensorsView: View {
                 Label("No sensors", systemImage: "sensor").font(.title3.weight(.semibold))
             } else if attention.isEmpty {
                 Label("\(list.count) sensor\(list.count == 1 ? "" : "s"), all OK", systemImage: "checkmark.circle.fill")
-                    .font(.title3.weight(.semibold)).foregroundStyle(.green)
+                    .font(.title3.weight(.semibold)).foregroundStyle(.okText)
             } else {
                 Label("\(attention.count) of \(list.count) need a look", systemImage: "exclamationmark.triangle.fill")
-                    .font(.title3.weight(.semibold)).foregroundStyle(.orange)
+                    .font(.title3.weight(.semibold)).foregroundStyle(.warnText)
                 Text(attention.map { "\(SensorCard.displayName($0)) \(SensorState.of($0).label.lowercased())" }.joined(separator: ", "))
                     .font(.subheadline).foregroundStyle(.secondary)
             }
@@ -215,6 +215,14 @@ enum SensorState: String {
         case .stale: return .gray
         }
     }
+    /// In range is fine and over the top a problem, in the theme's status colors; low and stale keep their own.
+    var tone: StatusTone? {
+        switch self {
+        case .ok: return .ok
+        case .high: return .danger
+        case .low, .stale: return nil
+        }
+    }
 }
 
 // MARK: card
@@ -268,7 +276,7 @@ struct SensorCard: View {
                     if showLocation, let loc = sensor.string("location"), !loc.isEmpty { Text(loc).font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer(minLength: 6)
-                BodyStatusPill(text: state.label, symbol: state.symbol, color: state.color)
+                BodyStatusPill(text: state.label, symbol: state.symbol, color: state.color, tone: state.tone)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -295,7 +303,7 @@ struct SensorCard: View {
             HStack(spacing: 10) {
                 if state != .ok && sensor.bool("alert") != false {
                     Button { onPropose() } label: { Label(proposing ? "Starting" : "Propose a fix", systemImage: "wrench.and.screwdriver") }
-                        .buttonStyle(.borderedProminent).disabled(proposing)
+                        .buttonStyle(.themedProminent).disabled(proposing)
                 }
                 Button { onSettings() } label: { Label("Bounds and alerts", systemImage: "slider.horizontal.3") }
                     .buttonStyle(.bordered)
@@ -326,7 +334,7 @@ struct SensorCard: View {
         let series = daily.flatMap { $0.days == span.rawValue ? $0 : nil }
         let pts = (series?.points ?? []).compactMap { p in p.value.flatMap { v in p.date.map { (date: $0, value: v) } } }
         if let dailyError, series == nil {
-            Text(dailyError).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, minHeight: 60)
+            Text(dailyError).font(.caption).foregroundStyle(.dangerText).frame(maxWidth: .infinity, minHeight: 60)
         } else if series == nil {
             Text("Loading").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60)
         } else if pts.count < 2 {
@@ -336,15 +344,15 @@ struct SensorCard: View {
                 ForEach(pts, id: \.date) { p in
                     LineMark(x: .value("Day", p.date, unit: .day), y: .value("Mean", p.value))
                         .interpolationMethod(.monotone)
-                        .foregroundStyle(state == .ok ? Color.accentColor : state.color)
+                        .foregroundStyle(state == .ok ? AnyShapeStyle(.tint) : state.tone.fill(else: state.color))
                     if pts.count <= 31 {
                         PointMark(x: .value("Day", p.date, unit: .day), y: .value("Mean", p.value))
                             .symbolSize(14)
-                            .foregroundStyle(state == .ok ? Color.accentColor : state.color)
+                            .foregroundStyle(state == .ok ? AnyShapeStyle(.tint) : state.tone.fill(else: state.color))
                     }
                 }
                 if let lo { RuleMark(y: .value("Min", lo)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.blue.opacity(0.7)) }
-                if let hi { RuleMark(y: .value("Max", hi)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.red.opacity(0.7)) }
+                if let hi { RuleMark(y: .value("Max", hi)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.danger.opacity(0.7)) }
             }
             .chartYScale(domain: .automatic(includesZero: false))
             .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
@@ -364,10 +372,10 @@ struct SensorCard: View {
                 ForEach(pts, id: \.date) { p in
                     LineMark(x: .value("Time", p.date), y: .value("Value", p.value))
                         .interpolationMethod(.monotone)
-                        .foregroundStyle(state == .ok ? Color.accentColor : state.color)
+                        .foregroundStyle(state == .ok ? AnyShapeStyle(.tint) : state.tone.fill(else: state.color))
                 }
                 if let lo { RuleMark(y: .value("Min", lo)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.blue.opacity(0.7)) }
-                if let hi { RuleMark(y: .value("Max", hi)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.red.opacity(0.7)) }
+                if let hi { RuleMark(y: .value("Max", hi)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.danger.opacity(0.7)) }
             }
             .chartYScale(domain: .automatic(includesZero: false))
             .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }

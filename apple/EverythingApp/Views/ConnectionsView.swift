@@ -45,7 +45,7 @@ struct ConnectionsSettingsView: View {
                 if model.isOn(.appleReminders) { AppleRemindersSection() }
                 calendarFeed
             } else if let loadError {
-                Text(loadError).foregroundStyle(.red)
+                Text(loadError).foregroundStyle(.dangerText)
             } else {
                 ProgressView()
             }
@@ -72,7 +72,7 @@ struct ConnectionsSettingsView: View {
                 LabeledContent("Profile", value: s.persona ?? s.steam_id ?? "")
                 LabeledContent("Games", value: "\(s.games ?? 0)")
                 LabeledContent("Last read", value: when(s.last_sync))
-                if let e = s.last_error { Text(e).font(.footnote).foregroundStyle(.red) }
+                if let e = s.last_error { Text(e).font(.footnote).foregroundStyle(.dangerText) }
                 Button(busy == "steam" ? "Reading" : "Read now") { run("steam") { let r = try await $0.syncSteam(); return "\(r.games ?? 0) games: \(r.created) new, \(r.updated) changed." } }
                     .disabled(busy != nil)
                 Button("Unlink", role: .destructive) { run("steam") { try await $0.disconnectSteam(); return "Unlinked. The games stay." } }
@@ -129,7 +129,7 @@ struct ConnectionsSettingsView: View {
                     Text(a.email).font(.body.weight(.semibold))
                     Text(a.summary).font(.footnote)
                     Text("Last checked \(when(a.last_sync))").font(.caption).foregroundStyle(.secondary)
-                    if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.red) }
+                    if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.dangerText) }
                     Button("Unlink", role: .destructive) { unlinkMail = a.email }
                         .disabled(busy != nil)
                         .font(.footnote)
@@ -174,7 +174,7 @@ struct ConnectionsSettingsView: View {
                     Text(a.email).font(.body.weight(.semibold))
                     Text(a.summary).font(.footnote)
                     Text("Last checked \(when(a.last_sync))").font(.caption).foregroundStyle(.secondary)
-                    if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.red) }
+                    if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.dangerText) }
                     Button("Unlink", role: .destructive) { unlinkICloud = a.email }
                         .disabled(busy != nil)
                         .font(.footnote)
@@ -238,7 +238,7 @@ struct ConnectionsSettingsView: View {
                 LabeledContent("Site", value: a.site_name ?? a.site_url ?? "")
                 LabeledContent("Pages", value: "\(a.pages ?? 0)")
                 LabeledContent("Last sync", value: when(a.last_sync))
-                if let e = a.last_error, !e.isEmpty { Text(e).font(.footnote).foregroundStyle(.red) }
+                if let e = a.last_error, !e.isEmpty { Text(e).font(.footnote).foregroundStyle(.dangerText) }
                 spacePicker
                 Button(busy == "atlassian" ? "Syncing" : "Sync now") { run("atlassian") { Self.counts(try await $0.syncConfluence()) } }
                     .disabled(busy != nil)
@@ -357,7 +357,7 @@ struct ConnectionsSettingsView: View {
                 LabeledContent("Films", value: "\(l.films ?? 0)")
                 LabeledContent("Diary of", value: user)
                 LabeledContent("Last read", value: when(l.last_sync))
-                if let e = l.last_error { Text(e).font(.footnote).foregroundStyle(.red) }
+                if let e = l.last_error { Text(e).font(.footnote).foregroundStyle(.dangerText) }
                 Button(busy == "letterboxd" ? "Reading" : "Read diary now") { run("letterboxd") { let r = try await $0.syncLetterboxd(); return "\(r.entries ?? 0) diary entries: \(r.created) new films, \(r.updated) changed." } }
                     .disabled(busy != nil)
                 Button("Unlink", role: .destructive) { run("letterboxd") { try await $0.disconnectLetterboxd(); return "Unlinked. The films stay." } }
@@ -442,7 +442,7 @@ struct ConnectionsSettingsView: View {
     }
 
     @ViewBuilder private func note(_ key: String) -> some View {
-        if let m = message[key] { Text(m.text).font(.footnote).foregroundStyle(m.ok ? Color.secondary : Color.red) }
+        if let m = message[key] { Text(m.text).font(.footnote).foregroundStyle(m.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)) }
     }
 
     /// "at 7 AM, noon, 5 PM, 10 PM".
@@ -531,7 +531,7 @@ struct AppleRemindersSection: View {
                 case .full:
                     LabeledContent("Last sync", value: sync.lastRun.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Not yet")
                     if let s = sync.lastSummary { Text(s).font(.caption).foregroundStyle(.secondary) }
-                    if let e = sync.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+                    if let e = sync.lastError { Text(e).font(.caption).foregroundStyle(.dangerText) }
                     Button(sync.running ? "Syncing" : "Sync now") { Task { await sync.runNow(reason: "button") } }.disabled(sync.running)
                 }
             }

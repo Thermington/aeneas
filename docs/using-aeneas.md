@@ -59,6 +59,13 @@ Settings, Calendar and work:
 
 The Mac app copies at once; the iPhone after about two minutes.
 
+### Calendar colors
+
+Events are drawn in their calendar's color in Today and Week on every device: the color the calendar has in Apple
+Calendar or iCloud, as the Apple apps or the hub's iCloud sync find it. Settings, Theme, Calendar colors lists every
+calendar events came from; choose a color there and every device uses it, or Use its own color to go back. Events
+made in Aeneas on no calendar use the theme's accent.
+
 ### Your plan out to any calendar app
 
 Settings, Connections, Calendar has **Subscribe in calendar app** and **Copy link**. This goes the other way: it
@@ -104,7 +111,11 @@ Rhythm or Both; playback and the MIDI download follow that choice.
 The Watch reaches the hub through the Aeneas app on the paired iPhone (over Bluetooth or Wi-Fi), not on its own.
 Its first page has Ask, Capture and Hum Song, all by voice. Capture records what you say on the Watch (up to 5
 minutes; press Done when you finish) and the iPhone turns it into text on the phone itself, so a long thought is kept
-whole and the recording never goes to Apple. Ask uses Apple's dictation, which shows the words as you speak and suits a
+whole and the recording never goes to Apple. On a Series 9, Ultra 2 or newer Watch, the Watch also writes it down
+itself: while you speak, the words so far show under the timer (the ones still settling dimmer, and the latest part of
+a long capture), while the Watch's screen is on, and "Heard: ..." shows a second or two after you stop; its speech model (about 150 MB) comes over by itself
+once: the hub fetches it from Hugging Face and the iPhone copies it from the hub on Wi-Fi. What the iPhone heard is what is saved, and once the hub has filed
+it the Watch shows where it went ("Filed: Logs: weight 192.2 lb") until your next capture. Ask uses Apple's dictation, which shows the words as you speak and suits a
 short question (it keeps only about the last 30 seconds of a long one). Complications (add them by editing a watch face):
 Ask, Capture, Hum Song, Now and Next up. When the Watch shows Offline, tap Offline, then Try now; opening the iPhone
 app helps it reconnect.

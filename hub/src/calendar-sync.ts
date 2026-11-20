@@ -141,6 +141,11 @@ export async function syncAccount(hub: Hub, email: string, now: Date = new Date(
     const chosen = conf.chosen.filter((u) => calendars.some((c) => c.url === u));
     const target = conf.target && chosen.includes(conf.target) && calendars.find((c) => c.url === conf.target)?.writable ? conf.target : null;
     saveConf(hub, email, { calendars });
+    // Their colors for Theme, Calendar colors, under the key events name them by (icloud:<calendar address>).
+    try {
+      const shown = calendars.filter((c) => chosen.includes(c.url)).map((c) => ({ key: `icloud:${c.url}`, name: c.name.slice(0, 120) || "Calendar", account: email, ...(c.color ? { color: c.color } : {}) }));
+      if (shown.length) hub.feel.reportCalendars(shown, now);
+    } catch (e) { console.error(`[calendars] colors not kept: ${errCode(e)}`); }
     const writable = new Set(calendars.filter((c) => c.writable).map((c) => c.url));
 
     // Everything in the chosen calendars, read before anything is written.

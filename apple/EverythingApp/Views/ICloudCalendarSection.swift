@@ -23,11 +23,11 @@ struct ICloudCalendarSection: View {
             if let view {
                 if view.accounts.isEmpty { linkForm } else { ForEach(view.accounts) { account($0) } }
             } else if let loadError {
-                Text(loadError).font(.footnote).foregroundStyle(.red)
+                Text(loadError).font(.footnote).foregroundStyle(.dangerText)
             } else {
                 ProgressView()
             }
-            if let message { Text(message.text).font(.footnote).foregroundStyle(message.ok ? Color.secondary : Color.red) }
+            if let message { Text(message.text).font(.footnote).foregroundStyle(message.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.dangerText)) }
         } header: {
             Text("iCloud Calendar")
         } footer: {
@@ -104,7 +104,7 @@ struct ICloudCalendarSection: View {
         }
         .disabled(busy)
         LabeledContent("Last sync", value: a.last_sync.flatMap(ISO.date).map(\.shortDateTime) ?? "Not yet")
-        if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.red) }
+        if let e = a.last_error, !e.isEmpty { Text(e).font(.caption).foregroundStyle(.dangerText) }
         Button(busy ? "Syncing" : "Sync now") {
             act { c in
                 let v = try await c.syncCalendarsNow()

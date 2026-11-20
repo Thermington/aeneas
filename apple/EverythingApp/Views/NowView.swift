@@ -47,8 +47,8 @@ struct NowView: View {
                         Text("\(engine.unprocessedCaptures.count)")
                             .font(.caption2.bold())
                             .padding(4)
-                            .background(Color.accentColor, in: Capsule())
-                            .foregroundStyle(.white)
+                            .background(.tint, in: Capsule())
+                            .foregroundStyle(.onAccent)
                             .offset(x: 8, y: -8)
                     }
                 }

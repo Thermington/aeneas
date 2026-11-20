@@ -70,7 +70,7 @@ struct SetupView: View {
                     .accessibilityIdentifier("setup.pair")
 
                 if let e = error ?? model.setupError {
-                    Label(e, systemImage: "xmark.circle").foregroundStyle(.red).font(.body)
+                    Label(e, systemImage: "xmark.circle").foregroundStyle(.dangerText).font(.body)
                 }
                 // A hub on Tailscale that this device can't reach: sign in to Tailscale here, and pairing goes again.
                 if model.unreachedSetup != nil || tailnet.state != .off {
@@ -83,7 +83,7 @@ struct SetupView: View {
                     .disabled(testing || hubURL.isEmpty)
                 if let r = testResult {
                     Label(r, systemImage: testOK ? "checkmark.circle" : "xmark.circle")
-                        .foregroundStyle(testOK ? Color.green : Color.red)
+                        .foregroundStyle(testOK ? StatusStyle.okText : StatusStyle.dangerText)
                         .font(.body)
                 }
             }
@@ -139,7 +139,7 @@ struct RemovedDeviceView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: "xmark.shield").font(.system(size: 44)).foregroundStyle(.orange)
+            Image(systemName: "xmark.shield").font(.system(size: 44)).foregroundStyle(.warnText)
             Text("This device was removed").font(.largeTitle.bold())
             Text("It was removed from your hub, so it no longer syncs. What is on it stays here. To use it again, pair it with a new code from a device that is still paired.")
                 .foregroundStyle(.secondary)

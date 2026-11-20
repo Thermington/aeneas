@@ -49,7 +49,7 @@ struct PairDeviceSection: View {
                 if let expires = links.expires {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         Text(Self.timeLeft(until: expires, now: ctx.date))
-                            .font(.callout).foregroundStyle(expires > ctx.date ? Color.secondary : Color.orange)
+                            .font(.callout).foregroundStyle(expires > ctx.date ? AnyShapeStyle(.secondary) : AnyShapeStyle(.warnText))
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -59,7 +59,7 @@ struct PairDeviceSection: View {
                 }
                 if links.carriesSharedKey {
                     Text("Your hub is older and this code holds its shared key, which lasts. Show it only to your own devices, and update the hub.")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(.warnText)
                 }
                 Button(links.code == nil ? "Make another" : "Make another code") { make() }.disabled(busy)
                 Button("Hide the code") { self.links = nil }
@@ -67,7 +67,7 @@ struct PairDeviceSection: View {
                 Button(busy ? "Making a code" : "Make a pairing code") { make() }
                     .disabled(engine.client == nil || busy)
             }
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error { Text(error).font(.caption).foregroundStyle(.dangerText) }
         } header: {
             Text("Pair another device")
         } footer: {

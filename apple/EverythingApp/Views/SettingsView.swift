@@ -167,7 +167,7 @@ struct SettingsView: View {
 
 /// The Settings screens that can be opened directly in Debug builds (`-EASettingsPage theme`).
 enum SettingsPage: String, Hashable, Identifiable {
-    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, modules, reference, helpers
+    case theme, connection, connections, notifications, calendar, health, about, appColors, tapEffects, noteSounds, calendarColors, modules, reference, helpers
     var id: String { rawValue }
 
     /// A page named by a launch argument, once per launch.
@@ -189,6 +189,7 @@ enum SettingsPage: String, Hashable, Identifiable {
         case .appColors: AppColorsView()
         case .tapEffects: TapEffectsView()
         case .noteSounds: NoteSoundsView()
+        case .calendarColors: CalendarColorsView()
         case .modules: ModulesSettingsView()
         case .reference: ReferenceSettingsView()
         case .helpers: HelpersSettingsView()
@@ -211,7 +212,7 @@ struct SettingsRow: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text(summary).font(.caption).foregroundStyle(warning ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)).lineLimit(1)
+                Text(summary).font(.caption).foregroundStyle(warning ? AnyShapeStyle(.dangerText) : AnyShapeStyle(.secondary)).lineLimit(1)
             }
         }
         .padding(.vertical, 2)
@@ -310,7 +311,7 @@ struct ConnectionSettingsView: View {
                     LabeledContent("Device id", value: model.config.deviceId.isEmpty ? "not registered" : String(model.config.deviceId.prefix(8)))
                     LabeledContent("Sync position", value: String(engine.cursor))
                 }
-                if let e = engine.lastError { Text(e).font(.caption).foregroundStyle(.red) }
+                if let e = engine.lastError { Text(e).font(.caption).foregroundStyle(.dangerText) }
                 Button("Sync now") { Task { await engine.sync() } }
             }
             .themedRow()
@@ -329,7 +330,7 @@ struct ConnectionSettingsView: View {
                         }
                         Button("Clear") { engine.clearRejected() }
                     }
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.dangerText)
                 } footer: {
                     Text("The hub kept its own copy of these. What you changed is listed so nothing is lost silently.")
                 }

@@ -75,3 +75,47 @@ test("feel: image shapes upload, serve, refuse the wrong thing, and delete", asy
     assert.equal((await t.api(`/prefs/feel/images/${f.images[0].id}`)).status, 404);
   } finally { t.cleanup(); }
 });
+
+test("calendar colors: apps report each calendar's own color, the owner's choice wins and stays, and events find theirs", async () => {
+  const { eventCalendarKey, calendarColor } = await import("@everythingapp/shared");
+  const t = makeHub();
+  try {
+    const put = (p: string, json: unknown) => t.api(p, { method: "PUT", json });
+    let r = await put("/prefs/feel/calendars", { calendars: [{ key: "apple:iCloud/Home", name: "Home", account: "iCloud", color: "#1badf8" }, { key: "apple:iCloud/Gym", name: "Gym" }] });
+    assert.equal(r.status, 200);
+    let f = (await r.json()) as { calendars: Array<{ key: string; color?: string; chosen?: string }> };
+    assert.equal(f.calendars.find((c) => c.key === "apple:iCloud/Home")?.color, "#1BADF8");
+    assert.equal(f.calendars.find((c) => c.key === "apple:iCloud/Gym")?.color, undefined, "no color reported, none made up");
+
+    r = await put("/prefs/feel/calendar-color", { key: "apple:iCloud/Home", color: "#00aa55" });
+    f = (await r.json()) as typeof f;
+    assert.equal(calendarColor("apple:iCloud/Home", f.calendars as never), "#00AA55", "the owner's choice wins");
+    // A later report (Apple Calendar's color changed) moves the calendar's own color and keeps the owner's choice.
+    await put("/prefs/feel/calendars", { calendars: [{ key: "apple:iCloud/Home", name: "Home", color: "#ff2968" }, { key: "apple:iCloud/Gym", name: "Gym" }] });
+    const home = t.hub.feel.get().calendars.find((c) => c.key === "apple:iCloud/Home")!;
+    assert.deepEqual([home.color, home.chosen], ["#FF2968", "#00AA55"]);
+    await put("/prefs/feel/calendar-color", { key: "apple:iCloud/Home", color: null });
+    assert.equal(calendarColor("apple:iCloud/Home", t.hub.feel.get().calendars as never), "#FF2968", "back to the calendar's own color");
+
+    assert.equal((await put("/prefs/feel/calendar-color", { key: "nope", color: "#000000" })).status, 404);
+    assert.equal((await put("/prefs/feel/calendar-color", { key: "apple:iCloud/Gym", color: "red" })).status, 422);
+    assert.equal((await put("/prefs/feel/calendars", { calendars: [{ key: "", name: "x" }] })).status, 422);
+
+    assert.equal(eventCalendarKey({ calendar_key: "apple:iCloud/Gym", caldav: { calendar: "https://x/" } }), "apple:iCloud/Gym");
+    assert.equal(eventCalendarKey({ caldav: { account: "a", calendar: "https://p01-caldav.icloud.com/1/calendars/home/", uid: "u" } }), "icloud:https://p01-caldav.icloud.com/1/calendars/home/");
+    assert.equal(eventCalendarKey({ apple: { id: "x", calendar: "Home" } }), "apple:Home");
+    assert.equal(eventCalendarKey({ source: "m365" }), "work:m365");
+    assert.equal(eventCalendarKey({ title: "made here" }), null);
+  } finally { t.cleanup(); }
+});
+
+test("a saved theme may carry its own status colors", async () => {
+  const t = makeHub();
+  try {
+    const theme = { id: "mine", name: "Mine", mode: "light", accent: "#0A84FF", background: "#FFFFFF", surface: "#F4F4F4", text: "#111111", ok: "#1E7B3A", warn: "#8A5A00", danger: "#B00020" };
+    const r = await t.api("/prefs/feel", { method: "PUT", json: { app_themes: [theme], app_theme: "custom:mine" } });
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { app_themes: Array<{ danger?: string }> }).app_themes[0].danger, "#B00020");
+    assert.equal((await t.api("/prefs/feel", { method: "PUT", json: { app_themes: [{ ...theme, ok: "green" }] } })).status, 422);
+  } finally { t.cleanup(); }
+});
