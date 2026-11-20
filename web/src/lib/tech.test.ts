@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Entity } from "@everythingapp/shared";
 import type { SensorRow } from "../sync/api";
 import type { OpsMonitor } from "./ops";
-import { checksLine, machineBars, needsALook, readingLabel, readingValue, targetHost, techLight, thingStatus, type Thing } from "./tech";
+import { checksLine, machineBars, machineFromInput, needsALook, readingLabel, readingValue, targetHost, techLight, thingStatus, type Thing } from "./tech";
 
 const now = new Date("2026-11-19T21:00:00Z");
 const ent = (id: string, kind: string, fields: Record<string, unknown>): Entity =>
@@ -32,6 +32,14 @@ const M = new Map(monitors.map((m) => [m.id, m]));
 const S = new Map(sensors.map((s) => [s.name, s]));
 
 describe("Tech things", () => {
+  it("names a machine typed as user@host after the host, keeping the SSH target as typed", () => {
+    expect(machineFromInput(" robin@10.0.0.16 ")).toEqual({ name: "10.0.0.16", ssh: "robin@10.0.0.16" });
+    expect(machineFromInput("NAS")).toEqual({ name: "nas", ssh: "NAS" });
+    expect(machineFromInput("me@nas:2222")).toEqual({ name: "nas", ssh: "me@nas:2222" });
+    expect(machineFromInput("")).toBeNull();
+    expect(machineFromInput("me@")).toBeNull();
+  });
+
   it("reads a check's host from its target, as the hub does", () => {
     expect(targetHost("tcp", "pve2:8006")).toBe("pve2");
     expect(targetHost("http", "http://127.0.0.1:8787/health")).toBe("127.0.0.1");

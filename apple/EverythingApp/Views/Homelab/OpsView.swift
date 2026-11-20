@@ -103,6 +103,8 @@ struct OpsView: View {
     @ObservedObject private var readings = ReadingsFeed.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var creating = false
+    /// The machines the assistant and the sensors may reach (MachinesSheet).
+    @State private var addingMachine = false
     @State private var acking: Entity?
     /// One of your own history lines about to be deleted, asked first.
     @State private var deletingLine: Entity?
@@ -188,9 +190,10 @@ struct OpsView: View {
                     ContentUnavailableView {
                         Label("Nothing watched yet", systemImage: "server.rack")
                     } description: {
-                        Text("Tap Add check to have the hub check a machine or a web address by ping, port, web address, certificate or name lookup.")
+                        Text("Add a machine the hub can reach, or a check for a machine or a web address by ping, port, web address, certificate or name lookup.")
                     } actions: {
-                        Button("Add check") { creating = true }.buttonStyle(.borderedProminent)
+                        Button("Add machine") { addingMachine = true }.buttonStyle(.borderedProminent)
+                        Button("Add check") { creating = true }.buttonStyle(.bordered)
                     }
                 }
             }
@@ -210,10 +213,17 @@ struct OpsView: View {
         .navigationTitle("Overview")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = true } label: { Label("Add check", systemImage: "plus") }
+                Menu {
+                    Button("Add check", systemImage: "waveform.path.ecg") { creating = true }
+                    Button("Add machine", systemImage: "desktopcomputer") { addingMachine = true }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
             }
         }
         .sheet(isPresented: $creating) { MonitorEditor(monitor: nil, host: nil) }
+        // A machine added or removed changes the cards, which come from the board.
+        .sheet(isPresented: $addingMachine) { MachinesSheet(onChanged: { await feed.load(engine) }) }
         .sheet(item: $acking) { inc in AckSheet(incident: inc) }
         .confirmationDialog("Delete this line from the history?", isPresented: Binding(get: { deletingLine != nil }, set: { if !$0 { deletingLine = nil } }),
                             titleVisibility: .visible, presenting: deletingLine) { e in
@@ -223,6 +233,11 @@ struct OpsView: View {
         #if DEBUG && os(iOS)
         .navigationDestination(item: $debugMachine) { HostDetailView(host: $0) }
         .task {
+            if !DebugHooks.machineShown, UserDefaults.standard.bool(forKey: "EAAddMachine") {
+                DebugHooks.machineShown = true
+                try? await Task.sleep(for: .seconds(1))
+                addingMachine = true
+            }
             guard !DebugHooks.machineShown, let m = UserDefaults.standard.string(forKey: "EAMachine") else { return }
             DebugHooks.machineShown = true
             try? await Task.sleep(for: .seconds(1))

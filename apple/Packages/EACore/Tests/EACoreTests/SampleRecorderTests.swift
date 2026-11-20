@@ -99,6 +99,18 @@ enum SampleRecordingCleaner {
             }
             o["hosts"] = hosts
         }
+        // Add machine (GET machines) lists the machines the demo hub may reach, named for the recording machine, and the
+        // names in that machine's SSH config: only the hub's own one stays, renamed, beside two sample names to add.
+        edit(&rec, "GET machines") { o in
+            let local = (o["machines"] as? [[String: Any]] ?? []).filter { $0["local"] as? Bool == true }.map { m -> [String: Any] in
+                var m = m
+                for k in ["name", "ssh"] { if let n = m[k] as? String { renamed[n] = machine; m[k] = machine } }
+                m["aliases"] = [machine]
+                return m
+            }
+            o["machines"] = local
+            o["ssh_config"] = ["nas01", "desk-pc"]
+        }
         // The Tech Overview's cards (GET ops `things`) name the hub's own machine too.
         edit(&rec, "GET ops") { o in
             guard var things = o["things"] as? [[String: Any]] else { return }

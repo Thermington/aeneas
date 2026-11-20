@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { machineFromInput } from "../../lib/tech";
 import { engine } from "../../sync/engine";
 import type { HubMachine } from "../../sync/api";
 import { errorText } from "./common";
@@ -70,7 +71,7 @@ export function MachinesSettings() {
   const offer = ssh.filter((n) => !have.has(n.toLowerCase()));
   return (
     <div className="col">
-      <div className="muted small">The assistant runs read-only commands on these at once; anything that changes a machine waits for your approval. With Sensors on, the hub also reads their temperature and disk every 10 minutes. No other machine is contacted.</div>
+      <div className="muted small">The assistant runs read-only commands on these at once; anything that changes a machine waits for your approval. With Sensors on, the hub also reads their CPU, memory, disk and temperature every 10 minutes. No other machine is contacted.</div>
       {list.length === 0 && <div className="muted">No machines yet.</div>}
       {list.map((m) => (
         <div key={m.name} className="row between">
@@ -83,7 +84,7 @@ export function MachinesSettings() {
           {offer.map((n) => <button key={n} type="button" className="chip" onClick={() => save([...list, { name: n.toLowerCase(), ssh: n }])}>Add {n}</button>)}
         </div>
       )}
-      <form className="row" onSubmit={(e) => { e.preventDefault(); if (name.trim()) { save([...list, { name: name.trim().toLowerCase(), ssh: name.trim() }]); setName(""); } }}>
+      <form className="row" onSubmit={(e) => { e.preventDefault(); const m = machineFromInput(name); if (m) { save([...list, m]); setName(""); } }}>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name or SSH host" aria-label="Machine name or SSH host" autoCapitalize="off" spellCheck={false} />
         <button type="submit" disabled={!name.trim()}>Add</button>
       </form>

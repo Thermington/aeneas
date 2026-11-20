@@ -189,3 +189,13 @@ export function techLight(looks: Look[], things: Thing[], monitors: OpsMonitor[]
   if (!checks && !sensors.length) return { tone: "muted", label: "Nothing watched yet", detail: "" };
   return { tone: "ok", label: "All good", detail: watched };
 }
+
+/**
+ * A machine typed into Add machine: an SSH alias ("nas") or user@host ("robin@10.0.0.16"), kept as typed for ssh, and
+ * named after the host, since a machine's name has no "@" (the hub refuses one: user@host failed to save).
+ */
+export function machineFromInput(text: string): { name: string; ssh: string } | null {
+  const ssh = text.trim();
+  const host = ssh.slice(ssh.lastIndexOf("@") + 1).replace(/:\d+$/, "").toLowerCase();
+  return ssh && /^[a-z0-9][a-z0-9._-]{0,62}$/.test(host) ? { name: host, ssh } : null;
+}

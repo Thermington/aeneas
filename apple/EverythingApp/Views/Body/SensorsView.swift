@@ -219,7 +219,25 @@ enum SensorState: String {
 
 // MARK: card
 
+/// How far back a reading card's graph goes: the last 24 hours reading by reading (`GET /sensors`), or a daily mean
+/// over 7 to 90 days (`GET /dashboard/series`), as on the web.
+enum ReadingSpan: Int, CaseIterable, Identifiable {
+    case day = 1, week = 7, month = 30, quarter = 90
+    var id: Int { rawValue }
+    var label: String { self == .day ? "24h" : "\(rawValue)d" }
+    var spoken: String { self == .day ? "24 hours" : "\(rawValue) days" }
+
+    /// 24 hours, or `-EAReadingSpan 7` in a Debug build (screenshots).
+    static var start: ReadingSpan {
+        #if DEBUG
+        if let n = UserDefaults.standard.string(forKey: "EAReadingSpan").flatMap(Int.init), let s = ReadingSpan(rawValue: n == 24 ? 1 : n) { return s }
+        #endif
+        return .day
+    }
+}
+
 struct SensorCard: View {
+    @EnvironmentObject var engine: SyncEngine
     var sensor: Entity
     var points: [SensorPoint]?
     /// On a machine's or place's page: the reading as people say it ("Disk P:", Tech.readingLabel), without the place.
@@ -229,6 +247,10 @@ struct SensorCard: View {
     var onExport: () -> Void
     var onPropose: () -> Void = {}
     var proposing = false
+    @State private var span = ReadingSpan.start
+    /// The daily means for `span`, and why they could not be read.
+    @State private var daily: MetricSeries?
+    @State private var dailyError: String?
 
     static func displayName(_ s: Entity) -> String {
         let n = s.str("name").replacingOccurrences(of: "_", with: " ")
@@ -259,7 +281,14 @@ struct SensorCard: View {
                 if let at = sensor.date("last_at") { Text(BodyFmt.ago(at)).font(.subheadline).foregroundStyle(.secondary) }
             }
 
-            chart(lo: lo, hi: hi, state: state)
+            if span == .day { chart(lo: lo, hi: hi, state: state) } else { dailyChart(lo: lo, hi: hi, state: state) }
+
+            Picker("Range", selection: $span) {
+                ForEach(ReadingSpan.allCases) { s in Text(s.label).tag(s).accessibilityLabel(s.spoken) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
 
             Text(boundsText(lo: lo, hi: hi, unit: unit)).font(.caption).foregroundStyle(.secondary)
 
@@ -277,6 +306,51 @@ struct SensorCard: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
+        // Again when a new reading is in, so today's mean moves with it.
+        .task(id: "\(span.rawValue) \(sensor.str("last_at"))") { await loadDaily() }
+    }
+
+    private func loadDaily() async {
+        guard span != .day else { return }
+        guard let c = engine.client else { dailyError = "Longer ranges need the hub."; return }
+        do {
+            daily = try await c.dashboardSeries(metric: "sensor:\(sensor.str("name"))", days: span.rawValue)
+            dailyError = nil
+        } catch {
+            dailyError = Homelab.errorText(error)
+        }
+    }
+
+    /// A day's mean as one point; days with no reading are left out.
+    @ViewBuilder private func dailyChart(lo: Double?, hi: Double?, state: SensorState) -> some View {
+        let series = daily.flatMap { $0.days == span.rawValue ? $0 : nil }
+        let pts = (series?.points ?? []).compactMap { p in p.value.flatMap { v in p.date.map { (date: $0, value: v) } } }
+        if let dailyError, series == nil {
+            Text(dailyError).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, minHeight: 60)
+        } else if series == nil {
+            Text("Loading").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60)
+        } else if pts.count < 2 {
+            Text("Fewer than 2 days with readings in \(span.spoken)").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60)
+        } else {
+            Chart {
+                ForEach(pts, id: \.date) { p in
+                    LineMark(x: .value("Day", p.date, unit: .day), y: .value("Mean", p.value))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(state == .ok ? Color.accentColor : state.color)
+                    if pts.count <= 31 {
+                        PointMark(x: .value("Day", p.date, unit: .day), y: .value("Mean", p.value))
+                            .symbolSize(14)
+                            .foregroundStyle(state == .ok ? Color.accentColor : state.color)
+                    }
+                }
+                if let lo { RuleMark(y: .value("Min", lo)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.blue.opacity(0.7)) }
+                if let hi { RuleMark(y: .value("Max", hi)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.red.opacity(0.7)) }
+            }
+            .chartYScale(domain: .automatic(includesZero: false))
+            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+            .frame(height: 120)
+            .accessibilityLabel("Daily average over \(span.spoken), \(pts.count) days, from \(BodyFmt.number(pts.map(\.value).min() ?? 0)) to \(BodyFmt.number(pts.map(\.value).max() ?? 0))")
+        }
     }
 
     @ViewBuilder private func chart(lo: Double?, hi: Double?, state: SensorState) -> some View {
@@ -304,11 +378,12 @@ struct SensorCard: View {
 
     private func boundsText(lo: Double?, hi: Double?, unit: String) -> String {
         let alerts = sensor.bool("alert") != false
+        let what = span == .day ? "Last 24 h." : "Daily average over \(span.spoken)."
         switch (lo, hi) {
-        case (nil, nil): return "Last 24 h. No bounds set, so no alerts."
-        case let (l?, h?): return "Last 24 h. Bounds \(BodyFmt.number(l)) to \(BodyFmt.number(h)) \(unit). Alerts \(alerts ? "on" : "off")."
-        case let (l?, nil): return "Last 24 h. Low bound \(BodyFmt.number(l)) \(unit). Alerts \(alerts ? "on" : "off")."
-        case let (nil, h?): return "Last 24 h. High bound \(BodyFmt.number(h)) \(unit). Alerts \(alerts ? "on" : "off")."
+        case (nil, nil): return "\(what) No bounds set, so no alerts."
+        case let (l?, h?): return "\(what) Bounds \(BodyFmt.number(l)) to \(BodyFmt.number(h)) \(unit). Alerts \(alerts ? "on" : "off")."
+        case let (l?, nil): return "\(what) Low bound \(BodyFmt.number(l)) \(unit). Alerts \(alerts ? "on" : "off")."
+        case let (nil, h?): return "\(what) High bound \(BodyFmt.number(h)) \(unit). Alerts \(alerts ? "on" : "off")."
         }
     }
 }

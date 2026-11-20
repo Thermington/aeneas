@@ -15,6 +15,8 @@ import EACore
 ///   -EASample YES                a copy that is not set up starts in sample mode, as Try it with sample data does
 ///   -EAMachine <name>            with -EASection ops, the Overview opens that machine's page (Tech screenshots)
 ///   -EAScrollTo history          that machine's page scrolls to its History
+///   -EAAddMachine YES            with -EASection ops, the Overview opens Add machine
+///   -EAReadingSpan 7             reading cards start on 7 days (24, 7, 30 or 90)
 @MainActor
 enum DebugHooks {
     /// The machine page `-EAMachine` asked for opens once, not again each time the Overview shows.

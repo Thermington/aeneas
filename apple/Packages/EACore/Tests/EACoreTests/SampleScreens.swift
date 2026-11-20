@@ -8,8 +8,8 @@ import Foundation
 ///
 /// Left out on purpose, because no screen asks them in sample mode or because the answer depends on what is typed:
 /// - `devices` and `setup/pair`: the Connection page shows only the sample banner in sample mode.
-/// - `hubs/requests/<id>`, `images/jobs/<id>`, `dashboard/series`: asked only after a write, which sample mode keeps
-///   on the device.
+/// - `hubs/requests/<id>`, `images/jobs/<id>`, and `dashboard/series` for a Dashboard tile: asked only after a write,
+///   which sample mode keeps on the device. A reading card's 7, 30 and 90 days are read (below).
 /// - `music/<id>/midi` and `audio`, `games/art/<appid>`, `prefs/feel/images/<id>`, `ai/images/<id>`, `wiki/media`:
 ///   files, and the sample has no hummed idea, Steam game, image shape, chat picture or wiki page.
 /// - `connections/password-manager/status`: it reads which password manager tools the recording machine has; the
@@ -113,6 +113,7 @@ enum SampleScreens {
         add("Quiz, streak") { _ = try await $0.creativeStatus() }
         add("Ops") { _ = try await $0.opsBoard() }
         add("Machines") { _ = try await $0.hostSummaries() }
+        add("Overview, Add machine") { _ = try await $0.machines() }
         for id in w.ids(.monitor) {
             add("Monitor \(id), history") { _ = try await $0.monitorHistory(id: id, hours: 24) }
             // Monitor and machine pages read their monitors again every 30 s (Homelab.fresh).
@@ -123,6 +124,10 @@ enum SampleScreens {
         for e in w.entities where e.kind == .sensor {
             let name = e.str("name")
             add("Sensor \(name), Export") { _ = try await $0.sensorCSV(name: name, days: 30) }
+            // The reading card's 7d, 30d and 90d (SensorCard), a daily mean each.
+            for days in [7, 30, 90] {
+                add("Sensor \(name), \(days) days") { _ = try await $0.dashboardSeries(metric: "sensor:\(name)", days: days) }
+            }
         }
         add("Sensors and Connections, feed keys") { _ = try await $0.feedKeys() }
         add("Wiki") { _ = try await $0.wikiIndex() }

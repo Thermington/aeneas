@@ -95,6 +95,55 @@ public struct OpsBoard: Decodable, Equatable, Sendable {
     }
 }
 
+/// A machine the assistant may run commands on and the sensors read (`GET /machines`, the hub's hosts.json). Only
+/// machines listed here are contacted. Sent back as it came: a PUT replaces the whole list.
+public struct HubMachine: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// Lowercase: letters, digits, dots, dashes or underscores.
+    public var name: String
+    /// An SSH alias or user@host, when it is not the name.
+    public var ssh: String?
+    public var os: String?
+    /// The machine the hub runs on.
+    public var local: Bool?
+    public var aliases: [String]?
+    public var id: String { name }
+
+    public init(name: String, ssh: String? = nil, os: String? = nil, local: Bool? = nil, aliases: [String]? = nil) {
+        self.name = name; self.ssh = ssh; self.os = os; self.local = local; self.aliases = aliases
+    }
+
+    /// A machine typed as a name or an SSH host ("nas01", "admin@nas01"): named for the host, reached as typed. Nil for
+    /// nothing typed.
+    public static func typed(_ text: String) -> HubMachine? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        let host = t.split(separator: "@").last.map(String.init) ?? t
+        return HubMachine(name: host.lowercased(), ssh: t)
+    }
+}
+
+/// `GET /machines`: the machines added, and the names in the hub machine's SSH config to pick from.
+public struct HubMachines: Decodable, Equatable, Sendable {
+    public var machines: [HubMachine]
+    public var ssh_config: [String]
+
+    public init(machines: [HubMachine], ssh_config: [String] = []) { self.machines = machines; self.ssh_config = ssh_config }
+
+    enum CodingKeys: String, CodingKey { case machines, ssh_config }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machines = try c.decodeIfPresent([HubMachine].self, forKey: .machines) ?? []
+        ssh_config = (try? c.decodeIfPresent([String].self, forKey: .ssh_config)) ?? []
+    }
+
+    /// The SSH config names not added yet, each a one-tap Add.
+    public var offers: [String] {
+        let have = Set(machines.map { $0.name.lowercased() })
+        return ssh_config.filter { !have.contains($0.lowercased()) }
+    }
+}
+
 /// One row of `GET /monitors/:id/history`.
 public struct MonitorCheck: Decodable, Equatable, Sendable {
     public var at: String
@@ -162,6 +211,18 @@ extension HubClient {
     public func preflightQuietly(text: String) async -> PreflightHit? {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return (try? await preflight(text: text)) ?? nil
+    }
+
+    // MARK: Machines (Tech)
+
+    /// `GET /machines`: the machines the assistant and the sensors may reach, and the hub machine's SSH config names.
+    public func machines() async throws -> HubMachines { try await get("machines", as: HubMachines.self) }
+
+    /// `PUT /machines`: replaces the whole list. The hub answers 422 with a sentence for a bad name or SSH host.
+    public func setMachines(_ machines: [HubMachine]) async throws -> [HubMachine] {
+        struct B: Encodable { var machines: [HubMachine] }
+        struct R: Decodable { var machines: [HubMachine] }
+        return try await post("machines", B(machines: machines), as: R.self, method: "PUT").machines
     }
 
     // MARK: Ops (Module 6)
