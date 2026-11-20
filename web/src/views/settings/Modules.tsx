@@ -111,7 +111,7 @@ export function ModulesPage() {
   return (
     <SubPage path="/settings/modules">
       <div className="muted small">
-        Switch off what you do not use. Off hides it on every device and stops its background work; nothing is erased, so switching it back on shows everything again. Today, the Assistant, Capture, Search, Tasks, Week, Notes, Memory, People and Lists are always on.
+        Switch off what you do not use. Off hides it on every device and stops its background work; nothing is erased, so switching it back on shows everything again (Mail alone deletes the hub's copy of your mail when switched off, as its own text says, and fetches it again from iCloud when switched back on). Today, the Assistant, Capture, Search, Tasks, Week, Notes, Memory, People and Lists are always on.
       </div>
       <ModulePicker />
     </SubPage>

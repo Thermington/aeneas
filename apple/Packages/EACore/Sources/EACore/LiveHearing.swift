@@ -26,6 +26,19 @@ public enum LiveHearing {
         return (start..<recorded, start > 0)
     }
 
+    /// Under this loudness (root mean square of samples between -1 and 1) there is no voice in the audio: about -50 dB,
+    /// where the recording panel's meter is empty.
+    public static let silence: Float = 0.0032
+
+    /// Whether the audio is too quiet to hold words. Whisper writes words for silence ("you"), so a live pass on it
+    /// is skipped and the panel keeps what it shows.
+    public static func quiet(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return true }
+        var sum: Float = 0
+        for s in samples { sum += s * s }
+        return (sum / Float(samples.count)).squareRoot() < silence
+    }
+
     /// Whether to hear again: enough new speech since the last pass, which heard up to `heard` samples.
     public static func due(recorded: Int, heard: Int, rate: Double = sampleRate) -> Bool {
         window(recorded: recorded, rate: rate) != nil && recorded - heard >= Int(minNew * rate)

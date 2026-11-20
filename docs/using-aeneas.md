@@ -76,9 +76,30 @@ Copy link and adding it as a subscribed calendar by URL works in any calendar ap
 
 ## Mail
 
-Mail is read on the hub, not on the devices: Settings, Connections, Gmail or iCloud Mail, with the Mail receipts
-module on. The hub reads only mail that looks like receipts, renewal notices or vet mail, files them as renewals and
-pet visits, and does not keep the mail itself. It does not show mail in Week or anywhere else.
+Mail is read on the hub, not on the devices: Settings, Connections, Gmail or iCloud Mail. Two modules use it.
+
+**Mail receipts.** The hub reads only mail that looks like receipts, renewal notices or vet mail, files them as
+renewals and pet visits, and does not keep the mail itself.
+
+**Mail** (the Mail screen, in the web, Windows and Android apps; iCloud Mail only). Your iCloud Inbox by day, with
+kinds of mail gathered into colored bundles: Purchases, Trips, Social, Promos and Other, and Bills, Pet and Jobs while
+those modules are on. A person's mail stands on its own.
+
+- **Pin** keeps a mail out of its bundle and out of a Sweep.
+- **Done** moves a mail to Archive in iCloud, with Undo. **Sweep** marks every unpinned mail of a day or a bundle done.
+- **Snooze** hides a mail until a time you pick and makes a task called "Snoozed mail", which holds none of the mail's
+  words (tasks are open to the assistant; mail is not). The Snoozed list on the Mail screen says which mail it is. The mail comes back to the
+  top of the Inbox at that time, or as soon as you finish or delete the task.
+- Nothing is marked read in iCloud, and Done is the only change the hub makes there.
+- The mail is kept on the hub only while it is in your Inbox (done mail for 30 days), never in a backup, and the
+  assistant cannot read it. Switching the module off deletes it from the hub at once.
+- **Pictures in mail.** The hub fetches them through Tor when a mail arrives, so opening a mail loads nothing, and a
+  sender sees neither your device nor your home's internet address, nor whether you opened it. A hub without Tor
+  fetches no picture until you press Show pictures on a mail; that mail's sender then sees your home's internet
+  address. Pictures a mail hides in order to track you are never fetched.
+- **Colors.** The bar across the top is the color of where you are (Inbox, Snoozed, Done or a bundle), and those
+  colors are the same in every theme, so a color always means the same bundle. The list itself follows your theme
+  (Settings, Theme): the page and each mail take the theme's own page and card colors.
 
 - **iCloud Mail** needs an app-specific password you make at account.apple.com; the guide in Settings, Connections
   takes you through it. The password is kept only on the hub. Apple's app-specific passwords also open iCloud
@@ -114,7 +135,9 @@ minutes; press Done when you finish) and the iPhone turns it into text on the ph
 whole and the recording never goes to Apple. On a Series 9, Ultra 2 or newer Watch, the Watch also writes it down
 itself: while you speak, the words so far show under the timer (the ones still settling dimmer, and the latest part of
 a long capture), while the Watch's screen is on, and "Heard: ..." shows a second or two after you stop; its speech model (about 150 MB) comes over by itself
-once: the hub fetches it from Hugging Face and the iPhone copies it from the hub on Wi-Fi. What the iPhone heard is what is saved, and once the hub has filed
+once: the hub fetches it from Hugging Face and the iPhone copies it from the hub on Wi-Fi. The Watch loads the model when you open the app, and until your words
+show, the recording screen says where it stands: still arriving (with how much has come), getting ready (the first time on a Watch takes longer, while the Watch
+prepares the model for its chip), or ready. What the iPhone heard is what is saved, and once the hub has filed
 it the Watch shows where it went ("Filed: Logs: weight 192.2 lb") until your next capture. Ask uses Apple's dictation, which shows the words as you speak and suits a
 short question (it keeps only about the last 30 seconds of a long one). Complications (add them by editing a watch face):
 Ask, Capture, Hum Song, Now and Next up. When the Watch shows Offline, tap Offline, then Try now; opening the iPhone

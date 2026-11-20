@@ -403,8 +403,11 @@ function Gmail({ c, reload }: { c: GoogleConnection; reload: () => void }) {
   );
 }
 
-/** iCloud Mail, read-only: each mailbox linked with an app-specific password made at account.apple.com. */
-function ICloudMail({ c, reading, reload }: { c: ICloudConnection; reading: boolean; reload: () => void }) {
+/**
+ * iCloud Mail, read-only: each mailbox linked with an app-specific password made at account.apple.com. One link serves
+ * Mail receipts and the Mail screen, whichever are on.
+ */
+function ICloudMail({ c, receipts, chat, reading, reload }: { c: ICloudConnection; receipts: boolean; chat: boolean; reading: boolean; reload: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const client = engine.client;
@@ -429,17 +432,22 @@ function ICloudMail({ c, reading, reload }: { c: ICloudConnection; reading: bool
           <div>
             <strong>{a.email}</strong>
           </div>
-          <div className="small">{mailLine(a)}</div>
-          <div className="muted small">Last checked {when(a.last_sync)}; it checks every 15 minutes.</div>
+          {receipts && <div className="small">{mailLine(a)}</div>}
+          {receipts && <div className="muted small">Last checked {when(a.last_sync)}; it checks every 15 minutes.</div>}
           {a.last_error && <div className="error small">{a.last_error}</div>}
           <div>
-            <button type="button" className="ghost danger" disabled={busy || !client} onClick={() => confirm(`Unlink ${a.email}? Its password is deleted from the hub, and what was filed from its mail stays.`) && void run(async () => (await client!.disconnectICloud(a.email)).message)}>
+            <button type="button" className="ghost danger" disabled={busy || !client} onClick={() => confirm(`Unlink ${a.email}? Its password is deleted from the hub and so is its mail on the Mail screen; what was filed from its mail stays.`) && void run(async () => (await client!.disconnectICloud(a.email)).message)}>
               Unlink
             </button>
           </div>
         </div>
       ))}
-      {c.accounts.length > 0 && (
+      {c.accounts.length > 0 && chat && (
+        <div className="muted small">
+          <a href="#/mail">Mail</a> shows this mailbox's Inbox, sorted into bundles. Nothing is marked read; Done moves a mail to Archive in iCloud, and Undo moves it back. Each message is kept on the hub while it is in your Inbox, never its attachments.
+        </div>
+      )}
+      {c.accounts.length > 0 && receipts && (
         <>
           <div className="muted small">
             Receipts, renewal notices and vet mail fill in renewals and pets, read at the same times as Gmail. The hub only reads: folders are opened read-only and nothing is marked read, moved or deleted, and Junk, Trash, Drafts and Sent are skipped. The model on your hub reads it, and the mail itself is never kept.
@@ -909,7 +917,7 @@ export function ConnectionsPage() {
       {c && (
         <>
           {on("mail") && c.google && <Gmail c={c.google} reload={reload} />}
-          {on("mail") && c.icloud && <ICloudMail c={c.icloud} reading={!!c.google?.reading} reload={reload} />}
+          {(on("mail") || on("mail_inbox")) && c.icloud && <ICloudMail c={c.icloud} receipts={on("mail")} chat={on("mail_inbox")} reading={!!c.google?.reading} reload={reload} />}
           {on("games") && <Steam c={c.steam} reload={reload} />}
           {on("films") && <Letterboxd c={c.letterboxd} reload={reload} />}
           {on("wiki") && c.atlassian && <Confluence c={c.atlassian} reload={reload} />}

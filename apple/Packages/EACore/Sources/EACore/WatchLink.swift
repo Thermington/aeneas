@@ -458,7 +458,7 @@ public final class WatchLink: NSObject, WCSessionDelegate, @unchecked Sendable {
 
     public func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         guard let state = WatchSpeechState(context: applicationContext) else { return }
-        Self.log.notice("watch speech state model=\(state.model ?? "none", privacy: .public) missing=\(state.missing.count) device=\(state.device, privacy: .public)")
+        Self.log.notice("watch speech state model=\(state.model ?? "none", privacy: .public) missing=\(state.missing.count) device=\(state.device, privacy: .public) timings: \(SpeechTimings.line(state.timings), privacy: .public)")
         DispatchQueue.main.async { self.onWatchSpeechState?(state) }
     }
 

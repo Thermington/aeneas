@@ -32,6 +32,11 @@ public actor WatchHearing {
     private var folder: URL?
     /// A load under way: the actor lets other calls in while it waits, and they wait for it instead of loading twice.
     private var loadingNow = false
+    #if DEBUG
+    /// Simulator checks: every load takes this much longer, as a real Watch's first load does.
+    private var loadDelay: TimeInterval = 0
+    public func setLoadDelay(_ seconds: TimeInterval) { loadDelay = max(0, seconds) }
+    #endif
 
     public init() {}
 
@@ -47,6 +52,9 @@ public actor WatchHearing {
         }
         loadingNow = true
         defer { loadingNow = false }
+        #if DEBUG
+        if loadDelay > 0 { try? await Task.sleep(nanoseconds: UInt64(loadDelay * 1_000_000_000)) }
+        #endif
         await unload()
         let config = WhisperKitConfig(
             modelFolder: folder.path,

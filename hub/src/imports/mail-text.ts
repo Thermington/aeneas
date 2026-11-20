@@ -11,19 +11,237 @@ export function bodyText(plain: string[], html: string[]): string {
     .split("\n").map((l) => l.replace(/[ \t]+/g, " ").trim()).filter(Boolean).join("\n");
 }
 
+/**
+ * The text of a message for reading as a person (the Mail screen), not for the model: the text part whenever there is
+ * one, since it keeps what the cleaning rules look for (`> ` quotes, the `-- ` signature line); the HTML made plain
+ * only when there is none. Paragraphs stay apart (one blank line); invisible padding goes.
+ *
+ * HTML read this way (`readableHtml`) loses what a mail app hides (`display:none`, `visibility:hidden`, `hidden`: the
+ * inbox preview line, text meant only for programs) and keeps where its links go: `[label](url)` with `links: "marks"`,
+ * for the cleaning rules, which turn each into its label and a link; `label (url)` otherwise, as a text part writes
+ * them. A link whose label the text part also has with its own address (`label <https://…>`, often the direct one where
+ * the HTML has a click tracker's) takes the text part's.
+ *
+ * `prefer: "html"` (the Mail screen's list and search): the HTML made plain whenever it says anything, since it is
+ * what a mail app shows; many senders' text parts are an afterthought (Markdown links, a mail service's placeholders).
+ */
+export function readingText(plain: string[], html: string[], links: "marks" | "text" = "text", prefer: "text" | "html" = "text"): string {
+  const p = plain.join("\n");
+  const fromHtml = (s: string) => readableHtml(s, links, p);
+  const h = html.length ? fromHtml(html.join("\n")) : "";
+  const count = (s: string) => s.split("\n").filter((l) => l.trim()).length;
+  // Some senders put HTML in the text part: then the HTML part (or that text, made plain) is read, never the tags.
+  // Others flatten the text part to a line or two (iCloud Mail on the web: "Hi Jennifer, I'd be glad … Best, Robin")
+  // while the HTML keeps the lines that tell greeting, message and sign-off apart: then the HTML is read too.
+  const flattened = h && count(p) <= 2 && count(h) >= 3;
+  const raw = prefer === "html" && h.trim() ? h : p.trim() && !looksLikeHtml(p) && !flattened ? p : html.length ? h : fromHtml(p);
+  const lines = raw.replace(/\r\n?/g, "\n").replace(/[\u200b-\u200f\u00ad\u034f\u2060\ufeff]/g, "").replace(/\u00a0/g, " ")
+    .split("\n").map((l) => l.replace(/[ \t]+/g, " ").trim());
+  return lines.filter((l, i) => l.trim() !== "" || (i > 0 && lines[i - 1].trim() !== "")).join("\n").trim();
+}
+
+/** Elements with no closing tag: a hidden one is only its tag. */
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+/**
+ * The start of an opening tag. Its attributes are what follows up to the next `>`, when that is within TAG_MAX
+ * characters (else it is not read as a tag). The next `>` is looked for once and remembered (nextMatch), so a mail of
+ * nothing but `<p<p<p` is not searched TAG_MAX characters deep from every one of them.
+ */
+const OPEN_TAG = /<([a-z][a-z0-9]{0,20})\b/gi;
+const TAG_MAX = 4000;
+/** Attributes that hide an element in a mail app. */
+const HIDES = (attrs: string) => /display\s*:\s*none|visibility\s*:\s*hidden/i.test(attrs) || /(^|\s)hidden(\s|=|\/|$)/i.test(attrs);
+
+/** `html` without the elements a mail app hides: each hidden element with all that is inside it. */
+function withoutHidden(html: string): string {
+  let out = "";
+  let at = 0;
+  const gt = nextMatch(html, />/g);
+  OPEN_TAG.lastIndex = 0;
+  for (let m = OPEN_TAG.exec(html), n = 0; m; m = OPEN_TAG.exec(html)) {
+    const close = gt(OPEN_TAG.lastIndex);
+    if (close.at < 0) break; // no ">" from here on: nothing after this is a tag
+    if (close.at - OPEN_TAG.lastIndex > TAG_MAX) continue;
+    if (n++ >= 5000) break;
+    const attrs = html.slice(OPEN_TAG.lastIndex, close.at);
+    OPEN_TAG.lastIndex = close.end;
+    if (!HIDES(attrs)) continue;
+    const name = m[1].toLowerCase();
+    let end = close.end;
+    if (!VOID.has(name) && !attrs.trimEnd().endsWith("/")) {
+      // The matching closing tag: the same name, nesting counted.
+      const tag = new RegExp(`<(/?)${name}\\b`, "gi");
+      tag.lastIndex = end;
+      let depth = 1;
+      for (let t = tag.exec(html); t; t = tag.exec(html)) {
+        const c = gt(tag.lastIndex);
+        if (c.at < 0) break;
+        if (c.at - tag.lastIndex > TAG_MAX) continue;
+        tag.lastIndex = c.end;
+        depth += t[1] ? -1 : 1;
+        if (depth === 0) { end = c.end; break; }
+      }
+      if (depth !== 0) end = html.length; // never closed: hidden to the end, as a mail app shows it
+    }
+    out += html.slice(at, m.index);
+    at = end;
+    OPEN_TAG.lastIndex = end;
+  }
+  return out + html.slice(at);
+}
+
+/** Marks for a link while the HTML is made plain (the private-use characters are taken out of the mail first). */
+const L0 = "\uE000", L1 = "\uE001", L2 = "\uE002";
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const flatSpaces = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/**
+ * The HTML of a mail made plain for reading: hidden elements go, and each link keeps where it goes (see readingText).
+ * `plain`: the message's text part, whose `label <url>` addresses are preferred for the same label.
+ */
+export function readableHtml(html: string, links: "marks" | "text", plain = ""): string {
+  const flatPlain = flatSpaces(plain);
+  /** The text part's address for this label, when it writes `label <https://…>`. */
+  const direct = (label: string) => {
+    const i = label.length >= 2 ? flatPlain.indexOf(`${label} <http`) : -1;
+    if (i < 0) return null;
+    const from = i + label.length + 2;
+    const j = flatPlain.indexOf(">", from);
+    const url = j > from ? flatPlain.slice(from, j) : "";
+    return /^https?:\/\/[^\s<>]{1,2000}$/i.test(url) ? url : null;
+  };
+  let s = withoutComments(withoutBlocks(html.replace(/[\uE000-\uE002]/g, "")));
+  s = withoutHidden(s);
+  // Each <a href> with its label, as marks: the label made plain, the address kept.
+  let out = "";
+  let at = 0;
+  const open = /<a\b/gi;
+  // The next ">" and the next "</a>" are found once and remembered: links that have none, or one far off, do not
+  // search for it again.
+  const gt = nextMatch(s, />/g);
+  const closing = nextMatch(s, /<\/a\s*>/gi);
+  for (let m = open.exec(s), n = 0; m; m = open.exec(s)) {
+    const tagEnd = gt(open.lastIndex);
+    if (tagEnd.at < 0) break; // no ">" from here on: nothing after this is a tag
+    if (tagEnd.at - open.lastIndex > TAG_MAX) continue;
+    if (n++ >= 5000) break;
+    const attrs = s.slice(open.lastIndex, tagEnd.at);
+    open.lastIndex = tagEnd.end;
+    const c = closing(open.lastIndex);
+    if (c.at < 0) break; // no "</a>" from here on: no later link has one either
+    if (c.at - open.lastIndex > 4000) continue;
+    const href = /\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(attrs);
+    const raw = (href?.[2] ?? href?.[3] ?? href?.[4] ?? "").trim();
+    const label = flatSpaces(htmlToText(s.slice(open.lastIndex, c.at))).replace(/[[\]]/g, "");
+    const url = /^https?:\/\//i.test(raw) && !/[<>\s]/.test(raw) ? (direct(label) ?? htmlToText(raw)) : "";
+    out += s.slice(at, m.index) + (label && url ? `${L0}${escapeHtml(label)}${L1}${escapeHtml(url)}${L2}` : s.slice(open.lastIndex, c.at));
+    at = c.end;
+    open.lastIndex = c.end;
+  }
+  s = htmlToText(out + s.slice(at));
+  return s.replace(new RegExp(`${L0}([^${L0}${L1}${L2}]*)${L1}([^${L0}${L1}${L2}]*)${L2}`, "g"), (_, label: string, url: string) =>
+    links === "marks" ? `[${label}](${url})` : `${label} (${url})`);
+}
+
+/** A text part that is really HTML: five or more layout tags or comments (a text that mentions one tag is not). */
+export function looksLikeHtml(s: string): boolean {
+  const head = s.slice(0, 512 * 1024);
+  const start = /<\/?(table|tr|td|th|tbody|div|p|span|center|br|img|h[1-6]|ul|li|a\s|font|style)\b|<!--/gi;
+  const gt = nextMatch(head, />/g);
+  let n = 0;
+  for (let m = start.exec(head); m && n < 5; m = start.exec(head)) {
+    if (m[0] === "<!--") { n++; continue; }
+    // A layout tag counts when it closes within 2,000 characters.
+    const c = gt(start.lastIndex);
+    if (c.at < 0 || c.at - start.lastIndex > 2000) continue;
+    start.lastIndex = c.end;
+    n++;
+  }
+  return n >= 5;
+}
+
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", zwnj: "", zwj: "", shy: "", copy: "©", reg: "®", trade: "™", mdash: "-", ndash: "-", hellip: "...", rsquo: "'", lsquo: "'", rdquo: "\"", ldquo: "\"", bull: "*", middot: "*", euro: "€", pound: "£" };
 
 /** A character reference's character, or nothing for a number no character has (&#x110000; threw, and the mail failed). */
 const codePoint = (n: number): string => (Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "");
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Taking markup out, in one pass each. Mail is hostile input: as patterns (`<!--[\s\S]*?-->`, `<[^>]+>` and the like)
+// each of these searched to the end of the mail again from every `<!--`, `<style` or `<` that was never closed, so a
+// mail of a few hundred thousand of them held the hub for minutes (2026-11-20). They give the same text as the
+// patterns did.
+
+/** Where `re` (global) next matches at or after a place, remembered between asks, which only move forward. */
+function nextMatch(s: string, re: RegExp): (pos: number) => { at: number; end: number } {
+  let from = 0;
+  let found: { at: number; end: number } | null = null;
+  return (pos) => {
+    if (found && pos >= from && (found.at === -1 || found.at >= pos)) return found;
+    from = pos;
+    re.lastIndex = pos;
+    const m = re.exec(s);
+    found = m ? { at: m.index, end: re.lastIndex } : { at: -1, end: -1 };
+    return found;
+  };
+}
+
+/** `s` with a space for each `<head>`, `<style>`, `<script>` and `<title>` element, to its own closing tag. */
+export function withoutBlocks(s: string): string {
+  const open = /<(head|style|script|title)\b/gi;
+  const closers = new Map<string, (pos: number) => { at: number; end: number }>();
+  let out = "";
+  let at = 0;
+  for (let m = open.exec(s); m; m = open.exec(s)) {
+    const name = m[1].toLowerCase();
+    let closer = closers.get(name);
+    if (!closer) { closer = nextMatch(s, new RegExp(`</${name}>`, "gi")); closers.set(name, closer); }
+    const c = closer(open.lastIndex);
+    if (c.at < 0) continue; // never closed: its tag goes with the other tags, its text stays
+    out += `${s.slice(at, m.index)} `;
+    at = c.end;
+    open.lastIndex = c.end;
+  }
+  return out + s.slice(at);
+}
+
+/** `s` with a space for each comment. One never closed stays, and so does anything after it. */
+export function withoutComments(s: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const a = s.indexOf("<!--", at);
+    if (a < 0) break;
+    const b = s.indexOf("-->", a + 4);
+    if (b < 0) break;
+    out += `${s.slice(at, a)} `;
+    at = b + 3;
+  }
+  return out + s.slice(at);
+}
+
+/** `s` with `to` for each tag: a `<`, at least one character, and the next `>`. */
+export function withoutTags(s: string, to = " "): string {
+  let out = "";
+  let at = 0;
+  let from = 0;
+  for (;;) {
+    const lt = s.indexOf("<", from);
+    if (lt < 0) break;
+    const gt = s.indexOf(">", lt + 1);
+    if (gt < 0) break; // no ">" from here on: nothing after this is a tag
+    if (gt === lt + 1) { from = gt + 1; continue; } // "<>" is not a tag
+    out += s.slice(at, lt) + to;
+    at = gt + 1;
+    from = at;
+  }
+  return out + s.slice(at);
+}
+
 export function htmlToText(html: string): string {
-  return html
-    .replace(/<(head|style|script|title)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
+  return withoutTags(withoutComments(withoutBlocks(html))
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|tr|li|h[1-6]|table|section|article)>/gi, "\n")
-    .replace(/<\/t[dh]>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
+    .replace(/<\/t[dh]>/gi, " "))
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => codePoint(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d) => codePoint(Number(d)))
     .replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);

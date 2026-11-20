@@ -17,9 +17,8 @@ struct WatchVoiceView: View {
     @ObservedObject var ask: WatchAskModel
     @ObservedObject var hum: WatchHumModel
     @ObservedObject var capture: WatchCaptureModel
-    #if DEBUG
     @ObservedObject private var speech = WatchSpeech.shared
-    #endif
+    @Environment(\.scenePhase) private var scenePhase
     /// The last result, shown over the bottom for a few seconds: the buttons fill a small Watch, so the lines under
     /// them are out of sight.
     @State private var banner: String?
@@ -94,6 +93,11 @@ struct WatchVoiceView: View {
             show(StyleGuard.dashes(s.banner))
         }
         .navigationDestination(isPresented: $model.conversationOpen) { WatchConversationView(ask: ask) }
+        // The speech model is loaded while this page is in front (and as soon as it arrives), so a capture's words
+        // can show from its first pass; loading it when the capture started left a short capture with none.
+        .task(id: "\(scenePhase == .active) \(speech.ready) \(model.isOn(.voice))") {
+            if scenePhase == .active, model.isOn(.voice) { speech.warm() }
+        }
         // Ask, Capture and Hum complications land here and start at once.
         .task(id: model.listen) {
             guard let a = model.listen else { return }

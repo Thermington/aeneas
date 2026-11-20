@@ -3,7 +3,7 @@ import { isOn, moduleOfScreen, SCREEN_MODULE } from "./modules";
 import { AREAS } from "../components/Shell";
 
 // The hub's module ids (hub/src/modules.ts). A screen naming any other id would never be hidden.
-const HUB_IDS = ["renewals", "dashboard", "homelab", "projects", "music", "wiki", "images", "quiz", "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "web", "reference"];
+const HUB_IDS = ["renewals", "dashboard", "homelab", "projects", "music", "wiki", "images", "quiz", "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail_inbox", "web", "reference"];
 const CORE = ["/inbox", "/tasks", "/week", "/notes", "/memory", "/people", "/lists"];
 
 describe("modules", () => {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { workflowSteps } from "./check-all.mjs";
+import { stepEnv, workflowSteps } from "./check-all.mjs";
 
 const workflow = (file) => readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
 
@@ -24,4 +24,10 @@ test("a workflow it cannot follow is refused, not half read", () => {
 test("values nested under a step (with:, env:) are not taken for the step's own", () => {
   const steps = workflowSteps("jobs:\n  a:\n    steps:\n      - uses: x@v1\n        with:\n          run: not-a-step\n      - name: Real\n        run: echo real\n        working-directory: sub\n");
   assert.deepEqual(steps, [{ name: "Real", run: "echo real", cwd: "sub" }]);
+});
+
+
+test("a check never runs with git's hook variables, which name the repository being pushed", () => {
+  const env = stepEnv({ PATH: "/usr/bin", HOME: "/home/x", GIT_DIR: "/repo/.git/worktrees/side", GIT_WORK_TREE: "/side", GIT_INDEX_FILE: "index", GIT_PREFIX: "hub/", GIT_AUTHOR_NAME: "kept" });
+  assert.deepEqual(env, { PATH: "/usr/bin", HOME: "/home/x", GIT_AUTHOR_NAME: "kept", CI: "1" });
 });

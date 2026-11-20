@@ -180,6 +180,11 @@ final class AppModel: ObservableObject {
                 capture.debugFiled(filed, text: d.string(forKey: "captureFiledText"))
             }
         }
+        // `-captureNow YES`: a capture starts at once through the microphone, as the Capture tile starts it, so the
+        // recording panel can be seen in each state of the speech model (`-listen capture` waits for the first sync).
+        if d.bool(forKey: "captureNow") {
+            Task { try? await Task.sleep(nanoseconds: 1_000_000_000); await capture.record() }
+        }
         // `-EAWatchHearingBench YES`: time the speech models on this Watch with the bundled sample (see WatchSpeech).
         if d.bool(forKey: "EAWatchHearingBench") { Task { await WatchSpeech.shared.bench() } }
     }

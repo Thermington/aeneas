@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { allAppThemes, appThemeName, classicColors, contrast, resolveAppTheme, themeVars } from "./appTheme";
 import { APP_THEMES, DEFAULT_FEEL } from "./prefs";
-import { CLASSIC, readable, type ThemeColors } from "./appTheme";
+import { CLASSIC, MAIL_HOVER, MAIL_WORDS, mix, readable, type ThemeColors } from "./appTheme";
 import { eventColorStyle } from "../lib/eventColor";
 
 describe("app themes", () => {
@@ -65,6 +65,50 @@ describe("status colors", () => {
     expect(v["--warn"]).toBe("#FFD60A");
     expect(contrast(v["--warn-text"], "#FFFFFF")).toBeGreaterThanOrEqual(4.5);
     expect(readable("#2b7047", "#111111", 4.5, ["#ffffff"])).toBe("#2b7047");
+  });
+});
+
+describe("the Mail screen in a theme", () => {
+  const pointedAt = (t: ThemeColors) => mix(t.surface, MAIL_HOVER[t.mode].veil, MAIL_HOVER[t.mode].part);
+
+  it("sits on the theme's page and cards", () => {
+    for (const t of APP_THEMES) {
+      const v = themeVars(t);
+      expect(v["--mail-page"]).toBe(t.background);
+      expect(v["--mail-item"]).toBe(t.surface);
+    }
+  });
+
+  it("keeps every kind of words readable on a mail's row while it is pointed at", () => {
+    for (const t of APP_THEMES) {
+      const v = themeVars(t);
+      for (const k of ["--text", "--muted", "--text-2", "--link", "--ok-text", "--warn-text", "--danger-text"]) {
+        for (const bg of [v["--mail-page"], v["--mail-item"], pointedAt(t)]) expect(contrast(v[k], bg), `${t.name}: ${k} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("writes Mail's colors as words that read on the page, a row and a pointed-at row, and as icons on the side list", () => {
+    for (const t of APP_THEMES) {
+      const v = themeVars(t);
+      for (const id of Object.keys(MAIL_WORDS[t.mode])) {
+        for (const bg of [t.background, t.surface, pointedAt(t)]) expect(contrast(v[`--bt-${id}`], bg), `${t.name}: ${id} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        // An icon, not words: 3:1 (the side list, and its current row on the second card color).
+        expect(contrast(v[`--bt-${id}`], v["--surface-2"]), `${t.name}: ${id} icon`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("moves them toward the text color in a theme whose cards are too near them, and no further than it must", () => {
+    const dusk: ThemeColors = { mode: "dark", accent: "#FFB000", background: "#3A3F4A", surface: "#4A505C", text: "#FFFFFF" };
+    const v = themeVars(dusk);
+    for (const id of Object.keys(MAIL_WORDS.dark)) {
+      for (const bg of [dusk.background, dusk.surface, pointedAt(dusk)]) expect(contrast(v[`--bt-${id}`], bg), `${id} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(v["--bt-purchases"]).not.toBe(MAIL_WORDS.dark.purchases);
+    // Midnight's page and cards are darker than Classic's: its colors stay as they are.
+    const midnight = themeVars(APP_THEMES.find((a) => a.id === "midnight")!);
+    expect(midnight["--bt-purchases"]).toBe(MAIL_WORDS.dark.purchases);
   });
 });
 

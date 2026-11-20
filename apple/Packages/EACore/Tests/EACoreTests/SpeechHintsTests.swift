@@ -171,6 +171,23 @@ final class SpeechModelTests: XCTestCase {
         XCTAssertTrue(WatchSpeechState(model: "openai_whisper-base.en", missing: [], device: "Watch7,9").ready)
     }
 
+    func testWatchStateCarriesItsTimingsAsNumbersOnly() {
+        let t = [SpeechTimings.firstLoad: 41.2, SpeechTimings.load: 3.4, SpeechTimings.heard: 2.1, SpeechTimings.heardAudio: 6.4, SpeechTimings.live: 1]
+        let s = WatchSpeechState(model: "openai_whisper-base.en", missing: [], device: "Watch7,9", timings: t)
+        XCTAssertTrue(PropertyListSerialization.propertyList(s.context, isValidFor: .binary))
+        XCTAssertEqual(WatchSpeechState(context: s.context), s)
+        XCTAssertEqual(WatchSpeechState(context: s.context)?.timings, t)
+        // New timings are a new state, so the iPhone hears of them; none at all is what an older Watch app sends.
+        XCTAssertNotEqual(s, WatchSpeechState(model: "openai_whisper-base.en", missing: [], device: "Watch7,9"))
+        XCTAssertEqual(WatchSpeechState(context: [WatchSpeechState.key: ["model": "openai_whisper-base.en", "missing": [String](), "device": "Watch7,9"]])?.timings, [:])
+        // Only numbers under the names this app knows: anything else from the other device is dropped.
+        let odd = WatchSpeechState(context: [WatchSpeechState.key: ["model": "openai_whisper-base.en", "missing": [String](), "device": "Watch7,9",
+                                                                     "timings": ["load": 2.5, "heard": "I weigh 192", "words": 3.0, "pass": Double.infinity] as [String: Any]]])
+        XCTAssertEqual(odd?.timings, ["load": 2.5])
+        XCTAssertEqual(SpeechTimings.line(t), "first_load 41.2, heard 2.1, heard_audio 6.4, live 1.0, load 3.4")
+        XCTAssertEqual(SpeechTimings.line([:]), "")
+    }
+
     func testTransferMetadataNamesOnlyPinnedFiles() {
         let t = SpeechModelTransfer(model: "openai_whisper-base.en", path: "tokenizer.json")
         XCTAssertTrue(PropertyListSerialization.propertyList(t.metadata, isValidFor: .binary))

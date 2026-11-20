@@ -117,6 +117,12 @@ export const TaskFields = z.object({
   linked_id: z.string().optional(),
   /** The Apple Reminders item it mirrors, written by the iPhone and Mac. */
   apple: z.object({ id: z.string(), list: z.string(), list_title: z.string().optional() }).optional(),
+  /**
+   * A snoozed mail this task brings back (the Mail screen's id for it): the task is titled "Snoozed mail", holds none
+   * of the mail's words, and reminds at the snooze's end; marking the task done or deleting it brings the mail back
+   * to the Inbox at once.
+   */
+  mail: z.string().optional(),
 });
 
 /** Older kind. The hub turns every reminder into a task on start; nothing new is written with it. */

@@ -14,6 +14,20 @@ export const CLASSIC = {
   dark: { bg: "#17181b", surface: "#1f2126", text: "#e8e6e1", accent: "#7ea2ea", danger: "#e07a73", ok: "#6cc08a", warn: "#e0a84a" },
 } as const;
 
+/**
+ * The Mail screen's own colors as words and icons, in Classic (styles.css `--bt-*`, kept the same by
+ * web/src/lib/contrast.test.ts): a bundle's name, its link and the side list's icons. Mail's fills (`--b-*`, with
+ * white on them) are the same in every theme; these sit on the theme's page and cards, so a theme gets them made
+ * readable there.
+ */
+export const MAIL_WORDS = {
+  light: { purchases: "#27764b", trips: "#7048c0", social: "#be3735", promos: "#48740e", bills: "#1f6f43", pet: "#a25315", jobs: "#4352b8", other: "#5d6470", inbox: "#2f5fbf", snoozed: "#8f5f0e", done: "#30764b" },
+  dark: { purchases: "#40ab71", trips: "#a38cd9", social: "#d38280", promos: "#73a826", bills: "#40ab70", pet: "#d38649", jobs: "#8994d8", other: "#9399a5", inbox: "#7b98d4", snoozed: "#cc8c1a", done: "#42ab69" },
+} as const;
+
+/** Mail's color over a row being pointed at (styles.css `--mail-hover`): black or white, and how much of it. */
+export const MAIL_HOVER = { light: { veil: "#000000", part: 0.05 }, dark: { veil: "#ffffff", part: 0.06 } } as const;
+
 function rgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -83,9 +97,15 @@ export function themeVars(t: ThemeColors): Record<string, string> {
   const dark = t.mode === "dark";
   const base = dark ? CLASSIC.dark : CLASSIC.light;
   const surface2 = mix(t.surface, t.text, dark ? 0.09 : 0.07);
-  // Words sit on the page, on cards and on the second card color (rows, commitments), so each must read on all three.
-  const on = [t.background, t.surface, surface2];
+  // On the Mail screen a mail's row is a card, and a row being pointed at is that card under a thin veil.
+  const hover = MAIL_HOVER[t.mode];
+  const pointedAt = mix(t.surface, hover.veil, hover.part);
+  // Words sit on the page, on cards, on the second card color (rows, commitments) and on a pointed-at mail, so each
+  // must read on all four.
+  const on = [t.background, t.surface, surface2, pointedAt];
   const ink = mix(t.background, "#000000", dark ? 0.4 : 0.85);
+  // Mail's colors as words sit on the page (a bundle's link), a mail's row (a bundle's name) and that row pointed at.
+  const mailWords = Object.fromEntries(Object.entries(MAIL_WORDS[t.mode]).map(([id, c]) => [`--bt-${id}`, readable(c, t.text, 4.5, [t.background, t.surface, pointedAt])]));
   return {
     "--bg": t.background,
     "--surface": t.surface,
@@ -105,6 +125,11 @@ export function themeVars(t: ThemeColors): Record<string, string> {
     "--warn-text": readable(t.warn ?? base.warn, t.text, 4.5, on),
     "--ok-strong": t.ok ?? base.ok,
     "--on-ok": onAccent(t.ok ?? base.ok, ink),
+    // Mail: the list sits on the theme's page, each mail and bundle is one of its cards, and the bundle colors as
+    // words are moved toward the theme's text color wherever they would not read.
+    "--mail-page": t.background,
+    "--mail-item": t.surface,
+    ...mailWords,
     "color-scheme": t.mode,
   };
 }

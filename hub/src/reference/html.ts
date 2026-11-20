@@ -102,6 +102,8 @@ export const MAX_HTML_CHARS = 8_000_000;
 
 const WS = /[\t\n\f\r ]/;
 const ALPHA = /[A-Za-z]/;
+/** A "<" that starts something: a tag, an end tag, a comment or declaration, a processing instruction. */
+const STARTS = /<[A-Za-z!?/]/g;
 
 export function parseHtml(input: string): HElement {
   const src = (input.length > MAX_HTML_CHARS ? input.slice(0, MAX_HTML_CHARS) : input).replace(/\r\n?/g, "\n").replace(/\u0000/g, "�");
@@ -160,6 +162,23 @@ export function parseHtml(input: string): HElement {
 
   let i = 0;
   const n = src.length;
+  /**
+   * Where `mark` next is, at or after a place, remembered between asks (which only move forward). Without it every
+   * comment searched the rest of the page for the "--!>" it does not have: a megabyte of "<!--a-->", which a mail can
+   * be, took four minutes (2026-11-20). Now each character is looked at once.
+   */
+  const nextOf = (mark: string) => {
+    let from = 0;
+    let at = -2; // -2: not looked for yet; -1: none at or after `from`
+    return (pos: number): number => {
+      if (pos >= from && (at === -1 || at >= pos)) return at;
+      from = pos;
+      at = src.indexOf(mark, pos);
+      return at;
+    };
+  };
+  const nextEnd = nextOf("-->");
+  const nextBang = nextOf("--!>");
   while (i < n) {
     const lt = src.indexOf("<", i);
     const textEnd = lt < 0 ? n : lt;
@@ -173,8 +192,8 @@ export function parseHtml(input: string): HElement {
         // "<!-->" and "<!--->" end at once; otherwise the first "-->" (or "--!>") ends it, else the page does.
         if (src.startsWith("<!-->", i)) { i += 5; continue; }
         if (src.startsWith("<!--->", i)) { i += 6; continue; }
-        const a = src.indexOf("-->", i + 4);
-        const b = src.indexOf("--!>", i + 4);
+        const a = nextEnd(i + 4);
+        const b = nextBang(i + 4);
         const end = a < 0 ? b : b < 0 ? a : Math.min(a, b);
         i = end < 0 ? n : end + (end === b ? 4 : 3);
         continue;
@@ -202,7 +221,15 @@ export function parseHtml(input: string): HElement {
       endTag(tag.name);
       continue;
     }
-    if (!c || !ALPHA.test(c)) { addText("<"); i += 1; continue; }
+    if (!c || !ALPHA.test(c)) {
+      // A "<" that starts nothing is text, and so is what follows it up to the next "<" that could start a tag, a
+      // comment or a declaration: read as one piece (a megabyte of "<" was a million pieces joined one at a time).
+      STARTS.lastIndex = i + 1;
+      const k = STARTS.exec(src)?.index ?? n;
+      addText(decodeEntities(src.slice(i, k)));
+      i = k;
+      continue;
+    }
     const tag = readTag(src, i + 1);
     if (!tag) break;
     i = tag.end;

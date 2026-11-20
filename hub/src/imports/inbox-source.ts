@@ -1,0 +1,64 @@
+import type { Hub } from "../hub.js";
+
+/**
+ * Where the Mail screen's mail comes from (CONTRACT.md, Mail): one InboxSource per kind of mailbox. mail-inbox.ts keeps
+ * what a source lists, and asks it to move mail for Done and Undo; it knows nothing else about the mailbox. iCloud
+ * (imports/icloud.ts, icloudInbox) is the only source today; another (a Gmail account) is one more file like it, added
+ * to INBOX_SOURCES in mail-inbox.ts. The screen, bundles, Pin and Snooze stay as they are.
+ *
+ * A source must keep to what iCloud's does: list the Inbox without marking anything read, fetch only what it lists
+ * (text, the HTML for showing, pictures sent inside a mail), and change the mailbox only by moving a kept message
+ * between the Inbox and the archive, after checking it is still that message.
+ */
+
+export interface MailAddress { name: string; address: string }
+
+/** One Inbox message for the Mail screen. Kept only in memory; mail-inbox.ts decides what is stored. */
+export interface InboxMail {
+  /** The source's id for the message where it is now (iCloud: `<UIDVALIDITY>:<UID>:<folder>`). */
+  id: string;
+  at: Date;
+  message_id: string | null;
+  from: MailAddress;
+  /** Set only when replies would go somewhere other than From. */
+  reply_to: string | null;
+  subject: string;
+  /** The text as a person reads it (readingText, links written out as `label (url)`), at most TEXT_MAX. */
+  text: string;
+  /** Sent by a system (a shipping notice, an alert, a newsletter), not a person. */
+  automated: boolean;
+  /** It carries List-Unsubscribe: marketing mail or a newsletter, most of the time. */
+  unsubscribe: boolean;
+  /** Its List-Id, when it comes from a mailing list (at most 200 characters). */
+  list_id: string | null;
+  /** Its HTML cleaned for showing (mail-html.ts), pictures sent inside it written in; null when it has none or too much. */
+  html: string | null;
+  /** The web pictures its HTML shows, to be fetched by the hub (`<img data-r="N">`). */
+  remote: string[];
+  /** The brand's logo the mail provider verified (BIMI with a mark certificate), fetched by the hub; or null. */
+  logo: { domain: string; url: string } | null;
+}
+
+/**
+ * One refresh of a mailbox's Inbox:
+ * - `present`: the id of every message in the Inbox now, so the hub can tell what left it; null when that cannot be
+ *   said (no Inbox found), and then nothing is taken away;
+ * - `mails`: messages since the time asked that the hub does not keep yet, newest first (`more` when there were too
+ *   many for one refresh);
+ * - `moved`: kept messages (by Message-ID) found under another id, not fetched again.
+ */
+export interface InboxListing { present: string[] | null; mails: InboxMail[]; moved: { id: string; message_id: string }[]; more: boolean }
+
+/** One kept message to move: its id where it is, and the Message-ID the hub kept for it. */
+export interface MoveRef { id: string; message_id: string | null }
+
+export interface InboxSource {
+  /** The start of its accounts' keys (`icloud:`), which also tell which source an account is. */
+  prefix: string;
+  /** Its linked accounts whose Inbox the Mail screen shows, as keys (`icloud:robin@icloud.com`). */
+  accounts(hub: Hub): string[];
+  /** One refresh (see InboxListing). `known` and `knownMessage` say what the hub keeps already. `owner`: Refresh pressed. */
+  list(hub: Hub, account: string, since: Date, known: (id: string) => boolean, knownMessage: (messageId: string) => boolean, opts: { owner?: boolean }): Promise<InboxListing>;
+  /** Done (to the archive) or Undo (back to the Inbox): each message's new id, or null when it was not moved. */
+  move(hub: Hub, account: string, refs: MoveRef[], to: "archive" | "inbox"): Promise<Map<string, string | null>>;
+}

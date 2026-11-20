@@ -200,7 +200,7 @@ public struct SpeechModelStore: Sendable {
 
 /// What the Watch tells the iPhone about writing speech down itself, in its WatchConnectivity application context
 /// (the newest one always wins and waits for the iPhone): which model it wants (nil: this Watch cannot run one, or does
-/// not want one), the files it still lacks, and whether it has the whole model.
+/// not want one), the files it still lacks, whether it has the whole model, and how long the model took the last time.
 public struct WatchSpeechState: Equatable, Sendable {
     public static let key = "speech_model"
 
@@ -208,20 +208,24 @@ public struct WatchSpeechState: Equatable, Sendable {
     public var missing: [String]
     /// WhisperKit's name for the device ("Watch7,9"), for the iPhone's log.
     public var device: String
+    /// How the model last did on this Watch, in seconds, for the iPhone's log (`SpeechTimings`): never words.
+    public var timings: [String: Double]
 
-    public init(model: String?, missing: [String], device: String) {
-        self.model = model; self.missing = missing; self.device = device
+    public init(model: String?, missing: [String], device: String, timings: [String: Double] = [:]) {
+        self.model = model; self.missing = missing; self.device = device; self.timings = timings
     }
 
     public var ready: Bool { model != nil && missing.isEmpty }
 
     /// The Watch's state for one model in its store.
-    public init(model: SpeechModel?, store: SpeechModelStore, device: String) {
-        self.init(model: model?.name, missing: model.map { store.missing($0).map(\.path) } ?? [], device: device)
+    public init(model: SpeechModel?, store: SpeechModelStore, device: String, timings: [String: Double] = [:]) {
+        self.init(model: model?.name, missing: model.map { store.missing($0).map(\.path) } ?? [], device: device, timings: timings)
     }
 
     public var context: [String: Any] {
-        [Self.key: ["model": model ?? "", "missing": missing, "device": device]]
+        var s: [String: Any] = ["model": model ?? "", "missing": missing, "device": device]
+        if !timings.isEmpty { s["timings"] = timings }
+        return [Self.key: s]
     }
 
     /// Nil when the context holds no speech state, or one naming a model the iPhone does not know.
@@ -232,6 +236,38 @@ public struct WatchSpeechState: Equatable, Sendable {
         model = name.isEmpty ? nil : name
         missing = ((s["missing"] as? [String]) ?? []).filter { p in SpeechModel.named(name)?.file(p) != nil }
         device = (s["device"] as? String) ?? ""
+        // Numbers only, and only the ones this app knows (the context comes from the other device).
+        let given = (s["timings"] as? [String: Any]) ?? [:]
+        timings = given.reduce(into: [:]) { out, e in
+            if SpeechTimings.keys.contains(e.key), let n = e.value as? NSNumber, n.doubleValue.isFinite { out[e.key] = n.doubleValue }
+        }
+    }
+}
+
+/// How the Watch's speech model last did on that Watch, in seconds. Nothing has to be measured by hand: the Watch
+/// keeps these as it goes and tells the iPhone (`WatchSpeechState.timings`), whose log then says how a real Watch
+/// manages (the simulator runs the model on the Mac's processor, which says little). Never words or audio.
+public enum SpeechTimings {
+    /// Loading the model into memory, the last time.
+    public static let load = "load"
+    /// The first load on this Watch, when Core ML also prepares the model for its chip (the long one).
+    public static let firstLoad = "first_load"
+    /// The pass after Done, and the length of the recording it heard.
+    public static let heard = "heard"
+    public static let heardAudio = "heard_audio"
+    /// The latest live pass, and the speech it heard.
+    public static let pass = "pass"
+    public static let passAudio = "pass_audio"
+    /// From the start of the latest capture to its first live words.
+    public static let firstWords = "first_words"
+    /// 1 when the latest capture was recorded through the live recorder, 0 when that could not start.
+    public static let live = "live"
+
+    public static let keys: Set<String> = [load, firstLoad, heard, heardAudio, pass, passAudio, firstWords, live]
+
+    /// One line for a log: "first_load 41.2, heard 2.1, heard_audio 6.4".
+    public static func line(_ t: [String: Double]) -> String {
+        t.keys.sorted().map { "\($0) \(String(format: "%.1f", t[$0] ?? 0))" }.joined(separator: ", ")
     }
 }
 

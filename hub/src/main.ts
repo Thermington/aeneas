@@ -2,6 +2,7 @@ import { mainPortGuard, startLink } from "./link.js";
 import { startGalleryJob } from "./gallery.js";
 import { linkCaptureThreads, startFilingJob } from "./capture-filer.js";
 import { startMailJob } from "./mail-filer.js";
+import { startMailInboxJob } from "./mail-inbox.js";
 import { startCalendarJob } from "./calendar-sync.js";
 import { startHelpingRefresh } from "./helping.js";
 import { kick as kickImports } from "./imports/bulk.js";
@@ -252,6 +253,7 @@ async function main(): Promise<void> {
   const stopReference = startReference(hub);
   const stopImports = startImportJob(hub);
   const stopMail = startMailJob(hub);
+  const stopMailInbox = startMailInboxJob(hub);
   const stopCalendars = startCalendarJob(hub);
   const stopHelping = startHelpingRefresh(hub);
   const stopNotes = startNoteLinker(hub);
@@ -298,6 +300,7 @@ async function main(): Promise<void> {
     stopCalendars();
     stopHelping();
     stopMail();
+    stopMailInbox();
     stopNotes();
     stopGallery();
     stopFiling();

@@ -50,6 +50,26 @@ export function workflowSteps(yaml) {
   return steps.filter((s) => s.run).map((s) => ({ name: s.name || s.run, run: s.run, cwd: s["working-directory"] || "." }));
 }
 
+/**
+ * What git sets while it runs a hook (`git rev-parse --local-env-vars`): they name the repository being pushed. In a
+ * linked worktree GIT_DIR is among them, and with it set every git command the tests run in repositories of their own
+ * (the hub's update tests make several) worked on this one instead: a push from a worktree failed nine tests that
+ * pass everywhere else.
+ */
+const GIT_HOOK_VARS = ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+  "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"];
+
+/**
+ * The environment a check runs in: the caller's, with CI set as on GitHub (the license check, for one, fails when it
+ * cannot read the Rust crates instead of noting it) and without git's hook variables, so the checks see what they
+ * see on GitHub and when run by hand.
+ */
+export function stepEnv(from) {
+  const env = { ...from, CI: "1" };
+  for (const k of GIT_HOOK_VARS) delete env[k];
+  return env;
+}
+
 function main() {
   const apple = process.argv.includes("--apple");
   const workflow = (file) => readFileSync(join(ROOT, ".github/workflows", file), "utf8");
@@ -66,8 +86,7 @@ function main() {
     const log = join(logs, `${String(i + 1).padStart(2, "0")}.log`);
     const fd = openSync(log, "w");
     const t0 = Date.now();
-    // CI is set as on GitHub: the license check, for one, fails when it cannot read the Rust crates instead of noting it.
-    const r = spawnSync("bash", ["-c", s.run], { cwd: join(ROOT, s.cwd), stdio: ["ignore", fd, fd], env: { ...process.env, CI: "1" }, timeout: STEP_LIMIT_MS, killSignal: "SIGKILL" });
+    const r = spawnSync("bash", ["-c", s.run], { cwd: join(ROOT, s.cwd), stdio: ["ignore", fd, fd], env: stepEnv(process.env), timeout: STEP_LIMIT_MS, killSignal: "SIGKILL" });
     closeSync(fd);
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     if (r.status === 0) {

@@ -92,7 +92,8 @@ export function htmlToText(html: string): { title: string; text: string } {
  */
 function curlViaSocks(url: string, socks: string, timeoutMs: number): Promise<{ body: string; type: string; finalUrl: string }> {
   return new Promise((resolve, reject) => {
-    const args = ["-sS", "-L", "--max-redirs", "5", "--max-time", String(Math.ceil(timeoutMs / 1000)), "--max-filesize", "3000000",
+    // -g: [ ] and { } in an address are part of it, not a list of addresses for curl to work through.
+    const args = ["-sS", "-g", "-L", "--max-redirs", "5", "--max-time", String(Math.ceil(timeoutMs / 1000)), "--max-filesize", "3000000",
       "--proto", "=http,https", "--proto-redir", "=http,https", "--socks5-hostname", socks, "-A", UA,
       "-H", "Accept: text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5",
       "-w", "%{stderr}\n@@meta@@%{http_code}\t%{content_type}\t%{url_effective}", url];
@@ -180,6 +181,93 @@ async function getPublic(start: URL, signal: AbortSignal): Promise<{ body: strin
     return { body: Buffer.concat(chunks).toString("utf8"), type, finalUrl: u.toString() };
   }
   throw new Error("too many redirects");
+}
+
+const PICTURE_ACCEPT = "image/webp,image/png,image/jpeg,image/gif,image/*;q=0.5";
+
+/**
+ * One picture for the Mail screen, straight from the hub (mail-inbox.ts, only for a mail whose pictures the person asked
+ * for on a hub without Tor): a GET with redirects followed by hand (up to 5), each hop https and to a public address
+ * only, exactly as page reads (a mail cannot steer the hub to the router or another machine at home), no cookie, no
+ * referrer, at most `maxBytes` read. Null for anything that is not a 2xx answer; the caller checks the bytes are a
+ * picture. The sender's server sees the hub's internet address: fetchBytesViaTor is the one that hides it.
+ */
+export async function fetchPublicBytes(url: string, timeoutMs = 15_000, maxBytes = 2_000_000): Promise<Buffer | null> {
+  let u: URL;
+  try { u = new URL(url); } catch { return null; }
+  return timed(timeoutMs, async (signal) => {
+    for (let hop = 0; hop <= 5; hop++) {
+      if (u.protocol !== "https:") return null;
+      if (refused(u.hostname)) return null;
+      const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const req = https.get(u, { signal, lookup: publicOnlyLookup, headers: { "user-agent": UA, accept: PICTURE_ACCEPT } }, resolve);
+        req.on("error", reject);
+      });
+      const status = res.statusCode ?? 0;
+      if (status >= 300 && status < 400 && res.headers.location) {
+        res.resume();
+        u = new URL(res.headers.location, u);
+        continue;
+      }
+      if (status < 200 || status >= 300) { res.resume(); return null; }
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of res) {
+        total += (chunk as Buffer).length;
+        if (total > maxBytes) { res.destroy(); return null; }
+        chunks.push(chunk as Buffer);
+      }
+      return Buffer.concat(chunks);
+    }
+    return null;
+  });
+}
+
+/** Tor is not there to fetch through (its SOCKS port refused, or the hub has no curl): nothing was sent; try later. */
+export class TorDown extends Error {
+  constructor() { super("Tor is not answering on the hub"); }
+}
+
+/** The program fetches through Tor run with. Tests swap in a stand-in. */
+export const torFetch = { curl: "curl" };
+
+/**
+ * One picture for the Mail screen through Tor (mail-inbox.ts): curl through the SOCKS proxy, as curlViaSocks, so the
+ * sender's server sees a Tor exit and never the home address, and the name is looked up at the exit too. https only,
+ * for the first address and every redirect (a Tor exit can read and change plain http), no cookie, no referrer, at most
+ * `maxBytes`. Null for anything that is not a 2xx answer within those limits; the caller checks the bytes are a
+ * picture. TorDown when Tor itself is not there. It never falls back to a direct fetch.
+ */
+export function fetchBytesViaTor(url: string, socks: string, timeoutMs = 45_000, maxBytes = 2_000_000): Promise<Buffer | null> {
+  let u: URL;
+  try { u = new URL(url); } catch { return Promise.resolve(null); }
+  if (u.protocol !== "https:") return Promise.resolve(null);
+  if (!socks) return Promise.reject(new TorDown());
+  return new Promise((resolve, reject) => {
+    // -g: [ ] and { } in an address are part of it, not a list of addresses for curl to work through.
+    const args = ["-sS", "-g", "-L", "--max-redirs", "5", "--max-time", String(Math.ceil(timeoutMs / 1000)), "--max-filesize", String(maxBytes),
+      "--proto", "=https", "--proto-redir", "=https", "--socks5-hostname", socks, "-A", UA, "-H", `Accept: ${PICTURE_ACCEPT}`,
+      "-w", "%{stderr}\n@@meta@@%{http_code}", u.toString()];
+    const child = spawn(torFetch.curl, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const out: Buffer[] = [];
+    let size = 0;
+    let over = false;
+    let err = "";
+    child.stdout.on("data", (b: Buffer) => {
+      size += b.length;
+      // A server that does not say how big its answer is: --max-filesize only goes by what it says, so it stops here.
+      if (size > maxBytes) { over = true; child.kill(); return; }
+      out.push(b);
+    });
+    child.stderr.on("data", (b: Buffer) => { if (err.length < 4000) err += b.toString("utf8"); });
+    child.on("error", () => reject(new TorDown()));
+    child.on("close", (code) => {
+      // 7: curl could not connect, and through a SOCKS proxy the only thing it connects to is the proxy.
+      if (code === 7) return reject(new TorDown());
+      const status = Number(/@@meta@@(\d+)/.exec(err)?.[1] ?? 0);
+      resolve(code === 0 && !over && status >= 200 && status < 300 ? Buffer.concat(out) : null);
+    });
+  });
 }
 
 /**

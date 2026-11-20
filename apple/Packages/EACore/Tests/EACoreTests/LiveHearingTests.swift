@@ -95,4 +95,15 @@ final class LiveHearingTests: XCTestCase {
         // A cut pass of one word that may be half a word shows nothing new.
         XCTAssertEqual(w.updated(with: "ning", cut: true), w)
     }
+
+    func testSilenceIsNotHeard() {
+        XCTAssertTrue(LiveHearing.quiet([]))
+        XCTAssertTrue(LiveHearing.quiet([Float](repeating: 0, count: 16_000)))
+        // A muted microphone's hiss, far under a voice.
+        XCTAssertTrue(LiveHearing.quiet((0..<16_000).map { i in Float(i % 2 == 0 ? 0.001 : -0.001) }))
+        // Two seconds of a quiet voice in thirty seconds of silence is still speech.
+        var some = [Float](repeating: 0, count: 30 * 16_000)
+        for i in 0..<(2 * 16_000) { some[i] = Float(sin(Double(i) / 8)) * 0.05 }
+        XCTAssertFalse(LiveHearing.quiet(some))
+    }
 }

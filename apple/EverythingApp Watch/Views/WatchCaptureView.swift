@@ -26,6 +26,8 @@ final class WatchCaptureModel: ObservableObject {
     private var subs: Set<AnyCancellable> = []
     /// Set by Done and Cancel: the live pass under way stops at its next word.
     private var liveStop: LiveStop?
+    /// This capture's first live words have shown (their delay is kept once).
+    private var wordsShown = false
 
     var recording: Bool { recorder.recording || liveRecorder.recording }
     var elapsed: TimeInterval { live ? liveRecorder.elapsed : recorder.elapsed }
@@ -58,12 +60,13 @@ final class WatchCaptureModel: ObservableObject {
         problem = nil
         liveWords = LiveWords()
         live = false
+        wordsShown = false
         guard WatchSpeech.shared.canHear else {
             await recorder.start()
             if recorder.recording { WKHaptic.start() }
             return
         }
-        // Loaded while the owner speaks: the live passes and then the final one use it.
+        // Usually in memory already (the voice page loads it); if not, it loads while the owner speaks.
         WatchSpeech.shared.warm()
         switch await liveRecorder.start() {
         case .started: live = true
@@ -72,6 +75,7 @@ final class WatchCaptureModel: ObservableObject {
             // No live words this time, but the capture is recorded as on any Watch.
             await recorder.start()
         }
+        WatchSpeech.shared.note(SpeechTimings.live, live ? 1 : 0)
         if recording { WKHaptic.start() }
     }
 
@@ -109,12 +113,24 @@ final class WatchCaptureModel: ObservableObject {
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     continue
                 }
+                // Nothing said yet (or a muted microphone): Whisper would write words for the silence.
+                if LiveHearing.quiet(w.samples) {
+                    heard = w.recorded
+                    try? await Task.sleep(nanoseconds: UInt64(LiveHearing.pause * 1_000_000_000))
+                    continue
+                }
                 let started = Date()
                 let words = await WatchSpeech.shared.hearLive(w.samples, shouldStop: { stop.stopped })
                 guard !Task.isCancelled, !stop.stopped, liveRecorder.recording else { break }
                 WatchSpeech.shared.notePass(audio: Double(w.samples.count) / LiveHearing.sampleRate, took: Date().timeIntervalSince(started))
                 heard = w.recorded
-                if let words { liveWords = liveWords.updated(with: words, cut: w.cut) }
+                if let words {
+                    liveWords = liveWords.updated(with: words, cut: w.cut)
+                    if !wordsShown, !liveWords.isEmpty {
+                        wordsShown = true
+                        WatchSpeech.shared.note(SpeechTimings.firstWords, liveRecorder.elapsed)
+                    }
+                }
                 try? await Task.sleep(nanoseconds: UInt64(LiveHearing.pause * 1_000_000_000))
             }
         } onCancel: {
@@ -126,8 +142,10 @@ final class WatchCaptureModel: ObservableObject {
         let hears = WatchSpeech.shared.canHear
         let capture = WatchVoiceCapture(seconds: take.seconds, format: take.url.pathExtension.lowercased())
         do {
-            // While the Watch writes it down the recording waits in the queue, kept on disk.
-            try WatchLink.shared.queueCapture(capture, file: take.url, hold: hears)
+            // While the Watch writes it down the recording waits in the queue, kept on disk: a second or two with the
+            // model in memory. With the model still loading it goes to the iPhone at once, as on any Watch (the first
+            // load takes far longer than the wait), and the Watch's own words show here when they come.
+            try WatchLink.shared.queueCapture(capture, file: take.url, hold: hears && WatchSpeech.shared.loaded)
         } catch {
             try? FileManager.default.removeItem(at: take.url)
             problem = "Could not keep the recording: \(error.localizedDescription)"
@@ -151,7 +169,7 @@ final class WatchCaptureModel: ObservableObject {
             WatchLink.shared.release(capture: c.id, heard: nil)
             self?.update(c.id) { $0.line = Self.sentLine }
         }
-        let words = await WatchSpeech.shared.transcribe(url)
+        let words = await WatchSpeech.shared.transcribe(url, seconds: c.seconds)
         deadline.cancel()
         // Does nothing when the deadline already let the recording go.
         WatchLink.shared.release(capture: c.id, heard: words)
@@ -256,6 +274,7 @@ final class LiveStop: @unchecked Sendable {
 /// itself), then what the hub filed it as.
 struct WatchCaptureRecordingPanel: View {
     @ObservedObject var capture: WatchCaptureModel
+    @ObservedObject private var speech = WatchSpeech.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -283,6 +302,14 @@ struct WatchCaptureRecordingPanel: View {
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .animation(.default, value: capture.liveWords)
+            } else if let note = speech.recordingNote(live: capture.live) {
+                // Until the words come: where the Watch's speech model stands, so the owner can tell what to expect.
+                Text(note)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Button { capture.stop() } label: {
                 Label("Done", systemImage: "checkmark").frame(maxWidth: .infinity, minHeight: 44)
