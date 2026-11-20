@@ -419,6 +419,25 @@ test("host actions: a held command is never reported as if it ran, and one reply
   } finally { setBackendOverride(null); t.cleanup(); }
 });
 
+test("host actions: on Windows a command wrapped in powershell -Command is sent back; the PowerShell itself reads at once", async () => {
+  const t = makeHub();
+  fs.writeFileSync(path.join(t.dir, "hosts.json"), JSON.stringify([{ name: "laptop", ssh: "robin@10.0.0.17", os: "windows" }]));
+  const ran: string[] = [];
+  t.hub.ai.hosts.runner = async (_h: Host, cmd: string): Promise<RunResult> => { ran.push(cmd); return { exit_code: 0, output: "TotalVisibleMemorySize : 8388148", timed_out: false, ms: 5 }; };
+  try {
+    // What the model sent on 2026-11-20: inside the double quotes the outer PowerShell emptied $_ before it ran.
+    const inner = "Get-CimInstance Win32_OperatingSystem | Select-Object LastBootUpTime, TotalVisibleMemorySize, FreePhysicalMemory; Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, Id, CPU, @{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}";
+    const wrapped = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: `powershell -NoProfile -Command "${inner}"`, purpose: "memory and top processes" } }, ctxFor(t, "w1"));
+    assert.match(wrapped.text, /already run in PowerShell/);
+    assert.equal(wrapped.ok, false);
+    assert.deepEqual(ran, [], "nothing ran and nothing waits for approval");
+    assert.equal(t.hub.ai.hosts.pendingFor("w1"), null);
+    const plain = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: inner, purpose: "memory and top processes" } }, ctxFor(t, "w1"));
+    assert.match(plain.text, /8388148/, "it ran at once and its output came back");
+    assert.deepEqual(ran, [inner]);
+  } finally { t.cleanup(); }
+});
+
 test("host actions: the Run button path approves by id; Cancel declines", async () => {
   const t = makeHub();
   fs.writeFileSync(path.join(t.dir, "hosts.json"), JSON.stringify([{ name: "storage", ssh: "robin@10.0.0.16" }]));

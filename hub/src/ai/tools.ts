@@ -37,6 +37,9 @@ import { searchHelp } from "../help.js";
 export type ApiCall = (method: string, path: string, body?: unknown) => Promise<{ status: number; data: unknown }>;
 
 /** A host command waiting for the owner's yes. Sent to clients as an `approval` event. */
+/** powershell or pwsh started with a command to run (-Command, -c, -EncodedCommand), at the start of a command. */
+export const PS_WRAPPED = /^\s*&?\s*["']?(?:[a-z]:\\[^"']*\\)?(?:powershell|pwsh)(?:\.exe)?["']?(?:\s+-\w+(?:\s+(?!-)[^\s"']+)?)*\s+-(?:c|command|e|ec|enc|encodedcommand)\b/i;
+
 export interface PendingApproval { id: string; host: string; command: string; purpose: string; risk: "medium" | "high"; preflight?: { backup: string; verify: string; rollback: string } }
 
 /** A proposed change as the approval card shows it: its risk and, for a destructive command, the pre-flight lines. */
@@ -1429,7 +1432,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "run_command", writes: true, maxChars: 9000, cutMiddle: true,
     available: (cfg) => cfg.hostActions,
-    description: "Run a shell command on one of {{owner}}'s machines (list_hosts). Windows hosts take PowerShell. Read-only commands (status, logs, listing, df, ping, Get-*) run at once. On Windows a read runs at once only as cmdlets joined by pipes: calculated columns that do arithmetic are fine (Select-Object Name,@{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}), but setting variables, $( ), ( ).Property and other script blocks make it wait for approval like a change. Anything that changes the system is held for {{owner}}'s approval: after calling, show them the exact command and why, then stop and wait. Never use sudo unless they say it works without a password. Always give purpose, and rollback for a change.",
+    description: "Run a shell command on one of {{owner}}'s machines (list_hosts). Windows hosts run it in PowerShell already: write PowerShell, never powershell -Command \"...\" around it. Read-only commands (status, logs, listing, df, ping, Get-*) run at once. On Windows a read runs at once only as cmdlets joined by pipes: calculated columns that do arithmetic are fine (Select-Object Name,@{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}), but setting variables, $( ), ( ).Property and other script blocks make it wait for approval like a change. Anything that changes the system is held for {{owner}}'s approval: after calling, show them the exact command and why, then stop and wait. Never use sudo unless they say it works without a password. Always give purpose, and rollback for a change.",
     parameters: { type: "object", properties: { host: { type: "string" }, command: { type: "string" }, purpose: { type: "string", description: "one line: why" }, rollback: { type: "string", description: "how to undo it, for changes" }, lookup: { type: "boolean", description: "true when it only reads, counts or lists and changes nothing, though it needs approval; it then stays out of the machine's history of changes" } }, required: ["host", "command", "purpose"] },
     run: async (_api, a, ctx) => {
       if (!ctx.hosts) return { error: "host commands are off" };
@@ -1438,6 +1441,10 @@ export const TOOLS: ToolDef[] = [
       const command = str(a.command);
       if (!command) return { error: "command is required" };
       const purpose = str(a.purpose) ?? "";
+      // A Windows host runs the command in PowerShell already. Wrapped in powershell -Command "...", the outer one
+      // empties $_ and every other variable inside the double quotes before the inner one runs (a check on a helped
+      // laptop failed so, 2026-11-20), and the read-only check cannot see inside, so even a read waited for approval.
+      if (host.os === "windows" && PS_WRAPPED.test(command)) return { error: "Commands on Windows already run in PowerShell: send the PowerShell itself, without powershell -Command \"...\" around it (inside those quotes $_ and other variables are emptied before it runs). A command that only reads then runs at once." };
       if (isReadOnly(command, host.os)) {
         const r = await ctx.hosts.runRead(ctx.sessionId, host, command, purpose);
         return { host: host.name, exit_code: r.exit_code, timed_out: r.timed_out || undefined, output: r.output || "(no output)" };
