@@ -6,7 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
-import type { MailList, MailMessage, MailMoved, MailRefresh } from "../lib/mail";
+import type { BundleDelivery, CustomBundle, MailList, MailNotify, MailMessage, MailMoved, MailRefresh, SnoozeTimes } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -987,6 +987,32 @@ export class HubClient {
   /** Back to the Inbox now; its task is deleted. */
   mailUnsnooze(id: string) {
     return this.req<{ ok: true }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsnooze`, {});
+  }
+  /** Read or unread: on the hub, and in the mailbox (only its read flag). */
+  mailSeen(id: string, seen: boolean) {
+    return this.req<{ ok: true; seen: boolean; synced: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/seen`, { seen });
+  }
+  /** The owner's own bundles: add, change, delete. */
+  mailBundleAdd(b: Omit<CustomBundle, "id">) {
+    return this.req<CustomBundle>("POST", "/mail/settings/custom-bundles", b);
+  }
+  mailBundleUpdate(b: CustomBundle) {
+    return this.req<CustomBundle>("PUT", `/mail/settings/custom-bundles/${encodeURIComponent(b.id)}`, { name: b.name, color: b.color, addresses: b.addresses, domains: b.domains, words: b.words });
+  }
+  mailBundleDelete(id: string) {
+    return this.req<{ ok: true }>("DELETE", `/mail/settings/custom-bundles/${encodeURIComponent(id)}`);
+  }
+  /** New-mail notifications: `people`, `detail`, or one bundle's switch (`bundle` with `on`). */
+  mailNotify(body: Partial<Pick<MailNotify, "people" | "detail">> & { bundle?: string; on?: boolean }) {
+    return this.req<MailNotify>("PUT", "/mail/settings/notify", body);
+  }
+  /** When a bundle's mail shows in the Inbox. */
+  mailBundleDelivery(bundle: string, d: BundleDelivery) {
+    return this.req<Record<string, BundleDelivery>>("PUT", `/mail/settings/bundles/${encodeURIComponent(bundle)}`, d);
+  }
+  /** The owner's snooze times (what "Tomorrow" and the rest mean). */
+  mailSnoozeTimes(times: Partial<SnoozeTimes>) {
+    return this.req<SnoozeTimes>("PUT", "/mail/settings/snooze", times);
   }
   /** Pin or unpin a mail: kept on the hub only. */
   mailPin(id: string, pinned: boolean) {
