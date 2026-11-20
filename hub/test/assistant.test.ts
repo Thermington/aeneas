@@ -11,7 +11,7 @@ import { addOwnTailnet, commandEnv, findHost, isPrivateHost, isReadOnly, loadHos
 import { hubSecretValues } from "../src/secrets.js";
 import { planWindow } from "../src/ai/history.js";
 import { fetchPage, htmlToText, isNonPublicAddress, pageReads, webSearch } from "../src/ai/web.js";
-import type { ChatOutput } from "../src/ai/index.js";
+import { unshownNumbers, type ChatOutput } from "../src/ai/index.js";
 
 // 1x1 transparent PNG
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -419,23 +419,36 @@ test("host actions: a held command is never reported as if it ran, and one reply
   } finally { setBackendOverride(null); t.cleanup(); }
 });
 
-test("host actions: on Windows a command wrapped in powershell -Command is sent back; the PowerShell itself reads at once", async () => {
+test("host actions: on Windows the PowerShell inside powershell -Command is what is checked, run and shown", async () => {
   const t = makeHub();
   fs.writeFileSync(path.join(t.dir, "hosts.json"), JSON.stringify([{ name: "laptop", ssh: "robin@10.0.0.17", os: "windows" }]));
   const ran: string[] = [];
   t.hub.ai.hosts.runner = async (_h: Host, cmd: string): Promise<RunResult> => { ran.push(cmd); return { exit_code: 0, output: "TotalVisibleMemorySize : 8388148", timed_out: false, ms: 5 }; };
   try {
-    // What the model sent on 2026-11-20: inside the double quotes the outer PowerShell emptied $_ before it ran.
+    // What the model sent on 2026-11-20, again after being told not to: inside the double quotes the outer PowerShell
+    // emptied $_ before it ran, and the read-only check could not see inside.
     const inner = "Get-CimInstance Win32_OperatingSystem | Select-Object LastBootUpTime, TotalVisibleMemorySize, FreePhysicalMemory; Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, Id, CPU, @{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}";
-    const wrapped = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: `powershell -NoProfile -Command "${inner}"`, purpose: "memory and top processes" } }, ctxFor(t, "w1"));
-    assert.match(wrapped.text, /already run in PowerShell/);
-    assert.equal(wrapped.ok, false);
-    assert.deepEqual(ran, [], "nothing ran and nothing waits for approval");
-    assert.equal(t.hub.ai.hosts.pendingFor("w1"), null);
-    const plain = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: inner, purpose: "memory and top processes" } }, ctxFor(t, "w1"));
-    assert.match(plain.text, /8388148/, "it ran at once and its output came back");
-    assert.deepEqual(ran, [inner]);
+    const wrapped = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: `powershell -NoProfile -ExecutionPolicy Bypass -Command "${inner}"`, purpose: "memory and top processes" } }, ctxFor(t, "w1"));
+    assert.equal(wrapped.ok, true);
+    assert.match(wrapped.text, /8388148/, "it ran at once and its output came back");
+    assert.match(wrapped.text, /leave that out/);
+    assert.deepEqual(ran, [inner], "the inner PowerShell ran, $_ and all");
+    // An encoded command cannot be shown, so it is sent back.
+    const encoded = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: "powershell -EncodedCommand ZQBjAGgAbwA=", purpose: "x" } }, ctxFor(t, "w2"));
+    assert.equal(encoded.ok, false);
+    assert.match(encoded.text, /send the PowerShell itself/);
+    // A change waits, and the card shows what will run.
+    const change = await runTool(api(t), { name: "run_command", arguments: { host: "laptop", command: `pwsh -c 'Restart-Service Spooler'`, purpose: "restart printing" } }, ctxFor(t, "w3"));
+    assert.match(change.text, /waiting_for_approval/);
+    assert.equal(t.hub.ai.hosts.pendingFor("w3")?.command, "Restart-Service Spooler");
+    assert.equal(ran.length, 1);
   } finally { t.cleanup(); }
+});
+
+test("assistant: a number with a unit counts as shown only as a number of its own, not inside 12th", () => {
+  const out: AiMessage[] = [{ role: "tool", content: "12th Gen Intel(R) Core(TM) i5-12600K   NumberOfCores 1   NumberOfLogicalProcessors 1" }];
+  assert.deepEqual(unshownNumbers("A 12 cores / 16 threads chip.", out), ["12 cores", "16 threads"]);
+  assert.deepEqual(unshownNumbers("4 processors with 1 core each.", out), []);
 });
 
 test("host actions: the Run button path approves by id; Cancel declines", async () => {

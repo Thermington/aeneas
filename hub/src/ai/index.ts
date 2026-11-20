@@ -151,7 +151,8 @@ export function unshownNumbers(reply: string, messages: AiMessage[]): string[] {
   const seen = messages.filter((m) => m.role !== "system").map((m) => m.content ?? "").join("\n");
   const out: string[] = [];
   for (const m of reply.matchAll(UNIT_NUMBER)) {
-    const shown = new RegExp(`(?<![\\d.,])${m[1].replace(/[.,]/g, "[.,]")}(?![\\d])`).test(seen);
+    // As a number of its own: the 12 of "12th Gen Intel" is not 12 cores (2026-11-20).
+    const shown = new RegExp(`(?<![\\d.,])${m[1].replace(/[.,]/g, "[.,]")}(?![\\d]|(?:st|nd|rd|th)\\b)`, "i").test(seen);
     if (!shown && !out.includes(m[0])) out.push(m[0]);
   }
   return out;
@@ -271,11 +272,14 @@ export class Gateway {
           messages.push({ role: "assistant", content: r.text }, { role: "user", content: "[Check from Aeneas, not typed by {{owner}}] Your reply says something was saved or changed, but no tool call in this reply did it. If {{owner}} asked for a change, make the tool call now; otherwise answer again without saying anything changed." });
           continue;
         }
-        // Numbers about a machine that no output shows, in a reply that held a command: once, answer from the output.
-        const unseen = held && !numbersChecked ? unshownNumbers(r.text, messages) : [];
+        // Numbers about a machine that no output shows, in a reply that ran or held a command on one: once, answer
+        // from the output (a held command's made-up results, 2026-11-19; "12 cores" from a CPU's name when the output
+        // said 1 core each, 2026-11-20).
+        const onMachine = held || actions.some((a) => a.tool === "run_command" || a.tool === "approve_command");
+        const unseen = onMachine && !numbersChecked ? unshownNumbers(r.text, messages) : [];
         if (unseen.length) {
           numbersChecked = true;
-          messages.push({ role: "assistant", content: r.text }, { role: "user", content: `[Check from Aeneas, not typed by {{owner}}] Your reply gives ${unseen.slice(0, 6).join(", ")}, which no command output here shows. The command that waits for approval has not run. Answer again with only what the output of the commands that ran shows; for a number you worked out from it, say what it came from.` });
+          messages.push({ role: "assistant", content: r.text }, { role: "user", content: `[Check from Aeneas, not typed by {{owner}}] Your reply gives ${unseen.slice(0, 6).join(", ")}, which no command output here shows.${held ? " The command that waits for approval has not run." : ""} Answer again with only what the output of the commands that ran shows; for a number you worked out from it, say what it came from.` });
           continue;
         }
         if (r.text.trim() || !actions.length) return { text: r.text, usage };
