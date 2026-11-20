@@ -295,11 +295,11 @@ function describe(m: MetricRef, r: Reader): MetricDef {
     case "sensor": {
       const s = r.sensor(m.name);
       const loc = s && typeof s.fields.location === "string" && s.fields.location.trim() ? `, ${s.fields.location.trim()}` : "";
-      return { label: `${m.name}${loc}`, unit: String(s?.fields.unit ?? ""), group: "Home", agg: "mean", chart: "line" };
+      return { label: `${m.name}${loc}`, unit: String(s?.fields.unit ?? ""), group: "Tech", agg: "mean", chart: "line" };
     }
     case "monitor": {
       const mon = r.monitor(m.id);
-      return { label: `${mon ? String(mon.fields.name) : "Monitor"} uptime`, unit: "%", group: "Homelab", agg: "pct", chart: "bar" };
+      return { label: `${mon ? String(mon.fields.name) : "Monitor"} uptime`, unit: "%", group: "Tech", agg: "pct", chart: "bar" };
     }
     case "tasks_done": return { label: "Tasks done", unit: "tasks", group: "Plan", agg: "count", chart: "bar" };
     case "captures": return { label: "Captures", unit: "captures", group: "Plan", agg: "count", chart: "bar" };
@@ -392,8 +392,8 @@ export function metricSeries(hub: Hub, metric: string, days: number, now: Date =
 
 export interface MetricInfo { id: string; label: string; unit: string; group: string; agg: Agg; chart: Chart; count: number; last_at: string | null }
 
-/** Every metric with at least one reading, grouped (Body, Logs, Plan, Home, Homelab) and named. */
-/** The module a metric belongs to: body logs to Health, sensors to Sensors, monitor uptime to Homelab; else the core. */
+/** Every metric with at least one reading, grouped (Body, Logs, Plan, Tech) and named. */
+/** The module a metric belongs to: body logs to Health, sensors to Sensors, monitor uptime to Machines; else the core. */
 export function metricModule(m: MetricRef): ModuleId | null {
   if (m.source === "log") return m.type === "activity" ? null : "health";
   if (m.source === "sensor") return "sensors";

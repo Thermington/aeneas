@@ -232,7 +232,7 @@ export const OWN_TOOL: Partial<Record<(typeof ITEM_KINDS)[number], string>> = {
 const CREATE_ITEM_KINDS = ITEM_KINDS.filter((k) => !OWN_TOOL[k]);
 
 type Row = { id?: string; fields: Record<string, any> };
-type OpsData = { monitors?: Row[]; incidents_open?: Row[]; incidents_7d?: number; uptime_24h?: { name: string; pct: number }[]; watches_due_30d?: Row[]; journal_recent?: Row[] };
+type OpsData = { monitors?: Row[]; incidents_open?: Row[]; incidents_7d?: number; uptime_24h?: { name: string; pct: number }[]; journal_recent?: Row[] };
 
 /**
  * `/ops` for the model: the whole picture in a few thousand characters. The raw route is about 25,000 characters
@@ -260,7 +260,6 @@ export function opsForModel(d: OpsData, filter?: string): unknown {
     })),
     incidents_last_7_days: d.incidents_7d ?? 0,
     uptime_below_100_today: (d.uptime_24h ?? []).filter((u) => u.pct < 100),
-    renewals_due_30d: (d.watches_due_30d ?? []).map((w) => ({ name: w.fields.name ?? w.fields.title, due: w.fields.due ?? w.fields.renews_at })),
     // With the outcome: a planned or failed change read as done without it.
     recent_changes: (d.journal_recent ?? []).slice(0, 5).map((j) => ({ host: j.fields.host, at: j.fields.at, what: j.fields.what, outcome: j.fields.outcome ?? "done" })),
   };
@@ -547,7 +546,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "ops_status", writes: false,
-    description: "Homelab status: every monitor (hosts, services, backups and their verifications) with id, state, detail and last error; open incidents with id and {{owner}}'s notes; uptime below 100% today; renewals due within 30 days; recent changes. filter narrows the monitors by name, type or host (e.g. backup, nas). history_hours (up to 168) adds each matching monitor's outages over that window, for questions like how often or since when something failed.",
+    description: "Tech status (machines and services): every monitor (hosts, services, backups and their verifications) with id, state, detail and last error; open incidents with id and {{owner}}'s notes; uptime below 100% today; recent changes. Renewals and bills are not here: use list_items with kind watch. filter narrows the monitors by name, type or host (e.g. backup, nas). history_hours (up to 168) adds each matching monitor's outages over that window, for questions like how often or since when something failed.",
     parameters: { type: "object", properties: { filter: { type: "string" }, history_hours: { type: "number" } } },
     run: async (api, a) => {
       const d = await call(api, "GET", "/ops");
@@ -1418,7 +1417,7 @@ export const TOOLS: ToolDef[] = [
     name: "run_command", writes: true, maxChars: 9000, cutMiddle: true,
     available: (cfg) => cfg.hostActions,
     description: "Run a shell command on one of {{owner}}'s machines (list_hosts). Windows hosts take PowerShell. Read-only commands (status, logs, listing, df, ping, Get-*) run at once. On Windows a read runs at once only as cmdlets joined by pipes: calculated columns that do arithmetic are fine (Select-Object Name,@{n='RAM_MB';e={[math]::Round($_.WorkingSet64/1MB)}}), but setting variables, $( ), ( ).Property and other script blocks make it wait for approval like a change. Anything that changes the system is held for {{owner}}'s approval: after calling, show them the exact command and why, then stop and wait. Never use sudo unless they say it works without a password. Always give purpose, and rollback for a change.",
-    parameters: { type: "object", properties: { host: { type: "string" }, command: { type: "string" }, purpose: { type: "string", description: "one line: why" }, rollback: { type: "string", description: "how to undo it, for changes" } }, required: ["host", "command", "purpose"] },
+    parameters: { type: "object", properties: { host: { type: "string" }, command: { type: "string" }, purpose: { type: "string", description: "one line: why" }, rollback: { type: "string", description: "how to undo it, for changes" }, lookup: { type: "boolean", description: "true when it only reads, counts or lists and changes nothing, though it needs approval; it then stays out of the machine's history of changes" } }, required: ["host", "command", "purpose"] },
     run: async (_api, a, ctx) => {
       if (!ctx.hosts) return { error: "host commands are off" };
       const host = ctx.hosts.host(str(a.host) ?? "");
@@ -1436,7 +1435,7 @@ export const TOOLS: ToolDef[] = [
       if (turn.ran.length) return { error: "a change already ran in this reply: tell {{owner}} its result first; propose the next change in a later reply, after they answer" };
       // One held command per reply: another would replace the card {{owner}} is already shown.
       if (turn.proposed.size) return { error: "a command already waits for {{owner}}'s yes in this reply, and it has not run, so there is no output from it. Nothing else is proposed until they answer. Answer now from the output of the commands that ran." };
-      const action = ctx.hosts.propose(ctx.sessionId, host, command, purpose, str(a.rollback) ?? null);
+      const action = ctx.hosts.propose(ctx.sessionId, host, command, purpose, str(a.rollback) ?? null, a.lookup === true);
       turn.proposed.add(action.id);
       const approval = approvalOf({ id: action.id, host: host.name, command, purpose });
       ctx.onApproval?.(approval);
@@ -1480,8 +1479,24 @@ export const TOOL_MODULE: Record<string, ModuleId | ModuleId[]> = {
 
 /** Whether a tool's module is on (a core tool always is). */
 export function toolOn(name: string, on: ModuleCheck = () => true): boolean {
+  if ((on as FilingCheck).also?.has(name)) return true;
   const m = TOOL_MODULE[name];
   return !m || (Array.isArray(m) ? m.some(on) : on(m));
+}
+
+/** A module check that also lets through a few tools of modules it leaves off (`also`): see filingCheck. */
+type FilingCheck = ModuleCheck & { also?: Set<string> };
+
+/**
+ * The modules capture filing may use: no web (a diary line never becomes a search), none of the Machines module's
+ * tools (a capture never runs a command or sets up a check) and no offline reference. One Machines tool stays, while
+ * Machines is on: journal_entry, so "replaced the fan on the NAS" goes into that machine's History; it only writes
+ * a line and runs nothing on any machine (since 2026-11-19).
+ */
+export function filingCheck(on: ModuleCheck): ModuleCheck {
+  const check: FilingCheck = (id) => id !== "web" && id !== "homelab" && id !== "reference" && on(id);
+  if (on("homelab")) check.also = new Set(["journal_entry"]);
+  return check;
 }
 
 export function availableTools(cfg: Config | null, tools: ToolDef[] = TOOLS, on: ModuleCheck = () => true): ToolDef[] {
@@ -1624,10 +1639,10 @@ export function toolGuide(on: ModuleCheck = () => true, opts: { voiceModel?: boo
     "Diary: every quick capture {{owner}} makes is a timestamped line in a daily note at Diary/YYYY-MM-DD.md (what they did, ate, planned, thought); a capture before 4 AM goes to the day before. For recall questions (when did I last..., what did I do on..., how often...) use the diary tool (with a query for a word, a person or a place); quote the date and time you found. The diary is the record of when {{owner}} wrote each line: never change a diary note's path or title and never move or reword its lines. When {{owner}} says something happened on another day, put it on that day's calendar (an all-day event) instead.",
     "People: {{owner}}'s contacts are in People (two-way with Apple Contacts). When someone is named, look them up with people. Contact details {{owner}} gives (address, phone, email, birthday, anniversary or another date to remember, where they work) go to save_person; likes, habits, history and anything else about them go to remember with person=their name, so they show on that person.",
     "Plans: when {{owner}} mentions a plan on a day (going somewhere, seeing someone, an appointment), put it on their calendar with create_item kind=event right away, then say so in one sentence; they can tell you to drop it. Name who they are with in the title. Block time only when {{owner}} gave it: a clock time or range is a timed event (a start time alone gets one hour, and say so); a block they ask for (\"block the evening\") is that block. A plan with only a day or a part of the day (tonight, Saturday, this afternoon) is an all-day event on that date (all_day true, start that day at 00:00, end the next day at 00:00, both with the local offset) with the part of the day in the title (\"Tonight: dinner at Luigi's with Jamie\"); it marks the day without blocking any time. Never invent a time. Something {{owner}} already did on a day (an outing, seeing people) goes on the calendar the same way, as an all-day event on the day it happened. When that day already has the same plan or outing (get_week shows it), change that event's title with update_item (keeping its times) instead of adding a second one.",
-    "Memory: when {{owner}} tells you something lasting about themself, their gear, their hosts or their preferences, save it with remember without being asked, then confirm in a few words what you saved; do not start a conversation about it. In troubleshooting, record each result with ledger_update and never suggest anything listed as ruled out." + (on("homelab") ? " When a troubleshooting fix works, or {{owner}} tells you how a host is set up, write it with runbook_note; never for something you only looked up to answer a question. {{owner}} calls these fix notes (the Machines screen), so say fix notes, not runbook." : ""),
+    "Memory: when {{owner}} tells you something lasting about themself, their gear, their hosts or their preferences, save it with remember without being asked, then confirm in a few words what you saved; do not start a conversation about it. In troubleshooting, record each result with ledger_update and never suggest anything listed as ruled out." + (on("homelab") ? " When a troubleshooting fix works, or {{owner}} tells you how a host is set up, write it with runbook_note; never for something you only looked up to answer a question. {{owner}} calls these fix notes (on each machine's page under Tech), so say fix notes, not runbook. When {{owner}} says they changed something on a machine themself, write it with journal_entry: it shows in that machine's History." : ""),
     on("web") && has("web_search") && "Facts you do not know: search the web (web_search, then read_web_page on the best result) instead of answering from memory when it is about versions, releases, docs, prices, news, or anything you are unsure of. Name the source. If you still do not know, say so.",
     on("homelab") && has("run_command") && "People {{owner}} helps: their computers are machines too (helping lists them, with the passwords they saved for {{owner}}); when {{owner}} asks about someone's computer or phone, start with helping.",
-    on("homelab") && has("run_command") && "Machines: you can run commands on {{owner}}'s hosts with run_command (list_hosts names them). Check before advising: look at status, logs and config yourself rather than asking them to paste it. Read-only commands run at once. A change waits for their approval: show the exact command and why, then stop. When their next message says yes, call approve_command. Changes are journaled automatically.",
+    on("homelab") && has("run_command") && "Machines: you can run commands on {{owner}}'s hosts with run_command (list_hosts names them). Check before advising: look at status, logs and config yourself rather than asking them to paste it. Read-only commands run at once. A change waits for their approval: show the exact command and why, then stop. When their next message says yes, call approve_command. Changes go into that machine's History automatically; a command that needs approval but only reads, counts or lists gets lookup=true, so it stays out.",
     "The hub's own software: when {{owner}} asks about updates or to update the hub (you, the app's server), use update_hub. The apps on their devices (the Windows, Android, iPhone, Mac and Watch apps): update_apps, which also says which version each one runs.",
     "Images {{owner}} sends are attached to their message; read them directly (screenshots, error dialogs, photos of hardware or wiring).",
     on("wiki") && "Project wiki (the repository docs and Confluence spaces {{owner}} mirrored to the hub): for anything about those projects, wiki_search with one to three key words, then wiki_page on the best hits. Answer from the pages and name them.",

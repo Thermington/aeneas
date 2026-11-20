@@ -172,7 +172,7 @@ export function App() {
   else if (p.startsWith("/reminders")) view = <Tasks focus={route.params.get("focus")} />; // older links: reminders are tasks
   else if (p === "/notes/map") view = <NotesMap />;
   else if (p.startsWith("/notes")) view = <Notes id={route.parts[1]} />;
-  else if (p.startsWith("/hosts")) view = <Hosts host={route.parts[1]} runbookId={route.params.get("runbook")} />;
+  else if (p.startsWith("/hosts")) view = <Hosts host={route.parts[1]} runbookId={route.params.get("runbook")} focus={route.params.get("focus")} />;
   else if (p.startsWith("/projects")) view = <Projects id={route.parts[1]} />;
   else if (p.startsWith("/procedures")) view = <Procedures id={route.parts[1]} />;
   else if (p.startsWith("/music")) view = <Music id={route.parts[1]} />;

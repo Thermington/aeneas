@@ -14,12 +14,12 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
     case inbox, tasks, reminders, week, renewals, dashboard, planRules, now
     // Notes
     case notes, memory, people, reference
-    // Homelab
-    case ops, hosts, journal, snippets
+    // Tech
+    case ops, hosts, sensors, journal, snippets
     // Making
     case projects, wiki, procedures, music, quiz, images
     // Body and home
-    case health, logs, pet, food, sensors
+    case health, logs, pet, food
     // Life admin
     case lists, career, games, films, calc
     case settings
@@ -43,7 +43,7 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
         case .memory: return "Memory"
         case .people: return "People"
         case .reference: return "Reference"
-        case .ops: return "Ops"
+        case .ops: return "Overview"
         case .hosts: return "Machines"
         case .journal: return "Change journal"
         case .snippets: return "Snippets"
@@ -122,13 +122,29 @@ enum Section: String, CaseIterable, Identifiable, Hashable, Codable {
     static let areas: [LibraryArea] = [
         LibraryArea(title: "Plan", sections: [.inbox, .tasks, .week, .renewals, .dashboard]),
         LibraryArea(title: "Notes", sections: [.notes, .memory, .people, .reference]),
-        LibraryArea(title: "Homelab", sections: [.ops, .hosts, .journal, .snippets]),
+        // Since 2026-11-19 one screen: a card per machine, service and place, each opening its page (checks, readings,
+        // fix notes, changes, snippets). Machine pages, the change journal and snippets stay sections for links,
+        // notifications and Spotlight, reached from the Overview. With Machines off, the home sensors are Sensors.
+        LibraryArea(title: "Tech", sections: [.ops, .sensors]),
         LibraryArea(title: "Making", sections: [.projects, .wiki, .images, .procedures, .music, .quiz]),
-        LibraryArea(title: "Body and home", sections: [.health, .logs, .pet, .food, .sensors]),
+        LibraryArea(title: "Body and home", sections: [.health, .logs, .pet, .food]),
         LibraryArea(title: "Life admin", sections: [.lists, .games, .films, .calc]),
     ]
     /// iPad and Mac: the tabs first, then the Library areas as sidebar groups.
     static let primary: [Section] = [.today, .assistant, .capture, .search]
+
+    /// A module that, while on, takes this screen out of the Library: the Overview holds every reading when Machines
+    /// is on, so Sensors is listed only while it is off.
+    var hiddenWhileOn: AppModule? { self == .sensors ? .homelab : nil }
+
+    /// The Library row a screen counts as: the machines list, the change journal and snippets are the Tech Overview's
+    /// own pages (reached from it, or by a link), so the Tech area stays open on them.
+    var libraryRow: Section {
+        switch self {
+        case .hosts, .journal, .snippets: return .ops
+        default: return self
+        }
+    }
 
     /// The hub module a screen belongs to; nil for the core, which is always on.
     var module: AppModule? {
@@ -515,10 +531,11 @@ final class AppModel: ObservableObject {
     /// Whether a screen shows: core screens always, module screens while their module is on.
     func shows(_ s: Section) -> Bool { s.module.map(isOn) ?? true }
 
-    /// The Library with screens of switched off modules left out, and areas with nothing left dropped.
+    /// The Library with screens of switched off modules left out (and Sensors while Machines is on), and areas with
+    /// nothing left dropped.
     var libraryAreas: [LibraryArea] {
         Section.areas.compactMap { a in
-            let shown = a.sections.filter(shows)
+            let shown = a.sections.filter { shows($0) && !($0.hiddenWhileOn.map(isOn) ?? false) }
             return shown.isEmpty ? nil : LibraryArea(title: a.title, sections: shown)
         }
     }

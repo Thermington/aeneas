@@ -9,7 +9,7 @@ struct JournalView: View {
     @State private var editing: Entity?
     @State private var creating = false
 
-    private var entries: [Entity] { engine.list(.journal).sorted(by: JournalOrder.newestFirst) }
+    private var entries: [Entity] { engine.list(.journal).filter(JournalOrder.isChange).sorted(by: JournalOrder.newestFirst) }
 
     private var shown: [Entity] {
         entries.filter { e in
@@ -113,6 +113,11 @@ struct JournalView: View {
 
 enum JournalOrder {
     static func newestFirst(_ a: Entity, _ b: Entity) -> Bool { a.str("at", a.created_at) > b.str("at", b.created_at) }
+
+    /// A change someone made. Since 2026-11-19 the hub also writes lines about what happened (`source: hub`, a reading
+    /// that went out of bounds and back) and approved commands that only looked (`lookup`): lists of changes leave both
+    /// out (packages/shared/CONTRACT.md, journal).
+    static func isChange(_ e: Entity) -> Bool { e.str("source") != "hub" && e.bool("lookup") != true }
 }
 
 /// One journal entry: risk and outcome, what changed, the command with Copy, and the rollback.

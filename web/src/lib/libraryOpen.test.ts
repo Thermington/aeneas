@@ -13,4 +13,9 @@ describe("Library areas open on this device", () => {
     expect(parseOpen('{"Plan":true}')).toEqual([]);
     expect(parseOpen('["Plan", 3, "Making"]')).toEqual(["Plan", "Making"]);
   });
+
+  it("keeps an area opened as Homelab open after its rename to Tech", () => {
+    expect(parseOpen('["Homelab", "Plan"]')).toEqual(["Tech", "Plan"]);
+    expect(parseOpen('["Tech", "Homelab"]')).toEqual(["Tech"]);
+  });
 });

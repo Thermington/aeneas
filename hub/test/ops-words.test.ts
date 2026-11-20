@@ -81,6 +81,6 @@ test("ops words: smaller review fixes (Windows ping, journal window, long sensor
     const now = new Date("2026-11-13T14:00:00Z");
     th.hub.store.create("incident", { monitor_id: "x", name: "nas ping", opened_at: "2026-11-13T03:00:00Z", closed_at: "2026-11-13T03:20:00Z", checks_failed: 3 });
     th.hub.store.create("incident", { monitor_id: "y", name: "Ollama", opened_at: "2026-11-11T03:00:00Z", closed_at: "2026-11-11T03:20:00Z", checks_failed: 3 });
-    assert.equal(opsLine(th.hub, now), "Homelab: 1 incident came and went in the last 24 h");
+    assert.equal(opsLine(th.hub, now), "Tech: 1 incident came and went in the last 24 h");
   } finally { th.cleanup(); }
 });

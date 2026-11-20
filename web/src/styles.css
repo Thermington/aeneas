@@ -560,11 +560,41 @@ table.parts tr.missing td:first-child { color: var(--warn); }
 .uptime-strip .fail { background: var(--danger); }
 .uptime-strip .none { background: transparent; }
 .strip-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 2px; }
-.ops-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.ops-lists { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
 .ops-lists .card { margin: 0; }
 .ops .item.incident.open { border-left: 4px solid var(--danger); }
+/* Tech: what needs a look, one row each with its fix button on the right; cards per machine with CPU, memory and disk bars. */
+.needs-look { margin-top: 12px; }
+.look-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--border); }
+.needs-look h2 + .look-row { border-top: 0; padding-top: 4px; }
+.look-fix { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.look-row.acked .look-title { color: var(--text-2); }
+.look-title { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; font-weight: 600; overflow-wrap: anywhere; }
+.look-title a { font-weight: 400; }
+.look-row .row { margin: 4px 0 0 !important; }
+.ops-grid a.card.thing { display: block; text-decoration: none; }
+.ops-grid a.card.thing:hover { border-color: var(--accent); }
+.ops-grid a.card.thing.down:hover { border-color: var(--danger); }
+.stat-bar { margin-top: 6px; }
+.stat-bar .bar { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 3px; }
+.stat-bar .bar i { display: block; height: 100%; background: var(--text-2); }
+.stat-bar .bar i.hi { background: var(--danger); }
+/* History: one line each with a dot for what kind of thing happened; planned steps wait above it with Done. */
+.history { display: grid; gap: 10px; margin: 0; }
+.history-row { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.history-row > .dot { margin-top: 6px; }
+.history-row details { margin-top: 4px; }
+.dot.warn { background: var(--warn); }
+.card.planned { border-color: var(--warn); }
+.planned-row { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); }
+.planned-row pre.cmd { margin: 4px 0; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+button.link.danger { color: var(--danger); }
+@media (max-width: 480px) {
+  .look-row { flex-direction: column; gap: 6px; }
+  .planned-row { flex-direction: column; gap: 6px; }
+}
 @media (max-width: 767px) {
-  .ops-lists { grid-template-columns: 1fr; }
   .ops-light .label { font-size: 26px; }
   .ops-light .detail { font-size: 18.7px; }
 }

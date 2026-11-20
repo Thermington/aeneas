@@ -73,7 +73,8 @@ export function hostsSummary(store: Store): HostSummary[] {
   for (const h of hostFacts(store).keys()) row(h);
   for (const r of store.list({ kind: "runbook", limit: 100000 })) if (r.fields.host) row(String(r.fields.host)).runbooks++;
   for (const j of store.list({ kind: "journal", limit: 100000 })) {
-    if (!j.fields.host) continue;
+    // Changes only: the hub's own lines (a reading's alert) and approved lookups are history, not changes.
+    if (!j.fields.host || j.fields.source === "hub" || j.fields.lookup === true) continue;
     const r = row(String(j.fields.host));
     r.journal_entries++;
     const at = String(j.fields.at ?? "");
@@ -219,7 +220,7 @@ export function hostMemory(store: Store, hosts: string[], budget = MEMORY_BUDGET
   for (const host of hosts) {
     const rb = runbookFor(store, host);
     const journal = store.list({ kind: "journal", limit: 100000 })
-      .filter((j) => String(j.fields.host ?? "").toLowerCase() === host.toLowerCase())
+      .filter((j) => String(j.fields.host ?? "").toLowerCase() === host.toLowerCase() && j.fields.lookup !== true)
       .sort((a, b) => String(b.fields.at).localeCompare(String(a.fields.at)))
       .slice(0, 3)
       .map((j) => ({ at: String(j.fields.at), what: String(j.fields.what), risk: String(j.fields.risk), outcome: String(j.fields.outcome ?? "done"), ...(j.fields.rollback ? { rollback: String(j.fields.rollback) } : {}) }));

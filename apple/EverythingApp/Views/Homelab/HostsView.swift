@@ -1,7 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import EACore
 
 /// Machines with their fix notes (kind `runbook`), change journal, snippets and monitors. Find a host, or type a new name to start one.
+/// Since 2026-11-19 not in the Library: the Overview has a card per machine. This list stays the Machines section for
+/// links to it.
 struct HostsView: View {
     @EnvironmentObject var engine: SyncEngine
     @State private var hubHosts: [HostSummary] = []
@@ -120,46 +123,161 @@ struct HostRow: View {
     }
 }
 
-// MARK: Host page
+// MARK: Machine page
 
+/// The page of one machine, service or place (its card on the Overview): how it is, its checks with Propose a fix and
+/// Acknowledge while one is down, its readings now with their graphs and bounds, its History (steps planned, a line
+/// for a change made by hand, and everything that happened, newest first), then its fix notes and snippets. Checks,
+/// incidents and the history come from the synced store, so the page still shows them when the hub cannot be reached;
+/// the grouping (GET /ops `things`) and the readings come from the hub.
 struct HostDetailView: View {
     @EnvironmentObject var engine: SyncEngine
+    @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var feed = OpsBoardFeed.shared
+    @ObservedObject private var readingsFeed = ReadingsFeed.shared
     var host: String
 
     @State private var newRunbook = false
     @State private var addingEntry = false
-    @State private var editingEntry: Entity?
     @State private var newSnippet = false
     @State private var newMonitor = false
+    @State private var acking: Entity?
+    /// Checks being run by hand right now, and what went wrong with a hand check.
+    @State private var checking: Set<String> = []
+    @State private var checkFailures: [String: CheckFailure] = [:]
+    @State private var editingSensor: Entity?
+    @State private var proposingSensor: String?
+    @State private var sensorError: String?
+    @State private var exportDoc: SensorCSVFile?
+    @State private var exportName = ""
+    /// A planned step about to be dropped, and one of your own history lines about to be deleted, each asked first.
+    @State private var dropping: Entity?
+    @State private var deletingLine: Entity?
 
-    private let journalPreview = 10
+    /// The name as the hub keys it.
+    private var key: String { Homelab.hostKey(host) }
+    /// The hub's thing of this name: nil before the board is in, from a hub before 2026-11-19, or for a name it does not know.
+    private var hubThing: TechThing? { feed.board?.things?.first { $0.name == key } }
 
     private var runbooks: [Entity] { engine.list(.runbook).filter { Homelab.sameHost($0.str("host"), host) }.sorted { $0.updated_at > $1.updated_at } }
-    private var journal: [Entity] { engine.list(.journal).filter { Homelab.sameHost($0.str("host"), host) }.sorted(by: JournalOrder.newestFirst) }
     private var snippets: [Entity] {
         engine.list(.snippet).filter { Homelab.sameHost($0.str("host"), host) }
             .sorted { $0.str("title").localizedCaseInsensitiveCompare($1.str("title")) == .orderedAscending }
     }
-    private var monitors: [Entity] {
-        engine.list(.monitor).filter { Homelab.sameHost($0.str("host"), host) }
-            .sorted { (MonitorStatus($0).rank, $0.str("name")) < (MonitorStatus($1).rank, $1.str("name")) }
+
+    /// The hub's grouping, and any check that names this machine: one added here a moment ago is not in the grouping
+    /// until the next board. Without a grouping, a check with no host is this machine's when its target names it.
+    private var checks: [Entity] {
+        let thing = hubThing
+        let ids = Set(thing?.monitors ?? [])
+        return engine.list(.monitor).filter { m in
+            if ids.contains(m.id) { return true }
+            let h = m.str("host")
+            return Homelab.sameHost(h.isEmpty && thing == nil ? Tech.targetHost(type: m.str("type"), target: m.str("target")) : h, key)
+        }
+        .sorted { (MonitorStatus($0).rank, $0.str("name").lowercased()) < (MonitorStatus($1).rank, $1.str("name").lowercased()) }
+    }
+
+    /// CPU, memory and disks first, then the rest; none while Sensors is off.
+    private var readings: [Entity] {
+        guard model.isOn(.sensors) else { return [] }
+        let thing = hubThing
+        let names = Set(thing?.sensors ?? [])
+        return engine.list(.sensor).filter { s in names.contains(s.str("name")) || (thing == nil && Homelab.sameHost(s.str("location"), key)) }
+            .sorted { (Tech.readingOrder($0.str("name")), $0.str("name")) < (Tech.readingOrder($1.str("name")), $1.str("name")) }
+    }
+
+    /// The hub's thing, or one worked out from this page's checks and readings (a place stays a place offline).
+    private func thing(_ checks: [Entity], _ readings: [Entity]) -> TechThing {
+        hubThing ?? Tech.localThings(monitors: checks, sensors: readings).first { $0.name == key }
+            ?? TechThing(name: key, label: host, kind: .machine, monitors: checks.map(\.id), sensors: readings.map { $0.str("name") })
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            page
+                #if DEBUG && os(iOS)
+                // `-EAScrollTo history` (DebugHooks): the History, for screenshots, once the readings are in.
+                .task {
+                    guard let to = UserDefaults.standard.string(forKey: "EAScrollTo") else { return }
+                    try? await Task.sleep(for: .seconds(3))
+                    proxy.scrollTo(to, anchor: .top)
+                }
+                #endif
+        }
+    }
+
+    @ViewBuilder
+    private var page: some View {
+        let checks = self.checks
+        let readings = self.readings
+        let me = thing(checks, readings)
+        let hubBackup = me.hub ? feed.board?.hub_backup ?? [] : []
+        let status = Tech.status(of: me, monitors: Dictionary(checks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
+                                 sensors: Dictionary(readings.map { ($0.str("name"), $0) }, uniquingKeysWith: { a, _ in a }), hubBackup: hubBackup)
+        let incidents = engine.list(.incident)
+        let open = incidents.filter { ($0.string("closed_at") ?? "").isEmpty }
+        let uptime = feed.board?.uptimeByName ?? [:]
+        let ids = Set(checks.map(\.id))
+        let journal = engine.list(.journal)
+        let history = TechHistory.items(journal: journal, incidents: incidents, runbooks: engine.list(.runbook),
+                                        hostOf: { ids.contains($0) ? key : nil }, host: key)
+        let planned = TechHistory.plannedSteps(journal, host: key)
         List {
-            if !monitors.isEmpty {
-                SwiftUI.Section("Monitors") {
-                    ForEach(monitors) { m in
-                        NavigationLink { MonitorDetailView(id: m.id) } label: { MonitorRow(monitor: m, uptime: nil) }
-                            .deleteSwipe(m.id)
+            SwiftUI.Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    TechStatusPill(status: status)
+                    let words = about(me)
+                    if !words.isEmpty { Text(words).font(.subheadline).foregroundStyle(.secondary) }
+                }
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .combine)
+            }
+
+            if !checks.isEmpty || !hubBackup.isEmpty || me.kind != .place {
+                SwiftUI.Section {
+                    if !hubBackup.isEmpty { HubBackupRow(lines: hubBackup) }
+                    if checks.isEmpty && hubBackup.isEmpty {
+                        Text("No checks on \(me.label). A ping says whether it is on; a port or web address says whether a service on it answers.")
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
+                    ForEach(checks) { m in
+                        NavigationLink { MonitorDetailView(id: m.id) } label: {
+                            if MonitorStatus(m) == .down {
+                                DownRow(monitor: m, incident: MonitorText.openIncident(for: m, in: open), checking: checking.contains(m.id),
+                                        checkError: failure(m), onAck: { acking = $0 })
+                            } else {
+                                MonitorRow(monitor: m, uptime: m.str("type") == "backup" ? nil : uptime[m.str("name")],
+                                           checking: checking.contains(m.id), checkError: failure(m))
+                            }
+                        }
+                        .modifier(CheckNowActions(busy: checking.contains(m.id), onDelete: { Task { await engine.softDelete(m.id) } }) { Task { await check(m) } })
+                    }
+                    Button("Add check") { newMonitor = true }
+                } header: {
+                    Text("Checks")
                 }
             }
 
+            if !readings.isEmpty || me.reachable {
+                SwiftUI.Section {
+                    if readings.isEmpty {
+                        Text("No readings yet. With Sensors on, the hub reads its CPU, memory, disks and temperatures every 10 minutes.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    if let sensorError { Text(sensorError).font(.caption).foregroundStyle(.red) }
+                    ForEach(readings) { s in readingCard(s, on: me) }
+                } header: {
+                    Text("Now")
+                }
+            }
+
+            historySection(history, planned: planned)
+
             SwiftUI.Section {
                 if runbooks.isEmpty {
-                    Text("No fix notes for \(host) yet. They are what broke on this machine and how it was fixed. The assistant writes them when you finish a troubleshooting chat about \(host), or start them yourself.")
+                    Text("No fix notes for \(me.label) yet. They are what broke here and how it was fixed. The assistant writes them when you finish a troubleshooting chat about \(me.label), or start them yourself.")
                         .font(.subheadline).foregroundStyle(.secondary)
                     Button("Start fix notes") { newRunbook = true }
                 } else {
@@ -173,24 +291,8 @@ struct HostDetailView: View {
             }
 
             SwiftUI.Section {
-                if journal.isEmpty {
-                    Text("Nothing logged for \(host).").font(.subheadline).foregroundStyle(.secondary)
-                }
-                ForEach(journal.prefix(journalPreview)) { e in
-                    JournalRow(entry: e, showHost: false, onEdit: { editingEntry = e })
-                        .deleteSwipe(e.id)
-                }
-                if journal.count > journalPreview {
-                    NavigationLink("All \(journal.count) changes") { HostJournalView(host: host) }
-                }
-                Button("Log a change") { addingEntry = true }
-            } header: {
-                Text("Changes")
-            }
-
-            SwiftUI.Section {
                 if snippets.isEmpty {
-                    Text("No snippets for \(host).").font(.subheadline).foregroundStyle(.secondary)
+                    Text("No snippets for \(me.label).").font(.subheadline).foregroundStyle(.secondary)
                 }
                 ForEach(snippets) { s in
                     NavigationLink { SnippetDetailView(id: s.id) } label: { SnippetRow(snippet: s, showHost: false) }
@@ -201,14 +303,14 @@ struct HostDetailView: View {
                 Text("Snippets")
             }
         }
-        .navigationTitle(host)
+        .navigationTitle(me.label)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("Check", systemImage: "waveform.path.ecg") { newMonitor = true }
                     Button("Change", systemImage: "list.bullet.clipboard") { addingEntry = true }
                     Button("Snippet", systemImage: "chevron.left.forwardslash.chevron.right") { newSnippet = true }
                     Button("Fix notes", systemImage: "book") { newRunbook = true }
-                    Button("Monitor", systemImage: "waveform.path.ecg") { newMonitor = true }
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
@@ -216,46 +318,124 @@ struct HostDetailView: View {
         }
         .sheet(isPresented: $newRunbook) { RunbookEditor(entry: nil, host: host) }
         .sheet(isPresented: $addingEntry) { JournalEditor(entry: nil, fixedHost: host) }
-        .sheet(item: $editingEntry) { e in JournalEditor(entry: e) }
         .sheet(isPresented: $newSnippet) { SnippetEditor(entry: nil, host: host) }
-        .sheet(isPresented: $newMonitor) { MonitorEditor(monitor: nil, host: host) }
-        .refreshable { await engine.sync(); await refreshMonitors() }
-        // Each check's own fields (when it ran, the error, a backup's job lines) reach no device by sync, and Ops
-        // stops loading its board once a page is pushed: read this machine's monitors every 30 s while it is shown.
+        .sheet(isPresented: $newMonitor) { MonitorEditor(monitor: nil, host: key) }
+        .sheet(item: $acking) { inc in AckSheet(incident: inc) }
+        .sheet(item: $editingSensor) { s in SensorSettingsView(sensor: s) }
+        .fileExporter(isPresented: Binding(get: { exportDoc != nil }, set: { if !$0 { exportDoc = nil } }), document: exportDoc,
+                      contentType: .commaSeparatedText, defaultFilename: exportName) { _ in exportDoc = nil }
+        .confirmationDialog("Drop this planned step?", isPresented: Binding(get: { dropping != nil }, set: { if !$0 { dropping = nil } }),
+                            titleVisibility: .visible, presenting: dropping) { e in
+            Button("Didn't do it", role: .destructive) { Task { await engine.softDelete(e.id) } }
+        } message: { _ in
+            Text("It did not happen, so it stays out of the history.")
+        }
+        .confirmationDialog("Delete this line from the history?", isPresented: Binding(get: { deletingLine != nil }, set: { if !$0 { deletingLine = nil } }),
+                            titleVisibility: .visible, presenting: deletingLine) { e in
+            Button("Delete", role: .destructive) { Task { await engine.softDelete(e.id) } }
+        }
+        .refreshable { await engine.sync(); await load(maxAge: 0) }
+        // Each check's own fields (when it ran, the error, a backup's job lines) and each reading's latest value reach
+        // no device by sync, and the Overview stops loading once a page is pushed: read them every 30 s while shown.
         .task(id: scenePhase.refreshes) {
             guard scenePhase.refreshes else { return }
             while !Task.isCancelled {
-                await refreshMonitors()
+                await load(maxAge: 25)
                 try? await Task.sleep(for: .seconds(30))
             }
         }
     }
 
-    private func refreshMonitors() async {
-        let ids = monitors.map(\.id)
-        guard !ids.isEmpty, let c = engine.client else { return }
-        await engine.absorb(await Homelab.fresh(ids, client: c))
+    /// One reading on this page, named as people say it ("Disk /"). Before the first load the card says its graph comes
+    /// from the hub; after it, an empty series is fewer than 2 readings.
+    private func readingCard(_ s: Entity, on me: TechThing) -> some View {
+        let points: [SensorPoint]? = readingsFeed.loadedAt == nil ? nil : readingsFeed.series[s.id] ?? []
+        let title: String? = me.kind == .place ? nil : Tech.readingLabel(s.str("name"), thing: me.name)
+        return SensorCard(sensor: s, points: points, title: title, showLocation: false,
+                          onSettings: { editingSensor = s }, onExport: { Task { await export(s) } },
+                          onPropose: { Task { await propose(s) } }, proposing: proposingSensor == s.id)
     }
-}
 
-/// Every journal entry for one host.
-struct HostJournalView: View {
-    @EnvironmentObject var engine: SyncEngine
-    var host: String
-    @State private var editing: Entity?
-    @State private var adding = false
-
-    var body: some View {
-        List {
-            ForEach(engine.list(.journal).filter { Homelab.sameHost($0.str("host"), host) }.sorted(by: JournalOrder.newestFirst)) { e in
-                JournalRow(entry: e, showHost: false, onEdit: { editing = e })
-                    .deleteSwipe(e.id)
+    /// History: steps planned on top (Done, Didn't do it), a line for a change made by hand, then what happened.
+    private func historySection(_ history: [HistoryItem], planned: [Entity]) -> some View {
+        SwiftUI.Section {
+            if !planned.isEmpty { Text("Planned, not done yet").font(.subheadline.weight(.semibold)).id("history") }
+            ForEach(planned) { e in
+                PlannedStepRow(entry: e, onDone: { markDone(e) }, onDrop: { dropping = e })
             }
+            NoteChangeRow(host: key).id(planned.isEmpty ? "history" : "note-change")
+            HistoryRows(items: history, onDelete: { deletingLine = $0 })
+        } header: {
+            Text("History")
         }
-        .navigationTitle("\(host) changes")
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { adding = true } label: { Label("Add entry", systemImage: "plus") } } }
-        .sheet(item: $editing) { e in JournalEditor(entry: e) }
-        .sheet(isPresented: $adding) { JournalEditor(entry: nil, fixedHost: host) }
+    }
+
+    /// Done on a planned step: it happened now, so it joins the history.
+    private func markDone(_ e: Entity) {
+        Task { _ = await engine.update(e.id, fields: ["outcome": .string("done"), "at": .string(ISO.now())]) }
+    }
+
+    /// "The machine the hub runs on; the hub reads it and the assistant can run commands on it."
+    private func about(_ t: TechThing) -> String {
+        let parts = [
+            t.hub ? "the machine the hub runs on" : "",
+            t.kind == .service ? "a service on the internet" : t.kind == .place ? "sensor boards here" : "",
+            t.reachable ? "the hub reads it and the assistant can run commands on it" : t.kind == .machine && !t.hub ? "checked from the hub" : ""
+        ].filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return "" }
+        let s = parts.joined(separator: "; ")
+        return s.prefix(1).uppercased() + s.dropFirst() + "."
+    }
+
+    /// The board (fresh checks, open incidents and the grouping) and, with Sensors on, the readings.
+    private func load(maxAge: TimeInterval) async {
+        async let board: Void = feed.load(engine, maxAge: maxAge)
+        if model.isOn(.sensors) { await readingsFeed.load(engine, maxAge: maxAge) }
+        await board
+    }
+
+    /// A hand check's error, until a newer check of that monitor is in.
+    private func failure(_ m: Entity) -> String? {
+        guard let f = checkFailures[m.id], f.lastCheck == m.string("last_check") else { return nil }
+        return f.text
+    }
+
+    private func check(_ m: Entity) async {
+        guard !checking.contains(m.id) else { return }
+        guard let c = engine.client else {
+            checkFailures[m.id] = CheckFailure(text: "Checking needs the hub.", lastCheck: m.string("last_check"))
+            return
+        }
+        checking.insert(m.id)
+        checkFailures[m.id] = nil
+        defer { checking.remove(m.id) }
+        do {
+            await engine.absorb(try await c.checkMonitor(id: m.id))
+        } catch {
+            checkFailures[m.id] = CheckFailure(text: "Check failed: \(Homelab.errorText(error))", lastCheck: engine.get(m.id)?.string("last_check"))
+        }
+    }
+
+    /// A reading that alerts opens a chat where the assistant looks into it and proposes one fix, which runs only when approved.
+    private func propose(_ s: Entity) async {
+        guard let c = engine.client else { sensorError = "Proposing a fix needs the hub."; return }
+        proposingSensor = s.id
+        sensorError = nil
+        defer { proposingSensor = nil }
+        do { model.openChat(try await c.proposeSensorFix(name: s.str("name"))) }
+        catch { sensorError = "Could not start a fix: \(Homelab.errorText(error))" }
+    }
+
+    private func export(_ s: Entity) async {
+        guard let c = engine.client else { sensorError = "Export needs the hub."; return }
+        sensorError = nil
+        do {
+            let text = try await c.sensorCSV(name: s.str("name"), days: 30)
+            exportName = "\(s.str("name"))-30d-\(PetCustody.dateString(Date())).csv"
+            exportDoc = SensorCSVFile(text: text)
+        } catch {
+            sensorError = "Could not export: \(Homelab.errorText(error))"
+        }
     }
 }
 

@@ -185,15 +185,10 @@ struct SensorsView: View {
 enum SensorState: String {
     case ok, low, high, stale
 
-    /// The hub's state when present, else derived: stale past `stale_minutes` (default 180), low under min, high over max.
+    /// The hub's state when present, else derived: stale past `stale_minutes` (default 180), low under min, high over
+    /// max. The same rule as the Tech Overview's (EACore ReadingState), so a reading alerts alike on both.
     static func of(_ s: Entity, now: Date = Date()) -> SensorState {
-        if let st = SensorState(rawValue: s.str("state")) { return st }
-        guard let v = s.number("last_value"), let at = s.date("last_at") else { return .stale }
-        let staleMin = s.number("stale_minutes").flatMap { $0 > 0 ? $0 : nil } ?? 180
-        if now.timeIntervalSince(at) / 60 > staleMin { return .stale }
-        if let lo = s.number("min"), v < lo { return .low }
-        if let hi = s.number("max"), v > hi { return .high }
-        return .ok
+        SensorState(rawValue: ReadingState.of(s, now: now).rawValue) ?? .stale
     }
 
     var label: String {
@@ -227,6 +222,9 @@ enum SensorState: String {
 struct SensorCard: View {
     var sensor: Entity
     var points: [SensorPoint]?
+    /// On a machine's or place's page: the reading as people say it ("Disk P:", Tech.readingLabel), without the place.
+    var title: String? = nil
+    var showLocation = true
     var onSettings: () -> Void
     var onExport: () -> Void
     var onPropose: () -> Void = {}
@@ -244,16 +242,17 @@ struct SensorCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Self.displayName(sensor)).font(.headline)
-                    if let loc = sensor.string("location"), !loc.isEmpty { Text(loc).font(.caption).foregroundStyle(.secondary) }
+                    Text(title ?? Self.displayName(sensor)).font(.headline)
+                    if showLocation, let loc = sensor.string("location"), !loc.isEmpty { Text(loc).font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer(minLength: 6)
                 BodyStatusPill(text: state.label, symbol: state.symbol, color: state.color)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let v = sensor.number("last_value") {
-                    Text("\(BodyFmt.number(v)) \(unit)").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+                if sensor.number("last_value") != nil {
+                    // "90.3%", "21.5 C", a pool's "healthy": as the Overview and the web say it.
+                    Text(Tech.readingValue(sensor)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                 } else {
                     Text("No reading yet").font(.title3).foregroundStyle(.secondary)
                 }

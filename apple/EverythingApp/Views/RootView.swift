@@ -276,8 +276,8 @@ struct SplitRoot: View {
     /// The area holding the open screen, when you closed it while on that screen.
     @State private var shut: String?
 
-    /// The Library area holding the screen you are on.
-    private var here: String? { model.libraryAreas.first { $0.sections.contains(model.section) }?.title }
+    /// The Library area holding the screen you are on (the change journal and snippets count as the Overview).
+    private var here: String? { model.libraryAreas.first { $0.sections.contains(model.section.libraryRow) }?.title }
 
     /// Areas start closed and remember being opened. A closed area also opens for as long as it holds the screen you
     /// are on (reached by search or a shortcut, say) without being remembered as open; closing it then keeps it closed

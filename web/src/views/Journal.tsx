@@ -202,7 +202,8 @@ export function JournalEntry({ e, showHost, focus }: { e: Entity; showHost?: boo
 export const byAtDesc = (a: Entity, b: Entity) => (String(a.fields.at) > String(b.fields.at) ? -1 : 1);
 
 export function Journal({ focus }: { focus?: string | null } = {}) {
-  const entries = useEntities("journal");
+  // Changes made: the hub's own lines (a reading's alert) and approved lookups are in each machine's History instead.
+  const entries = useEntities("journal", (e) => e.fields.source !== "hub" && e.fields.lookup !== true);
   const hosts = useMemo(() => [...new Set(entries.map((e) => String(e.fields.host)))].sort(), [entries]);
   const [host, setHost] = useState<string | null>(null);
   const [risk, setRisk] = useState<string | null>(null);

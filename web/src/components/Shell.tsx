@@ -17,7 +17,11 @@ import { usePetName } from "../lib/profile";
 import { moduleOfScreen, useModules } from "../lib/modules";
 import { useOpenAreas } from "../lib/libraryOpen";
 
-type Item = { path: string; label: string };
+/**
+ * `also`: other paths that are this screen's own pages (a machine's page is the Overview's), so it shows as the one you
+ * are on there. `unless`: a module that, when on, hides this item (Sensors is the Overview's when Machines is on).
+ */
+type Item = { path: string; label: string; also?: string[]; unless?: string };
 
 /** The main screens: the sidebar's top block on desktop and the tab bar on a phone. */
 export const PRIMARY: Item[] = [
@@ -41,11 +45,11 @@ export const AREAS: Array<{ title: string; items: Item[] }> = [
     { path: "/people", label: "People" },
     { path: "/reference", label: "Reference" },
   ] },
-  { title: "Homelab", items: [
-    { path: "/ops", label: "Ops" },
-    { path: "/hosts", label: "Machines" },
-    { path: "/journal", label: "Change journal" },
-    { path: "/snippets", label: "Snippets" },
+  // Since 2026-11-19 one screen: a card per machine, service and place, each opening its page (checks, readings, fix
+  // notes, changes, snippets). With Machines off, the home sensors are the Sensors screen.
+  { title: "Tech", items: [
+    { path: "/ops", label: "Overview", also: ["/hosts", "/journal", "/snippets"] },
+    { path: "/sensors", label: "Sensors", unless: "homelab" },
   ] },
   { title: "Making", items: [
     { path: "/projects", label: "Projects" },
@@ -61,7 +65,6 @@ export const AREAS: Array<{ title: string; items: Item[] }> = [
     { path: "/logs", label: "Logs" },
     { path: "/pet", label: "Pet" },
     { path: "/food", label: "Food" },
-    { path: "/sensors", label: "Sensors" },
   ] },
   { title: "Life admin", items: [
     { path: "/lists", label: "Lists" },
@@ -81,6 +84,10 @@ export const NAV: Item[] = [...PRIMARY, ...AREAS.flatMap((a) => a.items), ...SYS
 /** Screens not in the lists above, by path, for the window title. */
 const OTHER: Item[] = [
   { path: "/now", label: "Now" },
+  { path: "/hosts", label: "Machine" },
+  { path: "/journal", label: "Change journal" },
+  { path: "/snippets", label: "Snippets" },
+  { path: "/sensors", label: "Sensors" },
   { path: "/search", label: "Search" },
   { path: "/library", label: "Library" },
   { path: "/more", label: "Library" },
@@ -146,7 +153,7 @@ function keysHint(on: (id: string | undefined) => boolean): string {
 /** The Library areas with only the screens of modules that are on (Settings, Modules); an emptied area goes too. */
 export function useAreas(): typeof AREAS {
   const { on } = useModules();
-  return AREAS.map((a) => ({ ...a, items: a.items.filter((i) => on(moduleOfScreen(i.path))) })).filter((a) => a.items.length);
+  return AREAS.map((a) => ({ ...a, items: a.items.filter((i) => on(moduleOfScreen(i.path)) && !(i.unless && on(i.unless))) })).filter((a) => a.items.length);
 }
 
 function Gear({ active }: { active: boolean }) {
@@ -234,7 +241,8 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
     document.addEventListener("visibilitychange", again);
     return () => document.removeEventListener("visibilitychange", again);
   }, []);
-  const active = (p: string) => route.path === p || route.path.startsWith(p + "/");
+  const at = (p: string) => route.path === p || route.path.startsWith(p + "/");
+  const active = (p: string) => at(p) || !!NAV.find((n) => n.path === p)?.also?.some(at);
   // A closed area opens for as long as it holds the screen you are on (reached by search or a shortcut, say),
   // without being remembered as open; closing it then keeps it closed until you move to another area.
   const here = areas.find((a) => a.items.some((i) => active(i.path)))?.title ?? null;
@@ -364,6 +372,7 @@ function useSummaries(): Record<string, string> {
       const remToday = of("task").filter((e) => { const a = taskAlertAt(e.fields); return !!a && new Date(a).toDateString() === today; }).length;
       const renew = of("watch").filter((e) => Date.parse(String(e.fields.due)) < soon).length;
       const monitors = of("monitor");
+      const alerts = of("sensor").filter((e) => e.fields.alert !== false && ["high", "low", "stale"].includes(String(e.fields.state))).length;
       const running = of("procedure").filter((e) => !e.fields.done_at).length;
       const doneToday = of("task").filter((e) => typeof e.fields.done_at === "string" && new Date(e.fields.done_at).toDateString() === today).length;
       const logsToday = of("log").filter((e) => new Date(String(e.fields.at ?? "")).toDateString() === today).length;
@@ -374,11 +383,8 @@ function useSummaries(): Record<string, string> {
         "/dashboard": doneToday || logsToday ? [doneToday ? `${doneToday} done today` : "", logsToday ? n(logsToday, "log today", "logs today") : ""].filter(Boolean).join(", ") : "Charts of logs, tasks and sensors",
         "/notes": n(of("note").length, "note", "notes"),
         "/memory": n(of("fact").length, "fact", "facts"),
-        // The Ops light's own words: off monitors are left out, unknown ones are said.
-        "/ops": trafficLight(monitors).label,
-        "/hosts": n(new Set([...of("runbook"), ...of("journal"), ...of("snippet"), ...of("monitor")].map((e) => String(e.fields.host ?? "").trim().toLowerCase()).filter(Boolean)).size, "machine", "machines"),
-        "/journal": n(of("journal").length, "entry", "entries"),
-        "/snippets": n(of("snippet").length, "snippet", "snippets"),
+        // The checks' light in its own words (off monitors are left out, unknown ones are said), and alerting readings.
+        "/ops": [trafficLight(monitors).label, alerts ? n(alerts, "alert", "alerts") : ""].filter(Boolean).join(", "),
         "/projects": n(of("project").filter((e) => e.fields.status === "active").length, "active", "active"),
         "/procedures": running ? `${running} in progress` : "None in progress",
         "/music": n(of("music_idea").length, "idea", "ideas"),

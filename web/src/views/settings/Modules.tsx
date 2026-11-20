@@ -3,7 +3,7 @@ import type { ModuleInfo, ModulePermission } from "../../sync/api";
 import { setModules, useModules } from "../../lib/modules";
 import { SubPage, Toggle, errorText } from "./common";
 
-const ORDER = ["On your devices", "Plan", "Body and home", "Making", "Life admin", "Homelab", "Assistant"];
+const ORDER = ["On your devices", "Plan", "Body and home", "Making", "Life admin", "Tech", "Assistant"];
 const GROUP_TITLE: Record<string, string> = { Assistant: "What the assistant may do" };
 
 /** How each device permission is named to the person. */

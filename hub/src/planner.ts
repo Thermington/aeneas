@@ -442,7 +442,7 @@ export function todayView(hub: Hub, now: Date = new Date(), minHours = 3): Today
   };
 }
 
-/** "Homelab: down Storage backup, oldbox ping; sensors storage.zfs.tank.healthy low", or null when all is well. */
+/** "Tech: down Storage backup, oldbox ping; sensors storage.zfs.tank.healthy low", or null when all is well. */
 export function opsLine(hub: Hub, now: Date = new Date()): string | null {
   const parts: string[] = [];
   if (hub.modules.on("homelab")) {
@@ -458,7 +458,7 @@ export function opsLine(hub: Hub, now: Date = new Date()): string | null {
     const off = hub.store.list({ kind: "sensor", limit: 10000 }).filter((x) => x.fields.alert !== false && ["low", "high", "stale"].includes(String(x.fields.state))).map((x) => `${String(x.fields.name)} ${String(x.fields.state)}`);
     if (off.length) parts.push(`sensors ${off.slice(0, 3).join(", ")}${off.length > 3 ? `, ${off.length - 3} more` : ""}`);
   }
-  return parts.length ? `Homelab: ${parts.join("; ")}` : null;
+  return parts.length ? `Tech: ${parts.join("; ")}` : null;
 }
 
 /**

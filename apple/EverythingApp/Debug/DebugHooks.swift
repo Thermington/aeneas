@@ -12,10 +12,17 @@ import EACore
 ///   -EAReferenceQuery <words>    open the Reference screen searching for the words
 ///   -EAReferenceOpen <book>/<path>  open the Reference screen with that page in the reader
 ///   -EAHumSample YES             put a hummed song (melody and rhythm) on the device and open it
+///   -EASample YES                a copy that is not set up starts in sample mode, as Try it with sample data does
+///   -EAMachine <name>            with -EASection ops, the Overview opens that machine's page (Tech screenshots)
+///   -EAScrollTo history          that machine's page scrolls to its History
 @MainActor
 enum DebugHooks {
+    /// The machine page `-EAMachine` asked for opens once, not again each time the Overview shows.
+    static var machineShown = false
+
     static func applyLaunchArguments(_ model: AppModel) async {
         let d = UserDefaults.standard
+        if d.bool(forKey: "EASample"), !model.isConfigured { await model.startSample() }
         if d.bool(forKey: "EASeedWorkCalendar") { await seedWorkCalendar() }
         if let s = d.string(forKey: "EASection"), let section = Section(rawValue: s) { model.section = section }
         // The link a QR scan or the camera opens, without the system's "Open in Aeneas?" tap (automated tests).

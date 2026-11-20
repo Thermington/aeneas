@@ -55,19 +55,23 @@ public struct HubBackupLine: Decodable, Equatable, Identifiable, Sendable {
     public var id: String { label }
 }
 
-/// `GET /ops`: the board the Ops screen is built from.
+/// `GET /ops`: the board the Tech Overview is built from.
 public struct OpsBoard: Decodable, Equatable, Sendable {
     public var monitors: [OpsMonitor]
     public var incidents_open: [Entity]
     public var incidents_7d: Int
     public var uptime_24h: [UptimeEntry]
+    /// Kept by the hub for apps before 1.0.7; no screen shows renewals in Tech.
     public var watches_due_30d: [Entity]
     public var journal_recent: [Entity]
     public var hosts: [HostSummary]
+    /// Every machine, service and place with its checks and readings (hub/src/tech.ts). Nil from a hub before
+    /// 2026-11-19, which the Overview says, working the cards out on the device instead (Tech.localThings).
+    public var things: [TechThing]?
     /// The hub's own backups (empty from a hub before 2026-11-13).
     public var hub_backup: [HubBackupLine]
 
-    enum CodingKeys: String, CodingKey { case monitors, incidents_open, incidents_7d, uptime_24h, watches_due_30d, journal_recent, hosts, hub_backup }
+    enum CodingKeys: String, CodingKey { case monitors, incidents_open, incidents_7d, uptime_24h, watches_due_30d, journal_recent, hosts, things, hub_backup }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,6 +82,8 @@ public struct OpsBoard: Decodable, Equatable, Sendable {
         watches_due_30d = try c.decodeIfPresent([Entity].self, forKey: .watches_due_30d) ?? []
         journal_recent = try c.decodeIfPresent([Entity].self, forKey: .journal_recent) ?? []
         hosts = try c.decodeIfPresent([HostSummary].self, forKey: .hosts) ?? []
+        // A malformed list costs the cards, not the board.
+        things = try? c.decodeIfPresent([TechThing].self, forKey: .things)
         hub_backup = (try? c.decodeIfPresent([HubBackupLine].self, forKey: .hub_backup)) ?? []
     }
 

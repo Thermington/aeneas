@@ -119,15 +119,19 @@ extension SyncEngine {
         case .memory: return n(count(.fact), "fact", "facts")
         case .people: return n(count(.person), "person", "people")
         case .ops:
-            // As Ops counts them: a monitor that is off or not known yet is not up.
+            // The checks in their own words (a monitor that is off or not known yet is not up), then readings that alert,
+            // as on the web.
             let states = list(.monitor).map(MonitorStatus.init)
-            if states.isEmpty { return "No monitors" }
+            let alerts = list(.sensor).filter { $0.bool("alert") != false && ["high", "low", "stale"].contains($0.str("state")) }.count
             let down = states.filter { $0 == .down }.count, unknown = states.filter { $0 == .unknown }.count
             let up = states.filter { $0 == .up }.count, off = states.filter { $0 == .off }.count
-            if down > 0 { return "\(down) down" }
-            if unknown > 0 { return "\(unknown) unknown" }
-            if up == 0 { return "All \(off) off" }
-            return "All \(up) up" + (off > 0 ? ", \(off) off" : "")
+            let checks: String
+            if states.isEmpty { checks = "No checks" }
+            else if down > 0 { checks = "\(down) down" }
+            else if unknown > 0 { checks = "\(unknown) unknown" }
+            else if up == 0 { checks = "All \(off) off" }
+            else { checks = "All \(up) up" + (off > 0 ? ", \(off) off" : "") }
+            return alerts > 0 ? "\(checks), \(n(alerts, "alert", "alerts"))" : checks
         case .hosts:
             let names = Set([Kind.runbook, .journal, .snippet, .monitor].flatMap { list($0) }.map { $0.str("host").trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty })
             return n(names.count, "machine", "machines")

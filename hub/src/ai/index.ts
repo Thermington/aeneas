@@ -13,7 +13,7 @@ import { countNumberedSteps, createProcedure, splitSteps } from "../procedures.j
 import path from "node:path";
 import crypto from "node:crypto";
 import { harvestSnippets, saysWorked } from "./harvest.js";
-import { availableTools, cloudSecrets, runTool, toolGuide, toolSpecs, type ApiCall, type DevicePhoto, type PendingApproval, type ToolContext, type TurnState } from "./tools.js";
+import { availableTools, cloudSecrets, filingCheck, runTool, toolGuide, toolSpecs, type ApiCall, type DevicePhoto, type PendingApproval, type ToolContext, type TurnState } from "./tools.js";
 import { Sessions, type StoredMessage, type TouchedItem } from "./sessions.js";
 import { recordImage } from "../gallery.js";
 import { ImageStore } from "./images.js";
@@ -46,7 +46,7 @@ export interface ChatInput {
   /** Hub-internal: no web tools and no web instructions this turn, whatever the Web lookups module says (capture
    * filing: a private diary line must never become a search query or a page fetch). */
   no_web?: boolean;
-  /** Hub-internal: capture filing. Besides no web, none of Homelab's tools (host commands, monitors, Ops): text in a
+  /** Hub-internal: capture filing. Besides no web, none of the Machines module's tools (host commands, monitors, Ops): text in a
    * capture (a shared page, a dictated line) must never make the hub reach an address or run a command. The offline
    * reference's tools are left out too: they are for chats. */
   filing?: boolean;
@@ -674,8 +674,8 @@ export class Gateway {
       if (req.approve_action_id) {
         const a = this.hosts.get(req.approve_action_id);
         if (!a || a.session_id !== req.session_id) throw new StoreError(404, "no such action in this chat");
-        // A change proposed before Homelab was switched off does not run after it.
-        if (!this.moduleOn("homelab")) throw new StoreError(409, "Homelab is switched off, so commands on your machines do not run; switch it on in Settings, Modules");
+        // A change proposed before Machines was switched off does not run after it.
+        if (!this.moduleOn("homelab")) throw new StoreError(409, "Machines is switched off in Settings, Modules, so commands on your machines do not run; switch it on there to run this");
         onEvent?.({ type: "status", text: `Running on ${a.host}` });
         try {
           const done = await this.hosts.approve(a.id);
@@ -720,8 +720,9 @@ export class Gateway {
     const replyImages: string[] = [];
     const modelImages: { note: string; images: string[] }[] = [];
     let lastErr: Error | null = null;
-    // Filing a capture is background work: no web, no Homelab, and no offline reference (its tools are for chats).
-    const turnOn: ModuleCheck = req.filing ? (id) => id !== "web" && id !== "homelab" && id !== "reference" && this.moduleOn(id)
+    // Filing a capture is background work: no web, no Machines tools but writing a History line, and no offline
+    // reference (its tools are for chats).
+    const turnOn: ModuleCheck = req.filing ? filingCheck(this.moduleOn)
       : req.no_web ? (id) => id !== "web" && this.moduleOn(id) : this.moduleOn;
     // A model shared with other people's hubs (the model gate) may be answering someone else right now: say so, so a
     // slower start is explained. Who it is stays private.

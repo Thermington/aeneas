@@ -99,6 +99,14 @@ enum SampleRecordingCleaner {
             }
             o["hosts"] = hosts
         }
+        // The Tech Overview's cards (GET ops `things`) name the hub's own machine too.
+        edit(&rec, "GET ops") { o in
+            guard var things = o["things"] as? [[String: Any]] else { return }
+            for i in things.indices {
+                for k in ["name", "label"] { if let n = things[i][k] as? String, renamed[n] != nil { things[i][k] = machine } }
+            }
+            o["things"] = things
+        }
         edit(&rec, "GET connections") { o in
             guard var pm = o["password_manager"] as? [String: Any] else { return }
             if let h = pm["host"] as? String, let n = renamed[h] { pm["host"] = n }

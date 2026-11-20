@@ -751,6 +751,26 @@ function seedOps() {
   }
 }
 
+/** GET /ops `things` as the hub groups them (hub/src/tech.ts), for the seeded machines: server runs the hub. */
+function mockThings(monitors: Entity[], sensors: Entity[]) {
+  const reachable = new Set(["server", "desktop", "nas01"]);
+  const things = new Map<string, { name: string; label: string; kind: "machine" | "service" | "place"; monitors: string[]; sensors: string[]; reachable: boolean; hub?: boolean; os?: string }>();
+  const get = (name: string, kind: "machine" | "place", label = name) => {
+    let t = things.get(name);
+    if (!t) things.set(name, (t = { name, label, kind, monitors: [], sensors: [], reachable: reachable.has(name), ...(name === "server" ? { hub: true } : {}), ...(name === "desktop" ? { os: "windows" } : {}) }));
+    return t;
+  };
+  for (const n of reachable) get(n, "machine");
+  for (const m of monitors) get(String(m.fields.host ?? "").toLowerCase(), "machine").monitors.push(m.id);
+  for (const s of sensors) {
+    const name = String(s.fields.name), loc = String(s.fields.location ?? "");
+    const own = !!loc && name.startsWith(`${loc}.`);
+    get(own ? loc : loc.toLowerCase() || "home", own ? "machine" : "place", loc || "Home").sensors.push(name);
+  }
+  const rank = { machine: 0, service: 1, place: 2 };
+  return [...things.values()].sort((a, b) => rank[a.kind] - rank[b.kind] || a.name.localeCompare(b.name));
+}
+
 function opsBoard() {
   const all = allLive();
   const incidents = all.filter((e) => e.kind === "incident");
@@ -771,6 +791,7 @@ function opsBoard() {
       .sort((a, b) => (String(a.fields.at) < String(b.fields.at) ? 1 : -1))
       .slice(0, 10),
     hosts: deriveHosts(all),
+    things: mockThings(monitors, all.filter((e) => e.kind === "sensor")),
   };
 }
 
@@ -893,6 +914,10 @@ function seed() {
   create("journal", { host: "nas01", at: hoursAgo(120), what: "Replaced disk ada2 and resilvered", command: "zpool replace tank ada2 ada5", risk: "high", rollback: "none, the old disk is out", outcome: "done" });
   create("journal", { host: "nas01", at: hoursAgo(8), what: "Destroy the old tank/scratch dataset", command: "zfs destroy -r tank/scratch", risk: "high", rollback: "restore from tank/scratch@pre-destroy", outcome: "planned" });
   create("journal", { host: "router", at: hoursAgo(600), what: "Pinned DNS for nas01 to 10.0.0.20", command: "UniFi, Settings, Networks, DHCP reservation", risk: "low", outcome: "done" });
+  // History (Tech): lines the hub writes when a reading goes out of bounds and back, a change by hand, and a lookup that stays out.
+  create("journal", { host: "desktop", at: hoursAgo(3), what: "Disk G: went above 90%: 90.1%", risk: "low", outcome: "done", source: "hub" });
+  create("journal", { host: "desktop", at: hoursAgo(30), what: "Replaced the front case fan", risk: "low", outcome: "done" });
+  create("journal", { host: "desktop", at: hoursAgo(26), what: "Count the files in the games folder", command: "(Get-ChildItem G:\\Games -Recurse).Count", risk: "low", outcome: "done", session_id: "mock-lookup", lookup: true });
   create("journal", { host: "router", at: hoursAgo(14), what: "Tried a firmware update, rolled back after the WAN dropped", command: "UniFi, Devices, gateway, Update", risk: "medium", rollback: "restore the previous firmware from the device page", outcome: "reverted" });
   create("snippet", {
     title: "Snapshot before a destructive change",
@@ -970,6 +995,24 @@ function seed() {
     postReading("cabinet_temp", Math.round((22 + Math.sin(i / 8) * 2.5) * 10) / 10, at, "C", true);
     postReading("planter_moisture", Math.round(Math.max(16, 48 - (96 - i) * 0.31)), at, "%", true);
   }
+  // Machine readings, as the hub's host sensors make them (Tech): CPU, memory, disks and temperatures; the desktop's
+  // games drive is past its 90% bound.
+  const machine = (name: string, unit: string, max: number | undefined, value: (i: number) => number) => {
+    create("sensor", { name, unit, location: name.split(".")[0], ...(max != null ? { max } : {}), alert: true, stale_minutes: 7 * 24 * 60 });
+    for (let i = 96; i >= 0; i -= 4) postReading(name, Math.round(value(i) * 10) / 10, iso(new Date(Date.now() - i * 15 * 60_000)), unit, true);
+  };
+  machine("server.cpu.used", "%", undefined, (i) => 12 + Math.abs(Math.sin(i / 5)) * 18);
+  machine("server.memory.used", "%", undefined, (i) => 41 + Math.sin(i / 20) * 3);
+  machine("server.disk.root.used", "%", 90, (i) => 62 + (96 - i) * 0.01);
+  machine("server.cpu.temp", "°C", 90, (i) => 44 + Math.sin(i / 6) * 4);
+  machine("desktop.cpu.used", "%", undefined, (i) => (i < 30 ? 70 : 8) + Math.abs(Math.sin(i / 3)) * 15);
+  machine("desktop.memory.used", "%", undefined, (i) => (i < 30 ? 58 : 34));
+  machine("desktop.disk.c.used", "%", 90, () => 71.4);
+  machine("desktop.disk.g.used", "%", 90, (i) => 89.2 + (96 - i) * 0.02);
+  machine("desktop.gpu0.temp", "°C", 85, (i) => (i < 30 ? 71 : 38));
+  machine("nas01.disk.root.used", "%", 90, () => 31);
+  machine("nas01.zfs.tank.pool", "%", 80, () => 46);
+  machine("nas01.zfs.tank.healthy", "", undefined, () => 1);
   for (const s of allLive()) if (s.kind === "sensor") patchFields(s, { state: sensorState(s) });
   const food = (name: string, kind: string, items: string[], tags: string[], rating: number, cost: number, extra: Record<string, unknown> = {}) =>
     create("food_option", { name, kind, items, tags, avoid: false, rating, cost, ...extra });

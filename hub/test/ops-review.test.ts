@@ -147,8 +147,8 @@ test("ops: the morning digest names what is down and the sensors out of range", 
     t.hub.store.create("monitor", { name: "spare", type: "ping", target: "s", interval_s: 60, timeout_s: 5, fails_before_down: 1, enabled: false, state: "down" });
     t.hub.store.create("sensor", { name: "core.disk.mnt-b.used", unit: "%", state: "high", alert: true });
     t.hub.store.create("sensor", { name: "garage.temp", unit: "C", state: "stale", alert: false });
-    assert.equal(opsLine(t.hub), "Homelab: down Storage backup; sensors core.disk.mnt-b.used high");
-    assert.match(todayView(t.hub).digest, /Homelab: down Storage backup/);
+    assert.equal(opsLine(t.hub), "Tech: down Storage backup; sensors core.disk.mnt-b.used high");
+    assert.match(todayView(t.hub).digest, /Tech: down Storage backup/);
   } finally { t.cleanup(); }
 });
 

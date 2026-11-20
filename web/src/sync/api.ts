@@ -599,10 +599,15 @@ export class HubClient {
     return this.req<Entity>("POST", `/quiz/${encodeURIComponent(id)}/answer`, { index, result });
   }
 
-  // ---------- Module 6: homelab ops ----------
+  // ---------- Module 6: Tech (machines, checks and sensors) ----------
   /** The ops board; 404 on hubs without monitors. */
   ops() {
     return this.req<OpsData>("GET", "/ops");
+  }
+
+  /** A check that is down: the hub starts (or reopens) a chat where the assistant proposes a fix to approve or cancel. */
+  monitorPropose(id: string) {
+    return this.req<{ session_id: string; started: boolean }>("POST", `/monitors/${encodeURIComponent(id)}/propose`, {});
   }
 
   /** Runs the check now; returns the updated monitor. */

@@ -2,6 +2,7 @@
  * Module 6 helpers: the traffic-light summary over monitors, the 24 h check strip and incident
  * durations. Pure, so the mock hub and the tests share them with the Ops view.
  */
+import type { Thing } from "./tech";
 import type { Entity } from "@everythingapp/shared";
 import type { HostSummary } from "./memory";
 
@@ -71,9 +72,12 @@ export interface OpsData {
   incidents_open: Entity[];
   incidents_7d: number;
   uptime_24h: Array<{ name: string; pct: number | null }>;
-  watches_due_30d: Entity[];
+  /** Kept by the hub for apps before 1.0.7; no screen shows renewals in Tech. */
+  watches_due_30d?: Entity[];
   journal_recent: Entity[];
   hosts: HostSummary[];
+  /** Every machine, service and place with its checks and readings (a hub from before 2026-11-19 leaves it out). */
+  things?: Thing[];
   /** The hub's own backups (a hub from before 2026-11-13 leaves it out). */
   hub_backup?: HubBackupLine[];
 }

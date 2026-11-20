@@ -115,6 +115,24 @@ The assistant runs on your hub's own model. It reads and changes your data with 
 notes, events), and it says what it changed. Switch modules off and their tools go with them. Ask it about the app
 itself too: it answers from these docs.
 
+## Tech: your machines, checks and sensors
+
+Tech, Overview is one screen for everything you watch: what needs a look at the top, then a card for each machine (with
+its CPU, memory and fullest disk), each service on the internet you check, and each place with sensor boards. Switch on
+Machines (and Sensors, for the readings) in Settings, Modules; add the computers the hub may reach with Add machine, and
+a ping, port, web address, certificate, name lookup or backup check with Add check.
+
+- **Propose a fix** sits on anything red: a check that is down or a reading out of bounds. The assistant looks into it
+  with read-only commands and proposes one change, which runs only when you approve it in that chat.
+- **A machine's page** (tap its card) has its checks, its readings with graphs and alert limits, its History, its fix
+  notes and its snippets.
+- **History** is what happened on that machine, newest first: changes the assistant made with your approval (with
+  the command and how to undo it), checks that went down and came back, readings that went out of bounds and back, and
+  changes you note in one line ("What did you change?"), tell the assistant or say in a Capture ("I replaced the fan on
+  the NAS"). A
+  step you planned waits at the top with Done and Didn't do it. Lookups that needed approval but changed nothing stay out.
+- Renewals and bills are not in Tech: they are in Plan, Renewals.
+
 ## Family: a hub for someone else, and helping with their devices
 
 On a Linux or Windows hub, Settings, People on this machine gives someone their own hub on your machine. Invite them

@@ -82,7 +82,7 @@ enum Homelab {
         }
         for e in engine.list(.runbook) { if let k = touch(e.str("host")) { m[k]?.runbooks += 1 } }
         for e in engine.list(.snippet) { if let k = touch(e.str("host")) { m[k]?.snippets += 1 } }
-        for e in engine.list(.journal) {
+        for e in engine.list(.journal) where JournalOrder.isChange(e) {
             guard let k = touch(e.str("host")) else { continue }
             m[k]?.journal_entries += 1
             let at = e.string("at") ?? e.created_at

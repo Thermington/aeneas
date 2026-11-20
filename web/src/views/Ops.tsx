@@ -5,26 +5,25 @@ import { engine } from "../sync/engine";
 import { useEntities, useEntity } from "../sync/hooks";
 import { createEntity, updateEntity } from "../sync/edits";
 import { usePoll } from "../lib/usePoll";
+import { go, replace } from "../lib/router";
+import { checksLine, machineBars, needsALook, readingLabel, readingValue, techLight, thingStatus, type Look, type Thing } from "../lib/tech";
+import { MachinesSettings } from "./settings/HubPrivacy";
+import { HistoryList } from "./History";
+import { historyItems } from "../lib/history";
 import { useEscape } from "../lib/keys";
-import { fmtDate, fmtDateTime, fmtDuration, relative, relativePast } from "../lib/time";
-import type { JournalF } from "../lib/memory";
+import { fmtDateTime, fmtDuration, relativePast } from "../lib/time";
 import type { SensorRow } from "../sync/api";
-import { Chart } from "../components/Chart";
-import { dayPoints, formatValue, shortDay, timePoints, type Series } from "../lib/dashboard";
-import { sensorState, sensorTone } from "../lib/body";
-import { daysLeft, fmtDaysLeft, parseDue } from "../lib/planner";
+import { sensorState } from "../lib/body";
 import {
   EMPTY_MONITOR,
   MONITOR_TYPES,
   hubLineText,
   incidentSeconds,
-  isBackup,
   jobLine,
   lastErrors,
   monitorDraft,
   monitorFields,
   monitorState,
-  trafficLight,
   uptimeStrip,
   type CheckRow,
   type HubBackupLine,
@@ -32,13 +31,11 @@ import {
   type MonitorDraft,
   type MonitorF,
   type MonitorType,
-  type OpsData,
   type OpsMonitor,
 } from "../lib/ops";
 
 const msg = (e: unknown) => plainError(e);
 const checksFailed = (n?: number) => `${n ?? 0} check${n === 1 ? "" : "s"} failed`;
-const DAY = 86400_000;
 
 const TARGET_HINT: Record<MonitorType, string> = {
   ping: "192.168.1.20",
@@ -49,122 +46,236 @@ const TARGET_HINT: Record<MonitorType, string> = {
   backup: "mac:laptop, windows:desktop, linux:me@nas",
 };
 
-/** Homelab ops: traffic light, monitor cards, incidents, renewals due and recent changes, from GET /ops. */
+/**
+ * Tech, Overview: what needs a look (with Propose a fix and Acknowledge), then one card per machine, service and place,
+ * from GET /ops and GET /sensors. A card opens the thing's page (Hosts.tsx), which holds its checks, readings, fix notes,
+ * changes and snippets.
+ */
 export function Ops({ focus: asked }: { focus?: string | null }) {
   const p = usePoll((c) => c.ops(), 30_000);
-  // A link to an incident (search, linked items) focuses its monitor.
-  const linked = useEntity(asked ?? undefined);
-  const focus = linked?.kind === "incident" ? String(linked.fields.monitor_id ?? "") || asked : asked;
-  const [open, setOpen] = useState<string | null>(focus ?? null);
-  const [editing, setEditing] = useState<OpsMonitor | "new" | null>(null);
+  // Sensors may be switched off: then there are only checks.
+  const sp = usePoll((c) => c.sensors(), 60_000);
+  const [adding, setAdding] = useState<"check" | "machine" | null>(null);
   const reload = p.reload;
-
-  useEffect(() => engine.onNotify((n) => n.kind === "monitor" && void reload()), [reload]);
-  useEffect(() => {
-    if (focus) {
-      setOpen(focus);
-      document.getElementById(`mon-${focus}`)?.scrollIntoView({ block: "start" });
-    }
-  }, [focus, !!p.data]);
-  useEscape(useCallback(() => (editing ? setEditing(null) : setOpen(null)), [editing]));
+  const reloadAll = useCallback(async () => { await Promise.all([p.reload(), sp.reload()]); }, [p.reload, sp.reload]);
+  useEffect(() => engine.onNotify((n) => (n.kind === "monitor" || n.kind === "sensor") && void reloadAll()), [reloadAll]);
+  useEscape(useCallback(() => setAdding(null), []));
 
   const data = p.data;
-  const monitors = useMemo(() => {
-    const rank = (m: OpsMonitor) => {
-      const f = m.fields as MonitorF;
-      if (f.enabled === false) return 3;
-      const s = monitorState(f);
-      return s === "down" ? 0 : s === "unknown" ? 1 : 2;
-    };
-    return (data?.monitors ?? []).slice().sort((a, b) => rank(a) - rank(b) || String(a.fields.name).localeCompare(String(b.fields.name)));
-  }, [data]);
-  const light = trafficLight(monitors);
-  // The light says what Ops knows: the hub's own backups count, and a board the hub did not refresh says it is old.
-  const hubBad = !!data?.hub_backup?.some((l) => !l.ok);
+  const sensors = useMemo(() => sp.data ?? [], [sp.data]);
+  const things = useMemo(() => data?.things ?? [], [data]);
+  const monitors = useMemo(() => data?.monitors ?? [], [data]);
+  const byMonitor = useMemo(() => new Map(monitors.map((m) => [m.id, m])), [monitors]);
+  const bySensor = useMemo(() => new Map(sensors.map((s) => [s.name, s])), [sensors]);
+  const looks = useMemo(() => needsALook(things, monitors, data?.incidents_open ?? [], sensors, data?.hub_backup ?? []), [things, monitors, data, sensors]);
+
+  // A link to a check or its incident (a notification, search, linked items) opens the page of the thing it is on.
+  const linked = useEntity(asked ?? undefined);
+  const focus = linked?.kind === "incident" ? String(linked.fields.monitor_id ?? "") || asked : asked;
+  useEffect(() => {
+    if (!focus || !things.length) return;
+    const t = things.find((x) => x.monitors.includes(focus));
+    if (t) replace(`/hosts/${encodeURIComponent(t.name)}?focus=${encodeURIComponent(focus)}`);
+  }, [focus, things]);
+
+  const light = techLight(looks, things, monitors, sensors);
   const stale = !!(data && p.error);
-  const lightTone = stale ? "muted" : hubBad && light.tone !== "danger" ? "danger" : light.tone;
-  const lightLabel = hubBad && light.down === 0 ? "This hub's backup needs a look" : light.label;
-  const lightDetail = [hubBad && light.down > 0 ? "this hub's backup needs a look" : "", light.detail, stale && p.at ? `as of ${relativePast(p.at.toISOString())}: the hub did not answer the last refresh` : ""].filter(Boolean).join("; ");
-  const uptime = new Map((data?.uptime_24h ?? []).map((u) => [u.name, u.pct]));
-  // Backups get a section of their own: one card per machine, a line per job.
-  const checks = monitors.filter((m) => !isBackup(m));
-  const backups = monitors.filter(isBackup);
-  const card = (m: OpsMonitor) => (
-    <MonitorCard
-      key={m.id}
-      m={m}
-      pct={uptime.get(String(m.fields.name)) ?? null}
-      open={open === m.id}
-      onToggle={() => setOpen((o) => (o === m.id ? null : m.id))}
-      onEdit={() => setEditing(m)}
-      onChanged={reload}
-    />
-  );
+  const machines = things.filter((t) => t.kind === "machine");
+  const services = things.filter((t) => t.kind === "service");
+  const places = things.filter((t) => t.kind === "place");
+  // A hub from before 2026-11-19 sends no things: its checks still show, by machine name.
+  const oldHub = !!data && !data.things;
 
   return (
-    <div className="ops">
+    <div className="ops tech">
       <div className="row between">
-        <h1 style={{ margin: 0 }}>Ops</h1>
+        <h1 style={{ margin: 0 }}>Overview</h1>
         <span className="muted small">{p.at ? `checked ${relativePast(p.at.toISOString())}` : ""}</span>
         <div className="row">
-          <button className="small" onClick={() => void reload()} disabled={p.busy}>
+          <button className="small" onClick={() => void reloadAll()} disabled={p.busy}>
             Refresh
           </button>
-          <button className="small primary" onClick={() => setEditing("new")}>
-            Add monitor
+          <button className="small" onClick={() => setAdding((a) => (a === "machine" ? null : "machine"))} aria-expanded={adding === "machine"}>
+            Add machine
+          </button>
+          <button className="small primary" onClick={() => setAdding((a) => (a === "check" ? null : "check"))} aria-expanded={adding === "check"}>
+            Add check
           </button>
         </div>
       </div>
-      {!data && p.error && <div className={p.unavailable ? "muted small" : "error"}>{p.unavailable ? "Ops is not available on this hub." : p.error}</div>}
+      {!data && p.error && <div className={p.unavailable ? "muted small" : "error"}>{p.unavailable ? "Machines is switched off on this hub (Settings, Modules)." : p.error}</div>}
       {data && (
-        <div className={`ops-light tone-${lightTone}`} role="status" aria-label={`${lightLabel}${lightDetail ? `, ${lightDetail}` : ""}`}>
-          <span className="label">{lightLabel}</span>
-          {lightDetail && <span className="detail">{lightDetail}</span>}
+        <div className={`ops-light tone-${stale ? "muted" : light.tone}`} role="status" aria-label={`${light.label}${light.detail ? `, ${light.detail}` : ""}`}>
+          <span className="label">{light.label}</span>
+          {(light.detail || stale) && <span className="detail">{[light.detail, stale && p.at ? `as of ${relativePast(p.at.toISOString())}: the hub did not answer the last refresh` : ""].filter(Boolean).join("; ")}</span>}
         </div>
       )}
-      {data && p.error && <div className="muted small">Last refresh failed: {p.error}</div>}
 
-      {/* Keyed, so Edit on another monitor starts from that monitor's values (it kept the first one's and saved them over it). */}
-      {editing && <MonitorEditor key={editing === "new" ? "new" : editing.id} monitor={editing === "new" ? null : editing} hosts={data?.hosts.map((h) => h.host) ?? []} onDone={() => setEditing(null)} />}
-
-      {data && !monitors.length && <div className="empty">No monitors yet. Add one to start watching a host.</div>}
-      <div className="ops-grid">{checks.map(card)}</div>
-
-      {(backups.length > 0 || !!data?.hub_backup?.length) && (
-        <section style={{ marginTop: 20 }}>
+      {adding === "check" && <MonitorEditor key="new" monitor={null} hosts={machines.map((t) => t.name)} onDone={() => { setAdding(null); void reload(); }} />}
+      {adding === "machine" && (
+        <div className="card col" style={{ marginTop: 12 }}>
           <div className="row between">
-            <h2 style={{ margin: 0 }}>Backups</h2>
-            <span className="muted small">{backupSummary(backups, data?.hub_backup ?? [])}</span>
+            <h2 style={{ margin: 0 }}>Machines the hub can reach</h2>
+            <button className="small ghost" onClick={() => setAdding(null)}>Close</button>
           </div>
-          <div className="ops-grid" style={{ marginTop: 8 }}>
-            {!!data?.hub_backup?.length && <HubBackupCard lines={data.hub_backup} />}
-            {backups.map(card)}
+          <MachinesSettings />
+          <div className="muted small">
+            A machine with a check, fix notes or a change shows here too. For a sensor board somewhere in the house, see <a href="#/sensors">how a board posts readings</a>.
           </div>
-        </section>
+        </div>
       )}
 
-      <SensorGraphs />
+      <NeedsALook looks={looks} things={things} onChanged={reloadAll} />
 
-      {data && <Incidents data={data} onChanged={reload} />}
+      {oldHub && <div className="muted small" style={{ marginTop: 12 }}>This hub is older than this app: update it (Settings, About) to see a card for each machine.</div>}
+      <ThingGrid title="Machines" things={machines} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
+      <ThingGrid title="Services" things={services} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
+      <ThingGrid title="Places" things={places} monitors={byMonitor} sensors={bySensor} hubBackup={data?.hub_backup ?? []} />
+      {data && !things.length && !oldHub && <div className="empty">Nothing watched yet. Add a machine, or a check for a machine or a web address.</div>}
+
+      {data && <RecentActivity things={things} monitors={monitors} />}
     </div>
   );
 }
 
-/** "This hub and 3 machines, all good" or "1 of 4 needs a look". */
-function backupSummary(backups: OpsMonitor[], hub: HubBackupLine[]): string {
-  const on = backups.filter((m) => m.fields.enabled !== false);
-  const total = on.length + (hub.length ? 1 : 0);
-  const bad = on.filter((m) => monitorState(m.fields as MonitorF) === "down").length + (hub.some((l) => !l.ok) ? 1 : 0);
-  const unknown = on.filter((m) => monitorState(m.fields as MonitorF) === "unknown").length;
-  const machines = `${on.length} machine${on.length === 1 ? "" : "s"}`;
-  const what = hub.length ? (on.length ? `This hub and ${machines}` : "This hub") : machines;
-  if (!total) return "";
-  if (bad) return `${bad} of ${total} need${bad === 1 ? "s" : ""} a look`;
-  return unknown ? `${unknown} of ${total} not checked yet` : `${what}, all good`;
+/** Propose a fix: the hub starts (or reopens) a chat where the assistant finds the cause and proposes one change to approve. */
+export function ProposeFix({ monitorId, sensor, className = "small" }: { monitorId?: string; sensor?: string; className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const propose = async () => {
+    const c = engine.client;
+    if (!c) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const r = monitorId ? await c.monitorPropose(monitorId) : await c.sensorPropose(sensor!);
+      go(`/assistant/${r.session_id}`);
+    } catch (e) {
+      setErr(msg(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button className={className} onClick={() => void propose()} disabled={busy || !engine.client} title="The assistant finds the cause and proposes one fix you approve or cancel">
+        {busy ? "Starting" : "Propose a fix"}
+      </button>
+      {err && <div className="error" style={{ flexBasis: "100%" }}>{err}</div>}
+    </>
+  );
+}
+
+/** The rows of what needs a look, each with Propose a fix (an assistant chat that proposes one change to approve) and Acknowledge for a check that is down. */
+export function NeedsALook({ looks, things, onChanged }: { looks: Look[]; things: Thing[]; onChanged: () => Promise<void> }) {
+  if (!looks.length) return null;
+  const by = new Map(things.map((t) => [t.name, t]));
+  return (
+    <section className="card needs-look" aria-label="Needs a look">
+      <h2 style={{ margin: "0 0 4px" }}>Needs a look</h2>
+      {looks.map((l) => (
+        <div key={l.key} className={`look-row ${l.acknowledged ? "acked" : ""}`}>
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="look-title">
+              <span className={`dot ${l.acknowledged ? "unknown" : "down"}`} aria-hidden="true" />
+              <span>{l.title}</span>
+              {l.thing && (
+                <a href={`#/hosts/${encodeURIComponent(l.thing)}`} className={`small ${by.get(l.thing)?.kind === "place" ? "" : "mono"}`}>
+                  {by.get(l.thing)?.label ?? l.thing}
+                </a>
+              )}
+            </div>
+            {l.detail && <div className="muted small" style={{ overflowWrap: "anywhere" }}>{l.detail}</div>}
+            {l.incident && <AckControl inc={l.incident} onChanged={onChanged} />}
+          </div>
+          {(l.monitorId || l.sensor) && (
+            <div className="look-fix">
+              <ProposeFix monitorId={l.monitorId} sensor={l.sensor} />
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** A heading and a card per thing; nothing when there are none of that kind. */
+function ThingGrid({ title, things, monitors, sensors, hubBackup }: { title: string; things: Thing[]; monitors: Map<string, OpsMonitor>; sensors: Map<string, SensorRow>; hubBackup: HubBackupLine[] }) {
+  if (!things.length) return null;
+  return (
+    <section style={{ marginTop: 20 }}>
+      <h2 style={{ margin: 0 }}>{title}</h2>
+      <div className="ops-grid thing-grid" style={{ marginTop: 8 }}>
+        {things.map((t) => (
+          <ThingCard key={t.name} t={t} monitors={monitors} sensors={sensors} hubBackup={hubBackup} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** One machine, service or place: how it is, its checks in a line, and its CPU, memory and fullest disk (or a place's readings). */
+function ThingCard({ t, monitors, sensors, hubBackup }: { t: Thing; monitors: Map<string, OpsMonitor>; sensors: Map<string, SensorRow>; hubBackup: HubBackupLine[] }) {
+  const st = thingStatus(t, monitors, sensors, hubBackup);
+  const line = checksLine(t, monitors);
+  const bars = t.kind === "place" ? [] : machineBars(t, sensors);
+  const readings = t.kind === "place" ? t.sensors.map((n) => sensors.get(n)).filter((s): s is SensorRow => !!s) : [];
+  return (
+    <a href={`#/hosts/${encodeURIComponent(t.name)}`} className={`card thing ${st.tone === "danger" ? "down" : ""}`} style={{ color: "inherit" }}>
+      <div className="row between" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
+        <div className="row" style={{ gap: 8, fontWeight: 600, flexWrap: "nowrap", minWidth: 0 }}>
+          <span className={`dot lg ${st.tone === "danger" ? "down" : st.tone === "ok" ? "up" : "unknown"}`} aria-hidden="true" />
+          <span className={t.kind === "place" ? "" : "mono"} style={{ overflowWrap: "anywhere" }}>{t.label}</span>
+        </div>
+        <span className={`chip static tone-${st.tone}`}>{st.label}</span>
+      </div>
+      {(line || t.hub) && <div className="muted small" style={{ marginTop: 2 }}>{[t.hub ? "the hub's machine" : "", line].filter(Boolean).join(", ")}</div>}
+      {bars.map((b) => (
+        <div key={b.label} className="stat-bar">
+          <div className="row between small" style={{ flexWrap: "nowrap" }}>
+            <span>{b.label}</span>
+            <span className={b.tone === "danger" ? "error" : "muted"}>{b.text}</span>
+          </div>
+          <div className="bar" aria-hidden="true">
+            <i className={b.tone === "danger" ? "hi" : ""} style={{ width: `${b.value}%` }} />
+          </div>
+        </div>
+      ))}
+      {readings.map((s) => (
+        <div key={s.name} className="row between small" style={{ flexWrap: "nowrap" }}>
+          <span>{readingLabel(s.name, t.name)}</span>
+          <span className={sensorState(s) !== "ok" && s.alert !== false ? "error" : "muted"}>{readingValue(s)}</span>
+        </div>
+      ))}
+    </a>
+  );
+}
+
+/** The latest from every machine's and place's History, with all changes and all snippets a click away. */
+function RecentActivity({ things, monitors }: { things: Thing[]; monitors: OpsMonitor[] }) {
+  const journal = useEntities("journal");
+  const incidents = useEntities("incident");
+  const runbooks = useEntities("runbook");
+  const items = useMemo(() => {
+    const thingOf = new Map(things.flatMap((t) => t.monitors.map((id) => [id, t.name] as const)));
+    const hostOf = (id: string) => thingOf.get(id) ?? (String(monitors.find((m) => m.id === id)?.fields.host ?? "").toLowerCase() || undefined);
+    return historyItems({ journal, incidents, runbooks, hostOf });
+  }, [journal, incidents, runbooks, things, monitors]);
+  return (
+    <section className="card" style={{ marginTop: 20 }}>
+      <div className="row between">
+        <h2 style={{ margin: 0 }}>Recent activity</h2>
+        <span className="row small">
+          <a href="#/journal">all changes</a>
+          <a href="#/snippets">all snippets</a>
+        </span>
+      </div>
+      <HistoryList items={items} showHost step={8} />
+    </section>
+  );
 }
 
 /** The hub's own data: its nightly copy, a second folder, the copy to storage and the live copy, a line each. */
-function HubBackupCard({ lines }: { lines: HubBackupLine[] }) {
+export function HubBackupCard({ lines }: { lines: HubBackupLine[] }) {
   const bad = lines.some((l) => !l.ok);
   return (
     <div className={`card ${bad ? "down" : ""}`} style={{ cursor: "default" }}>
@@ -192,84 +303,7 @@ function HubBackupCard({ lines }: { lines: HubBackupLine[] }) {
   );
 }
 
-type SensorSpan = "24h" | 7 | 30 | 90;
-const SENSOR_SPANS: SensorSpan[] = ["24h", 7, 30, 90];
-
-/** A graph for every sensor: the last 24 hours reading by reading, or a daily mean over 7 to 90 days. */
-function SensorGraphs() {
-  const p = usePoll((c) => c.sensors(), 60_000);
-  const sensors = p.data ?? [];
-  if (!sensors.length) return null;
-  return (
-    <section style={{ marginTop: 20 }}>
-      <div className="row between">
-        <h2 style={{ margin: 0 }}>Sensors</h2>
-        <a href="#/sensors" className="small">
-          sensor settings
-        </a>
-      </div>
-      {p.error && <div className="muted small">Last refresh failed: {p.error}</div>}
-      <div className="ops-grid" style={{ marginTop: 8 }}>
-        {sensors.map((s) => (
-          <SensorGraph key={s.id} s={s} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SensorGraph({ s }: { s: SensorRow }) {
-  const [span, setSpan] = useState<SensorSpan>("24h");
-  const [series, setSeries] = useState<Series | null>(null);
-  const [err, setErr] = useState("");
-  useEffect(() => {
-    if (span === "24h") return;
-    let alive = true;
-    setErr("");
-    engine.client
-      ?.dashboardSeries(`sensor:${s.name}`, span)
-      .then((r) => alive && setSeries(r))
-      .catch((e) => alive && setErr(msg(e)));
-    return () => {
-      alive = false;
-    };
-  }, [s.name, span, s.last_at]);
-  const state = sensorState(s);
-  const bounds = [s.min, s.max].filter((v): v is number => v != null);
-  const now = Date.now();
-  const daily = span !== "24h" && series && series.days === span ? series : null;
-  return (
-    <div className="card sensor-graph" style={{ cursor: "default" }}>
-      <div className="row between" style={{ flexWrap: "nowrap" }}>
-        <strong style={{ overflowWrap: "anywhere" }}>{s.name}</strong>
-        <span className={`chip static tone-${sensorTone(state)}`}>{state}</span>
-      </div>
-      <div className="mon-stats">
-        <span>{s.last_value != null ? formatValue(s.last_value, s.unit) : "no reading"}</span>
-        {s.last_at && <span>{relativePast(s.last_at)}</span>}
-        {s.location && <span>{s.location}</span>}
-      </div>
-      {span === "24h" ? (
-        <Chart points={timePoints(s.series_24h, now - DAY, now)} kind="line" unit={s.unit} bounds={bounds} height={80} label={`${s.name}, last 24 hours`} axis={["24 h ago", "now"]} />
-      ) : err ? (
-        <div className="error">{err}</div>
-      ) : daily ? (
-        <Chart points={dayPoints(daily.points)} kind="line" unit={s.unit} bounds={bounds} height={80} label={`${s.name}, daily mean over ${span} days`} axis={[shortDay(daily.from), "today"]} />
-      ) : (
-        <div className="muted small chart-empty">Loading</div>
-      )}
-      <div className="seg seg-sm" role="group" aria-label={`Range for ${s.name}`} style={{ marginTop: 6 }}>
-        {SENSOR_SPANS.map((v) => (
-          <button key={String(v)} type="button" className={span === v ? "on" : ""} aria-pressed={span === v} onClick={() => setSpan(v)}>
-            {v === "24h" ? "24h" : `${v}d`}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MonitorCard({ m, pct, open, onToggle, onEdit, onChanged }: { m: OpsMonitor; pct: number | null; open: boolean; onToggle: () => void; onEdit: () => void; onChanged: () => Promise<void> }) {
+export function MonitorCard({ m, pct, open, onToggle, onEdit, onChanged }: { m: OpsMonitor; pct: number | null; open: boolean; onToggle: () => void; onEdit: () => void; onChanged: () => Promise<void> }) {
   const f = m.fields as MonitorF;
   const state = monitorState(f);
   /** A backup machine read since 2026-11-13: one line per job instead of latency and uptime. */
@@ -359,9 +393,11 @@ function MonitorCard({ m, pct, open, onToggle, onEdit, onChanged }: { m: OpsMoni
         <div className="inc-strip">
           {f.last_error && <div className="err">{f.last_error}</div>}
           <div className="small">Down with {String(inc.fields.name)}: its machine stopped answering.</div>
+          <div className="row" style={{ marginTop: 6 }}><ProposeFix monitorId={m.id} /></div>
         </div>
       )}
-      {inc && !joined && <IncidentStrip inc={inc} host={f.host} onChanged={onChanged} showError={!jobs} />}
+      {inc && !joined && <IncidentStrip inc={inc} monitorId={m.id} onChanged={onChanged} showError={!jobs} />}
+      {!inc && state === "down" && f.enabled !== false && <div className="row" style={{ marginTop: 8 }}><ProposeFix monitorId={m.id} /></div>}
       {err && <div className="error">{err}</div>}
       <div className="row" style={{ marginTop: 8 }}>
         <button className="small" onClick={() => void check()} disabled={busy}>
@@ -381,9 +417,9 @@ function MonitorCard({ m, pct, open, onToggle, onEdit, onChanged }: { m: OpsMoni
   );
 }
 
-/** The red strip on a card with an open incident: the error, acknowledge and the runbook link. */
+/** The red strip on a card with an open incident: the error, Propose a fix and Acknowledge (the card is on its machine's page). */
 /** `showError` false: the card already says what is wrong (a backup machine's job lines). */
-function IncidentStrip({ inc, host, onChanged, showError = true }: { inc: Entity; host?: string; onChanged: () => Promise<void>; showError?: boolean }) {
+function IncidentStrip({ inc, monitorId, onChanged, showError = true }: { inc: Entity; monitorId: string; onChanged: () => Promise<void>; showError?: boolean }) {
   const f = inc.fields as IncidentF;
   return (
     <div className="inc-strip">
@@ -392,18 +428,16 @@ function IncidentStrip({ inc, host, onChanged, showError = true }: { inc: Entity
       <div className="muted small">
         down {fmtDuration(incidentSeconds(f))}, {checksFailed(f.checks_failed)}
       </div>
-      <AckControl inc={inc} onChanged={onChanged} />
-      {host && (
-        <a href={`#/hosts/${encodeURIComponent(host)}`} className="small">
-          {host} runbook
-        </a>
-      )}
+      <div className="row" style={{ alignItems: "center", gap: 6 }}>
+        <ProposeFix monitorId={monitorId} />
+        <AckControl inc={inc} onChanged={onChanged} />
+      </div>
     </div>
   );
 }
 
 /** "Acknowledge" opens a one-line note; the hub stamps the incident and, with a note, writes a journal entry. */
-function AckControl({ inc, onChanged }: { inc: Entity; onChanged: () => Promise<void> }) {
+export function AckControl({ inc, onChanged }: { inc: Entity; onChanged: () => Promise<void> }) {
   const f = inc.fields as IncidentF;
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
@@ -529,8 +563,8 @@ function History({ id, reloadKey, lastCheck, intervalS }: { id: string; reloadKe
 }
 
 /** Add or edit a monitor through the entity path; the hub fills the state fields. */
-function MonitorEditor({ monitor, hosts, onDone }: { monitor: Entity | null; hosts: string[]; onDone: () => void }) {
-  const [d, setD] = useState<MonitorDraft>(() => (monitor ? monitorDraft(monitor.fields as MonitorF) : { ...EMPTY_MONITOR }));
+export function MonitorEditor({ monitor, hosts, host, onDone }: { monitor: Entity | null; hosts: string[]; host?: string; onDone: () => void }) {
+  const [d, setD] = useState<MonitorDraft>(() => (monitor ? monitorDraft(monitor.fields as MonitorF) : { ...EMPTY_MONITOR, ...(host ? { host } : {}) }));
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLFormElement>(null);
@@ -646,82 +680,8 @@ function MonitorEditor({ monitor, hosts, onDone }: { monitor: Entity | null; hos
   );
 }
 
-/** Open incidents first, then the ones closed in the last 7 days; beside them renewals due and recent changes. */
-function Incidents({ data, onChanged }: { data: OpsData; onChanged: () => Promise<void> }) {
-  const weekAgo = new Date(Date.now() - 7 * DAY).toISOString();
-  const closed = useEntities("incident", (e) => !!e.fields.closed_at && String(e.fields.closed_at) >= weekAgo)
-    .slice()
-    .sort((a, b) => (String(a.fields.closed_at) < String(b.fields.closed_at) ? 1 : -1));
-  const open = data.incidents_open.slice().sort((a, b) => (String(a.fields.opened_at) < String(b.fields.opened_at) ? 1 : -1));
-
-  return (
-    <>
-      <section style={{ marginTop: 20 }}>
-        <div className="row between">
-          <h2 style={{ margin: 0 }}>Incidents</h2>
-          <span className="muted small">
-            {open.length} open, {data.incidents_7d} opened in 7 days
-          </span>
-        </div>
-        {!open.length && !closed.length && <div className="muted small" style={{ marginTop: 6 }}>No incidents in 7 days.</div>}
-        <div className="list" style={{ marginTop: 8 }}>
-          {open.map((e) => (
-            <IncidentRow key={e.id} e={e} onChanged={onChanged} />
-          ))}
-          {closed.map((e) => (
-            <IncidentRow key={e.id} e={e} onChanged={onChanged} />
-          ))}
-        </div>
-      </section>
-      <div className="ops-lists">
-        <section className="card">
-          <h2 style={{ margin: "0 0 6px" }}>Due in 30 days</h2>
-          {!data.watches_due_30d.length && <div className="muted small">Nothing due.</div>}
-          <ul className="plain">
-            {data.watches_due_30d.map((w) => (
-              <li key={w.id} className="row between small" style={{ padding: "3px 0", flexWrap: "nowrap" }}>
-                <a href={`#/renewals?focus=${w.id}`} className="grow" style={{ overflowWrap: "anywhere" }}>
-                  {String(w.fields.title)}
-                </a>
-                {/* A date without a time is that local day, as on Renewals (read as midnight UTC it showed the day before in the US). */}
-                <span className={daysLeft(String(w.fields.due)) < 0 ? "error" : "muted"} style={{ whiteSpace: "nowrap" }}>
-                  {fmtDate(parseDue(String(w.fields.due)).toISOString())}, {fmtDaysLeft(daysLeft(String(w.fields.due)))}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-        <section className="card">
-          <div className="row between">
-            <h2 style={{ margin: "0 0 6px" }}>Recent changes</h2>
-            <a href="#/journal" className="small">
-              journal
-            </a>
-          </div>
-          {!data.journal_recent.length && <div className="muted small">Nothing logged.</div>}
-          <ul className="plain">
-            {data.journal_recent.map((j) => {
-              const f = j.fields as JournalF;
-              return (
-                <li key={j.id} className="small" style={{ padding: "3px 0" }}>
-                  <a href={`#/hosts/${encodeURIComponent(f.host)}`} className="mono">
-                    {f.host}
-                  </a>{" "}
-                  <a href={`#/journal?focus=${j.id}`} style={{ color: "inherit" }}>
-                    {f.what}
-                  </a>{" "}
-                  <span className="muted">{relative(f.at)}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </div>
-    </>
-  );
-}
-
-function IncidentRow({ e, onChanged }: { e: Entity; onChanged: () => Promise<void> }) {
+/** An incident: open ones with Acknowledge, closed ones with how long they lasted and the note. */
+export function IncidentRow({ e, onChanged }: { e: Entity; onChanged: () => Promise<void> }) {
   const f = e.fields as IncidentF;
   const isOpen = !f.closed_at;
   return (

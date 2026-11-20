@@ -65,6 +65,15 @@ extension HubClient {
         return try await post(path, [String: String](), as: R.self).session_id
     }
 
+    /// `POST /monitors/:id/propose`: a check that is down. As for a sensor alert, the hub starts (or reopens) a chat
+    /// where the assistant finds the cause and proposes one fix, which runs only when approved there; the hub answers
+    /// 409 when the check is not failing.
+    public func proposeMonitorFix(id: String) async throws -> String {
+        struct R: Decodable { var session_id: String }
+        let path = "monitors/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)/propose"
+        return try await post(path, [String: String](), as: R.self).session_id
+    }
+
     /// `GET /sensors/:name/csv?days=`: `at,value,unit` rows as text.
     public func sensorCSV(name: String, days: Int = 30) async throws -> String {
         let path = "sensors/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)/csv"

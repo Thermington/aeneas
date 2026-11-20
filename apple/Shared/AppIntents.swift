@@ -448,7 +448,7 @@ enum ScreenOption: String, AppEnum {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Screen"
     static let caseDisplayRepresentations: [ScreenOption: DisplayRepresentation] = [
         .today: "Today", .assistant: "Assistant", .capture: "Capture", .tasks: "Tasks", .reminders: "Reminders", .week: "Week",
-        .notes: "Notes", .health: "Health", .logs: "Logs", .games: "Games", .films: "Films", .lists: "Lists", .projects: "Projects", .ops: "Ops",
+        .notes: "Notes", .health: "Health", .logs: "Logs", .games: "Games", .films: "Films", .lists: "Lists", .projects: "Projects", .ops: "Tech overview",
     ]
 }
 

@@ -8,7 +8,7 @@ describe("keyboard shortcuts", () => {
   it("every listed key does something, so the list in About is the list the app answers to", () => {
     for (const k of GLOBAL_KEYS) expect(keyAction(press(k.key), true), k.key).not.toBeNull();
     expect(keyAction(press("t"), true)).toEqual({ go: "/today" });
-    expect(keyAction(press("h"), true)).toEqual({ go: "/hosts" });
+    expect(keyAction(press("o"), true)).toEqual({ go: "/ops" });
     expect(keyAction(press("c"), true)).toEqual({ focus: "capture" });
     expect(keyAction(press("/"), true)).toEqual({ focus: "search" });
   });
@@ -25,7 +25,7 @@ describe("keyboard shortcuts", () => {
   });
   it("lists the keys of modules that are on", () => {
     const all = listedKeys(() => true).map((k) => k.key).join("");
-    expect(all).toBe("tacnwhofpl/");
+    expect(all).toBe("tacnwofpl/");
     const noHomelab = listedKeys((m) => m !== "homelab").map((k) => k.key).join("");
     expect(noHomelab).toBe("tacnwfpl/");
   });

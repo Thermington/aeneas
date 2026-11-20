@@ -255,8 +255,14 @@ export const JournalFields = z.object({
   outcome: z.enum(["planned", "running", "done", "failed", "interrupted", "reverted"]).default("done"),
   session_id: z.string().optional(),
   runbook_id: z.string().optional(),
-  /** `close`: written by a session close, which replaces only these when the session is closed again. */
-  source: z.enum(["close"]).optional(),
+  /**
+   * `close`: written by a session close, which replaces only these when the session is closed again. `hub`: written by
+   * the hub about something that happened on the machine or place (a reading went out of bounds and back), not a change
+   * anyone made; History shows it, lists of changes leave it out (since 2026-11-19).
+   */
+  source: z.enum(["close", "hub"]).optional(),
+  /** An approved command that only looked (counted, listed, read): it needed approval but changed nothing, so History leaves it out. */
+  lookup: z.boolean().optional(),
 });
 
 export const SnippetFields = z.object({
@@ -1095,4 +1101,26 @@ export function peopleInPlans(people: PersonLike[], facts: PersonLike[], plans: 
       .map(({ f }) => String(f.fields.value ?? "")).filter(Boolean);
     return { id: p.id, name: shortName(p), plans: mine.map((x) => ({ id: x.id, title: x.title, ...(x.at ? { at: x.at } : {}) })), notes };
   });
+}
+
+/**
+ * A reading as people say it (Tech, since 2026-11-19): the machine's own `core.disk.root.used` on core is "Disk /", a
+ * board's `garage_freezer` is "Garage freezer". `thing` is the machine or place the reading is on.
+ */
+export function readingLabel(sensor: string, thing: string): string {
+  const own = !!thing && sensor.toLowerCase().startsWith(`${thing.toLowerCase()}.`);
+  const rest = own ? sensor.slice(thing.length + 1) : sensor;
+  const nth = (n: string, what: string) => (n === "0" ? what : `${what} ${Number(n) + 1}`);
+  let m: RegExpExecArray | null;
+  if (rest === "cpu.used") return "CPU";
+  if (rest === "memory.used") return "Memory";
+  if ((m = /^disk\.(.+)\.used$/.exec(rest))) return m[1] === "root" ? "Disk /" : /^[a-z]$/.test(m[1]) ? `Disk ${m[1].toUpperCase()}:` : `Disk ${m[1]}`;
+  if ((m = /^cpu(\d*)\.temp$/.exec(rest))) return `${nth(m[1] || "0", "CPU")} temperature`;
+  if ((m = /^nvme(\d+)\.temp$/.exec(rest))) return `NVMe ${Number(m[1]) + 1} temperature`;
+  if ((m = /^gpu(\d+)\.temp$/.exec(rest))) return `${nth(m[1], "GPU")} temperature`;
+  if ((m = /^gpu(\d+)\.vram$/.exec(rest))) return `${nth(m[1], "GPU")} memory`;
+  if ((m = /^zfs\.(.+)\.pool$/.exec(rest))) return `Pool ${m[1]}`;
+  if ((m = /^zfs\.(.+)\.healthy$/.exec(rest))) return `Pool ${m[1]} health`;
+  const words = rest.replace(/[._]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }

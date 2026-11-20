@@ -61,7 +61,7 @@ function sshHosts(sshConfigPath: string): Map<string, Host> {
   return hosts;
 }
 
-/** The names in the hub machine's SSH config, for the Machines screen to offer (nothing is read from them until added). */
+/** The names in the hub machine's SSH config, for Add machine to offer (nothing is read from them until added). */
 export function sshConfigNames(cfg: Pick<Config, "sshConfigPath">): string[] {
   return [...sshHosts(cfg.sshConfigPath).values()].map((h) => h.target);
 }
@@ -1387,6 +1387,8 @@ export interface ActionRow {
   id: string; session_id: string; host: string; command: string; purpose: string; rollback: string | null;
   kind: "read" | "change"; status: "pending" | "running" | "done" | "failed" | "interrupted" | "cancelled" | "expired";
   created_at: string; ran_at: string | null; exit_code: number | null; output: string | null; journal_id: string | null;
+  /** 1: the model said it only looks (it still needed approval); its journal entry is marked so History leaves it out. */
+  lookup?: number;
 }
 
 export const ACTION_TTL_MS = 60 * 60 * 1000;
@@ -1444,8 +1446,8 @@ export class HostActions {
   }
 
   private insert(row: Omit<ActionRow, "ran_at" | "exit_code" | "output" | "journal_id">): void {
-    this.db.prepare("INSERT INTO ai_actions (id, session_id, host, command, purpose, rollback, kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(row.id, row.session_id, row.host, row.command, row.purpose, row.rollback, row.kind, row.status, row.created_at);
+    this.db.prepare("INSERT INTO ai_actions (id, session_id, host, command, purpose, rollback, kind, status, created_at, lookup) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.id, row.session_id, row.host, row.command, row.purpose, row.rollback, row.kind, row.status, row.created_at, row.lookup ? 1 : 0);
   }
 
   private setStatus(id: string, status: ActionRow["status"]): void {
@@ -1462,11 +1464,15 @@ export class HostActions {
     return { ...r, action_id: id };
   }
 
-  /** Record a change the model wants to make. One pending change per session: a new proposal replaces the old one. */
-  propose(sessionId: string, host: Host, command: string, purpose: string, rollback: string | null): ActionRow {
+  /**
+   * Record a change the model wants to make. One pending change per session: a new proposal replaces the old one.
+   * `lookup`: the model says it only looks (counts, lists, reads) though it needs approval; a command that matches a
+   * destructive rule is never one.
+   */
+  propose(sessionId: string, host: Host, command: string, purpose: string, rollback: string | null, lookup = false): ActionRow {
     this.db.prepare("UPDATE ai_actions SET status = 'cancelled' WHERE session_id = ? AND status = 'pending'").run(sessionId);
     const id = crypto.randomUUID();
-    this.insert({ id, session_id: sessionId, host: host.name, command, purpose, rollback, kind: "change", status: "pending", created_at: nowIso() });
+    this.insert({ id, session_id: sessionId, host: host.name, command, purpose, rollback, kind: "change", status: "pending", created_at: nowIso(), lookup: lookup && !detectDestructive(command) ? 1 : 0 });
     return this.get(id)!;
   }
 
@@ -1505,7 +1511,7 @@ export class HostActions {
       host: host.name, at: nowIso(), what: a.purpose || a.command.slice(0, 200), command: a.command,
       risk: destructive ? "high" : "medium",
       ...(a.rollback || destructive ? { rollback: a.rollback || destructive!.rule.rollback.replace(/^Rollback:\s*/, "") } : {}),
-      outcome: "running", session_id: a.session_id,
+      outcome: "running", session_id: a.session_id, ...(a.lookup && !destructive ? { lookup: true, risk: "low" } : {}),
     });
     this.db.prepare("UPDATE ai_actions SET status = 'running', ran_at = ?, journal_id = ? WHERE id = ?").run(nowIso(), journal.id, id);
     let raw: RunResult;

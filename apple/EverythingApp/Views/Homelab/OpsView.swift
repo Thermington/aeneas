@@ -1,8 +1,8 @@
 import SwiftUI
 import EACore
 
-/// The hub's ops board (`GET /ops`), one copy for every Ops screen: a second Ops window, or Ops opened again, reads
-/// the copy loaded in the last 25 s instead of asking the hub again.
+/// The hub's ops board (`GET /ops`), one copy for every Tech screen: a second Overview window, a machine's page, or the
+/// Overview opened again, reads the copy loaded in the last 25 s instead of asking the hub again.
 @MainActor
 final class OpsBoardFeed: ObservableObject {
     static let shared = OpsBoardFeed()
@@ -49,215 +49,255 @@ final class OpsBoardFeed: ObservableObject {
     }
 }
 
+/// `GET /sensors` for the Tech screens, one copy for all of them: each reading's latest value and state, which the hub
+/// writes without a sync change, and its 24 h series for the graphs on a machine's page.
+@MainActor
+final class ReadingsFeed: ObservableObject {
+    static let shared = ReadingsFeed()
+    /// The 24 h series by sensor entity id.
+    @Published private(set) var series: [String: [SensorPoint]] = [:]
+    @Published private(set) var loadedAt: Date?
+    private var hub = ""
+    private var triedAt: Date?
+    private var loading: Task<Void, Never>?
+
+    /// Loads the readings unless they were asked for less than `maxAge` seconds ago; a load already running is waited for.
+    func load(_ engine: SyncEngine, maxAge: TimeInterval = 0) async {
+        if let loading { await loading.value; return }
+        if engine.config.hubURL != hub { series = [:]; loadedAt = nil; triedAt = nil }
+        if maxAge > 0, let triedAt, Date().timeIntervalSince(triedAt) < maxAge { return }
+        let task = Task { await self.fetch(engine) }
+        loading = task
+        await task.value
+        loading = nil
+    }
+
+    private func fetch(_ engine: SyncEngine) async {
+        triedAt = Date()
+        hub = engine.config.hubURL
+        // Out of reach, or Sensors off on the hub: the synced readings stay, without graphs.
+        guard let c = engine.client, let rows = try? await c.sensors() else { return }
+        var map: [String: [SensorPoint]] = [:]
+        for r in rows { map[r.entity.id] = r.series_24h }
+        series = map
+        loadedAt = Date()
+        await engine.absorb(rows.map(\.entity))
+    }
+}
+
 /// What went wrong with a hand check of one monitor, shown on its row until a newer check is in.
 struct CheckFailure {
     var text: String
     var lastCheck: String?
 }
 
-/// Homelab ops: one summary line, what is down with Acknowledge, every monitor, incidents, renewals due and recent changes.
-/// Monitors and incidents come from the synced store; the hub's `GET /ops` adds 24 h uptime and the 7 day incident count.
+/// Tech, Overview: what needs a look (with Propose a fix and Acknowledge), then one card per machine, service and place,
+/// each opening its page (HostDetailView: checks, readings, history, fix notes and snippets), then recent activity.
+/// Checks and incidents come from the synced store, kept fresh by the hub's board (`GET /ops`), which also groups them
+/// into things; readings come from `GET /sensors`. With no board (the hub out of reach) or one from a hub before
+/// 2026-11-19, the cards are worked out on the device.
 struct OpsView: View {
     @EnvironmentObject var engine: SyncEngine
     @EnvironmentObject var model: AppModel
     @ObservedObject private var feed = OpsBoardFeed.shared
+    @ObservedObject private var readings = ReadingsFeed.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var creating = false
     @State private var acking: Entity?
-    @State private var editingEntry: Entity?
-    /// Monitors being checked by hand right now, and what went wrong with a hand check.
-    @State private var checking: Set<String> = []
-    @State private var checkFailures: [String: CheckFailure] = [:]
+    /// One of your own history lines about to be deleted, asked first.
+    @State private var deletingLine: Entity?
+    #if DEBUG && os(iOS)
+    /// `-EAMachine <name>` (DebugHooks): that machine's page, for screenshots.
+    @State private var debugMachine: String?
+    #endif
 
     private var board: OpsBoard? { feed.board }
 
     private var monitors: [Entity] {
-        engine.list(.monitor).sorted { (MonitorStatus($0).rank, $0.str("name").lowercased()) < (MonitorStatus($1).rank, $1.str("name").lowercased()) }
+        engine.list(.monitor).sorted { $0.str("name").localizedStandardCompare($1.str("name")) == .orderedAscending }
     }
-    private var down: [Entity] { monitors.filter { MonitorStatus($0) == .down } }
-    /// What is not down: the checks, and the backup machines in a section of their own.
-    private var others: [Entity] { monitors.filter { MonitorStatus($0) != .down && $0.str("type") != "backup" } }
-    private var backups: [Entity] { monitors.filter { MonitorStatus($0) != .down && $0.str("type") == "backup" } }
-
     private var openIncidents: [Entity] {
         engine.list(.incident).filter { ($0.string("closed_at") ?? "").isEmpty }.sorted { $0.str("opened_at") > $1.str("opened_at") }
     }
-    private var closedThisWeek: [Entity] {
-        let cutoff = Date().addingTimeInterval(-7 * 86400)
-        return engine.list(.incident).filter { ($0.date("closed_at") ?? .distantPast) >= cutoff }.sorted { $0.str("closed_at") > $1.str("closed_at") }
-    }
-    private func openIncident(for monitor: Entity) -> Entity? { MonitorText.openIncident(for: monitor, in: openIncidents) }
+    /// Readings only while Sensors is on: the hub answers none otherwise.
+    private var sensors: [Entity] { model.isOn(.sensors) ? engine.list(.sensor) : [] }
 
-    private var uptime: [String: Double] { board?.uptimeByName ?? [:] }
-
-    private var dueSoon: [Entity] {
-        let limit = Date().addingTimeInterval(30 * 86400)
-        return engine.watches.filter { ($0.date("due") ?? .distantFuture) <= limit }
+    private func things(_ monitors: [Entity], _ sensors: [Entity]) -> [TechThing] {
+        board?.things ?? Tech.localThings(monitors: monitors, sensors: sensors, hosts: Homelab.localHosts(engine).map(\.host))
     }
-    private var recentChanges: [Entity] { Array(engine.list(.journal).sorted(by: JournalOrder.newestFirst).prefix(10)) }
+
+    /// Every machine's and place's History together: a check's incident is on its thing, else on the check's host.
+    private func activity(_ things: [TechThing], _ byMonitor: [String: Entity]) -> [HistoryItem] {
+        var thingOf: [String: String] = [:]
+        for t in things { for id in t.monitors where thingOf[id] == nil { thingOf[id] = t.name } }
+        return TechHistory.items(journal: engine.list(.journal), incidents: engine.list(.incident), runbooks: engine.list(.runbook), hostOf: { id in
+            thingOf[id] ?? byMonitor[id].map { Homelab.hostKey($0.str("host")) }.flatMap { $0.isEmpty ? nil : $0 }
+        })
+    }
 
     var body: some View {
+        let monitors = self.monitors
+        let sensors = self.sensors
+        let things = self.things(monitors, sensors)
+        let byMonitor = Dictionary(monitors.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let bySensor = Dictionary(sensors.map { ($0.str("name"), $0) }, uniquingKeysWith: { a, _ in a })
+        let byName = Dictionary(things.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        let looks = Tech.needsALook(things: things, monitors: monitors, incidents: openIncidents, sensors: sensors, hubBackup: board?.hub_backup ?? [])
         List {
             SwiftUI.Section {
-                OpsSummary(monitors: monitors, hubBackup: board?.hub_backup ?? [], updated: feed.loadedAt ?? engine.lastSync, note: feed.note)
+                TechLightRow(light: Tech.light(looks: looks, things: things, monitors: monitors, sensors: sensors),
+                             updated: feed.loadedAt ?? engine.lastSync, note: feed.note)
+                if board != nil && board?.things == nil {
+                    Text("This hub is older than this app, so these cards are worked out on this device. Update the hub in Settings, About.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
-            // A section of the list, not an overlay: the summary, incidents and recent changes below stay readable.
-            if monitors.isEmpty {
+            if !looks.isEmpty {
+                SwiftUI.Section("Needs a look") {
+                    ForEach(looks) { l in
+                        let row = LookRow(look: l, thing: byName[l.thing], onAck: { acking = $0 })
+                        if l.thing.isEmpty {
+                            row
+                        } else {
+                            NavigationLink { HostDetailView(host: l.thing) } label: { row }
+                        }
+                    }
+                }
+            }
+
+            ForEach([(ThingKind.machine, "Machines"), (.service, "Services"), (.place, "Places")], id: \.0) { group in
+                let shown = things.filter { $0.kind == group.0 }
+                if !shown.isEmpty {
+                    SwiftUI.Section(group.1) {
+                        ForEach(shown) { t in
+                            NavigationLink { HostDetailView(host: t.name) } label: {
+                                ThingRow(thing: t, status: Tech.status(of: t, monitors: byMonitor, sensors: bySensor, hubBackup: board?.hub_backup ?? []),
+                                         line: Tech.checksLine(t, monitors: byMonitor),
+                                         bars: t.kind == .place ? [] : Tech.machineBars(t, sensors: bySensor),
+                                         readings: t.kind == .place ? t.sensors.compactMap { bySensor[$0] } : [])
+                            }
+                        }
+                    }
+                }
+            }
+
+            // A section of the list, not an overlay: the light and recent activity stay readable.
+            if things.isEmpty {
                 SwiftUI.Section {
                     ContentUnavailableView {
-                        Label("No monitors yet", systemImage: "waveform.path.ecg")
+                        Label("Nothing watched yet", systemImage: "server.rack")
                     } description: {
-                        Text("Tap Add monitor to have the hub check a host by ping, port, web address, certificate or name lookup.")
+                        Text("Tap Add check to have the hub check a machine or a web address by ping, port, web address, certificate or name lookup.")
                     } actions: {
-                        Button("Add monitor") { creating = true }.buttonStyle(.borderedProminent)
+                        Button("Add check") { creating = true }.buttonStyle(.borderedProminent)
                     }
-                }
-            }
-
-            if !down.isEmpty {
-                SwiftUI.Section("Down") {
-                    ForEach(down) { m in
-                        NavigationLink { MonitorDetailView(id: m.id) } label: {
-                            DownRow(monitor: m, incident: openIncident(for: m), checking: checking.contains(m.id), checkError: failure(m), onAck: { acking = $0 })
-                        }
-                        .modifier(CheckNowActions(busy: checking.contains(m.id)) { Task { await check(m) } })
-                    }
-                }
-            }
-
-            if !others.isEmpty {
-                SwiftUI.Section(down.isEmpty ? "Monitors" : "Other monitors") {
-                    ForEach(others) { m in
-                        NavigationLink { MonitorDetailView(id: m.id) } label: {
-                            MonitorRow(monitor: m, uptime: uptime[m.str("name")], checking: checking.contains(m.id), checkError: failure(m))
-                        }
-                        .modifier(CheckNowActions(busy: checking.contains(m.id)) { Task { await check(m) } })
-                    }
-                }
-            }
-
-            let hubBackup = board?.hub_backup ?? []
-            if !backups.isEmpty || !hubBackup.isEmpty {
-                SwiftUI.Section {
-                    if !hubBackup.isEmpty { HubBackupRow(lines: hubBackup) }
-                    ForEach(backups) { m in
-                        NavigationLink { MonitorDetailView(id: m.id) } label: {
-                            MonitorRow(monitor: m, uptime: nil, checking: checking.contains(m.id), checkError: failure(m))
-                        }
-                        .modifier(CheckNowActions(busy: checking.contains(m.id)) { Task { await check(m) } })
-                    }
-                } header: {
-                    Text("Backups")
-                }
-            }
-
-            incidentsSection
-
-            if !dueSoon.isEmpty {
-                SwiftUI.Section {
-                    ForEach(dueSoon) { w in
-                        Button { model.section = .renewals } label: { DueRow(watch: w) }
-                            .buttonStyle(.plain)
-                    }
-                } header: {
-                    Text("Due in 30 days")
                 }
             }
 
             SwiftUI.Section {
-                if recentChanges.isEmpty {
-                    Text("Nothing logged yet.").font(.subheadline).foregroundStyle(.secondary)
+                HistoryRows(items: activity(things, byMonitor), showHost: true, step: 8, onDelete: { deletingLine = $0 })
+                // The change journal and snippets are the Overview's own pages since 2026-11-19, no longer in the Library.
+                NavigationLink(value: Section.journal) { Text("All changes") }
+                NavigationLink(value: Section.snippets) { Text("All snippets") }
+                if model.isOn(.sensors) {
+                    NavigationLink(value: Section.sensors) { Text("Every sensor, and how a board posts readings") }
                 }
-                ForEach(recentChanges) { j in
-                    Button { editingEntry = j } label: { ChangeRow(entry: j) }.buttonStyle(.plain)
-                }
-                Button("Open change journal") { model.section = .journal }
             } header: {
-                Text("Recent changes")
+                Text("Recent activity")
             }
         }
-        .navigationTitle("Ops")
+        .navigationTitle("Overview")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = true } label: { Label("Add monitor", systemImage: "plus") }
+                Button { creating = true } label: { Label("Add check", systemImage: "plus") }
             }
         }
         .sheet(isPresented: $creating) { MonitorEditor(monitor: nil, host: nil) }
         .sheet(item: $acking) { inc in AckSheet(incident: inc) }
-        .sheet(item: $editingEntry) { e in JournalEditor(entry: e) }
-        .refreshable { await engine.sync(); await feed.load(engine) }
+        .confirmationDialog("Delete this line from the history?", isPresented: Binding(get: { deletingLine != nil }, set: { if !$0 { deletingLine = nil } }),
+                            titleVisibility: .visible, presenting: deletingLine) { e in
+            Button("Delete", role: .destructive) { Task { await engine.softDelete(e.id) } }
+        }
+        .refreshable { await engine.sync(); await load(maxAge: 0) }
+        #if DEBUG && os(iOS)
+        .navigationDestination(item: $debugMachine) { HostDetailView(host: $0) }
+        .task {
+            guard !DebugHooks.machineShown, let m = UserDefaults.standard.string(forKey: "EAMachine") else { return }
+            DebugHooks.machineShown = true
+            try? await Task.sleep(for: .seconds(1))
+            debugMachine = m
+        }
+        #endif
         // Every 30 s while the window can be seen; a minimized window or the app put away stops asking the hub.
         .task(id: scenePhase.refreshes) {
             guard scenePhase.refreshes else { return }
             while !Task.isCancelled {
-                await feed.load(engine, maxAge: 25)
+                await load(maxAge: 25)
                 try? await Task.sleep(for: .seconds(30))
             }
         }
     }
 
-    @ViewBuilder
-    private var incidentsSection: some View {
-        // Open incidents whose monitor is already shown under Down are not repeated here.
-        let downIds = Set(down.map(\.id))
-        let open = openIncidents.filter { !downIds.contains($0.str("monitor_id")) }
-        let underDown = openIncidents.count - open.count
-        let count7d = board?.incidents_7d
-        SwiftUI.Section {
-            if openIncidents.isEmpty && closedThisWeek.isEmpty {
-                Text("No incidents in 7 days.").font(.subheadline).foregroundStyle(.secondary)
-            } else if underDown > 0 {
-                // The header counts every open incident; this says where the ones not listed here are.
-                Text(open.isEmpty ? "The open one\(underDown == 1 ? " is" : "s are") under Down." : "\(underDown) more open under Down.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            ForEach(open) { inc in IncidentRow(incident: inc, onAck: { acking = inc }) }
-            ForEach(closedThisWeek) { inc in IncidentRow(incident: inc, onAck: nil) }
-        } header: {
-            HStack {
-                Text("Incidents")
-                Spacer()
-                Text("\(openIncidents.count) open" + (count7d.map { ", \($0) opened in 7 days" } ?? "")).textCase(nil)
-            }
+    /// The board and the readings, asked for together.
+    private func load(maxAge: TimeInterval) async {
+        async let board: Void = feed.load(engine, maxAge: maxAge)
+        if model.isOn(.sensors) { await readings.load(engine, maxAge: maxAge) }
+        await board
+    }
+}
+
+/// Propose a fix: the hub starts (or reopens) a chat where the assistant finds the cause and proposes one change, which
+/// runs only when approved there. For a check that is down (`monitorId`) or a reading that alerts (`sensor`).
+struct ProposeFixButton: View {
+    @EnvironmentObject var engine: SyncEngine
+    @EnvironmentObject var model: AppModel
+    var monitorId: String? = nil
+    var sensor: String? = nil
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { Task { await propose() } } label: { Label(busy ? "Starting" : "Propose a fix", systemImage: "wrench.and.screwdriver") }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(busy || engine.client == nil)
+                .help("The assistant finds the cause and proposes one fix you approve or cancel")
+            if let error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(3) }
         }
     }
 
-    /// A hand check's error, until a newer check of that monitor is in.
-    private func failure(_ m: Entity) -> String? {
-        guard let f = checkFailures[m.id], f.lastCheck == m.string("last_check") else { return nil }
-        return f.text
-    }
-
-    private func check(_ m: Entity) async {
-        guard !checking.contains(m.id) else { return }
-        guard let c = engine.client else {
-            checkFailures[m.id] = CheckFailure(text: "Checking needs the hub.", lastCheck: m.string("last_check"))
-            return
-        }
-        checking.insert(m.id)
-        checkFailures[m.id] = nil
-        defer { checking.remove(m.id) }
+    private func propose() async {
+        guard let c = engine.client, !busy else { return }
+        busy = true
+        error = nil
+        defer { busy = false }
         do {
-            await engine.absorb(try await c.checkMonitor(id: m.id))
+            if let monitorId { model.openChat(try await c.proposeMonitorFix(id: monitorId)) }
+            else if let sensor { model.openChat(try await c.proposeSensorFix(name: sensor)) }
         } catch {
-            checkFailures[m.id] = CheckFailure(text: "Check failed: \(Homelab.errorText(error))", lastCheck: engine.get(m.id)?.string("last_check"))
+            self.error = Homelab.errorText(error)
         }
     }
 }
 
-/// Check now on a monitor row: swiped on the iPhone and iPad, from the right-click menu on the Mac.
+/// Check now on a monitor row: swiped on the iPhone and iPad, from the right-click menu on the Mac. With `onDelete`,
+/// Delete beside it (one set of swipe actions: two on the same edge do not add up).
 struct CheckNowActions: ViewModifier {
     var busy: Bool
+    var onDelete: (() -> Void)? = nil
     var action: () -> Void
 
     func body(content: Content) -> some View {
         content
             .swipeActions(edge: .trailing) {
                 Button("Check now", action: action).tint(.blue).disabled(busy)
+                if let onDelete { Button("Delete", role: .destructive, action: onDelete) }
             }
             .contextMenu {
                 Button("Check now", systemImage: "arrow.clockwise", action: action).disabled(busy)
+                if let onDelete { Button("Delete", systemImage: "trash", role: .destructive, action: onDelete) }
             }
     }
 }
@@ -281,41 +321,45 @@ struct CheckProgress: View {
 
 // MARK: Rows
 
-/// The one line that says whether everything is fine: "All 12 up", "2 down", with the rest beside it.
-struct OpsSummary: View {
-    var monitors: [Entity]
-    /// This hub's own backup lines: a row under Backups, so it counts like a monitor (it said "All up" over a red row).
-    var hubBackup: [HubBackupLine] = []
+extension TechTone {
+    var color: Color {
+        switch self {
+        case .ok: return .green
+        case .danger: return .red
+        case .muted: return .gray
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .ok: return MonitorStatus.up.symbol
+        case .danger: return "exclamationmark.triangle.fill"
+        case .muted: return MonitorStatus.unknown.symbol
+        }
+    }
+}
+
+/// A thing's status as a pill: "Up", "1 down, 2 alerts", "No readings yet".
+struct TechStatusPill: View {
+    var status: TechStatus
+    var body: some View {
+        HomelabPill(text: status.label.prefix(1).uppercased() + status.label.dropFirst(), symbol: status.tone.symbol, color: status.tone.color)
+    }
+}
+
+/// The light at the top of the Overview: what needs a look, or that all is well and how much is watched.
+struct TechLightRow: View {
+    var light: TechLight
     var updated: Date?
     var note: String?
 
-    private var states: [MonitorStatus] {
-        var s = monitors.map(MonitorStatus.init).filter { $0 != .off }
-        if !hubBackup.isEmpty { s.append(hubBackup.allSatisfy(\.ok) ? .up : .down) }
-        return s
-    }
-
     var body: some View {
-        let states = self.states
-        let up = states.filter { $0 == .up }.count
-        let down = states.filter { $0 == .down }.count
-        let unknown = states.filter { $0 == .unknown }.count
-        let (label, detail, status): (String, String, MonitorStatus) = {
-            if states.isEmpty { return ("No monitors", "", .off) }
-            let parts = [(up, "up"), (unknown, "unknown")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
-            if down > 0 { return ("\(down) down", parts, .down) }
-            if unknown > 0 { return ("\(unknown) unknown", up > 0 ? "\(up) up" : "", .unknown) }
-            return ("All \(up) up", "", .up)
-        }()
-        let off = monitors.filter { MonitorStatus($0) == .off }.count
         HStack(spacing: 14) {
-            Image(systemName: status.symbol)
+            Image(systemName: light.tone.symbol)
                 .font(.system(size: 34))
-                .foregroundStyle(status.color)
+                .foregroundStyle(light.tone.color)
             VStack(alignment: .leading, spacing: 3) {
-                Text(label).font(.title2.weight(.bold)).foregroundStyle(status == .off ? Color.primary : status.color)
-                let extra = [detail, off > 0 ? "\(off) off" : ""].filter { !$0.isEmpty }.joined(separator: ", ")
-                if !extra.isEmpty { Text(extra).font(.subheadline) }
+                Text(light.label).font(.title2.weight(.bold)).foregroundStyle(light.tone == .muted ? Color.primary : light.tone.color)
+                if !light.detail.isEmpty { Text(light.detail).font(.subheadline) }
                 if let note { Text(note).font(.caption).foregroundStyle(.secondary) }
                 else if let updated { Text("Updated \(Homelab.ago(updated))").font(.caption).foregroundStyle(.secondary) }
             }
@@ -323,6 +367,95 @@ struct OpsSummary: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// One row of what needs a look: what is wrong and where, Propose a fix (an assistant chat that proposes one change to
+/// approve) and, for a check that is down, Acknowledge.
+struct LookRow: View {
+    var look: TechLook
+    var thing: TechThing?
+    var onAck: (Entity) -> Void
+
+    var body: some View {
+        let acked = look.incident.flatMap { $0.string("acknowledged_at") }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: look.acknowledged ? MonitorStatus.unknown.symbol : "exclamationmark.triangle.fill")
+                    .foregroundStyle(look.acknowledged ? Color.gray : Color.red)
+                Text(StyleGuard.dashes(look.title)).font(.body.weight(.semibold))
+                Spacer(minLength: 6)
+                if let thing {
+                    Text(thing.label).font(thing.kind == .place ? .caption : .caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            if let d = look.detail { Text(StyleGuard.dashes(d)).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+            if let inc = look.incident, let acked { Text(MonitorText.acked(acked, note: inc.string("ack_note"))).font(.caption) }
+            if look.monitorId != nil || look.sensor != nil || (look.incident != nil && acked == nil) {
+                HStack(alignment: .top, spacing: 10) {
+                    if look.monitorId != nil || look.sensor != nil { ProposeFixButton(monitorId: look.monitorId, sensor: look.sensor) }
+                    if let inc = look.incident, acked == nil {
+                        Button("Acknowledge") { onAck(inc) }.buttonStyle(.borderedProminent).controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// One machine, service or place on the Overview: how it is, its checks in a line, and its CPU, memory and fullest disk
+/// (a place's readings instead).
+struct ThingRow: View {
+    var thing: TechThing
+    var status: TechStatus
+    var line: String
+    var bars: [TechBar]
+    var readings: [Entity]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(thing.label)
+                    .font(thing.kind == .place ? .body.weight(.semibold) : .body.monospaced().weight(.semibold))
+                    .lineLimit(2)
+                Spacer(minLength: 6)
+                TechStatusPill(status: status)
+            }
+            let sub = [thing.hub ? "the hub's machine" : "", line].filter { !$0.isEmpty }.joined(separator: ", ")
+            if !sub.isEmpty { Text(sub.prefix(1).uppercased() + sub.dropFirst()).font(.caption).foregroundStyle(.secondary) }
+            ForEach(bars) { TechBarRow(bar: $0) }
+            ForEach(readings) { s in
+                HStack {
+                    Text(Tech.readingLabel(s.str("name"), thing: thing.name))
+                    Spacer(minLength: 6)
+                    Text(Tech.readingValue(s)).monospacedDigit().foregroundStyle(Tech.alerting(s) ? Color.red : Color.secondary)
+                }
+                .font(.caption)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// CPU, memory or the fullest disk on a machine's card: its words and a bar, red while it alerts.
+struct TechBarRow: View {
+    var bar: TechBar
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(bar.label)
+                Spacer(minLength: 6)
+                Text(bar.text).monospacedDigit().foregroundStyle(bar.tone == .danger ? Color.red : Color.secondary)
+            }
+            .font(.caption)
+            ProgressView(value: bar.value, total: 100)
+                .progressViewStyle(.linear)
+                .tint(bar.tone == .danger ? .red : .accentColor)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(bar.label), \(bar.text)")
     }
 }
 
@@ -366,7 +499,7 @@ struct MonitorRow: View {
     }
 }
 
-/// The hub's own data on Ops: its nightly copy, a second folder, the copy to storage and the live copy, a line each.
+/// The hub's own data, on its machine's page: its nightly copy, a second folder, the copy to storage and the live copy, a line each.
 struct HubBackupRow: View {
     var lines: [HubBackupLine]
 
@@ -399,7 +532,7 @@ struct HubBackupRow: View {
     }
 }
 
-/// A down monitor with its error, how long it has been down, and Acknowledge.
+/// A down monitor with its error, how long it has been down, Propose a fix and Acknowledge.
 struct DownRow: View {
     var monitor: Entity
     var incident: Entity?
@@ -439,11 +572,16 @@ struct DownRow: View {
                     Text(MonitorText.downFor(inc)).font(.caption).foregroundStyle(.secondary)
                     if let ack = inc.string("acknowledged_at") {
                         Text(MonitorText.acked(ack, note: inc.string("ack_note"))).font(.caption)
-                    } else {
-                        Button("Acknowledge") { onAck(inc) }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
                     }
+                }
+            }
+            // One with its machine is acknowledged on the machine's own row, but a fix can start from any of them.
+            HStack(alignment: .top, spacing: 10) {
+                ProposeFixButton(monitorId: monitor.id)
+                if let inc = incident, !joined, inc.string("acknowledged_at") == nil {
+                    Button("Acknowledge") { onAck(inc) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                 }
             }
             CheckProgress(checking: checking, error: checkError)
@@ -480,40 +618,6 @@ struct IncidentRow: View {
             }
         }
         .padding(.vertical, 2)
-    }
-}
-
-private struct DueRow: View {
-    var watch: Entity
-    var body: some View {
-        let due = watch.date("due")
-        let overdue = (due ?? .distantFuture) < Date()
-        HStack {
-            Text(StyleGuard.dashes(watch.str("title"))).lineLimit(2)
-            Spacer(minLength: 6)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(overdue ? "Overdue" : "Due \(Homelab.ago(due))").font(.caption.weight(.semibold)).foregroundStyle(overdue ? Color.red : Color.secondary)
-                if let due { Text(due.formatted(date: .abbreviated, time: .omitted)).font(.caption2).foregroundStyle(.secondary) }
-            }
-        }
-        .contentShape(Rectangle())
-    }
-}
-
-private struct ChangeRow: View {
-    var entry: Entity
-    var body: some View {
-        let risk = JournalRisk(rawValue: entry.str("risk")) ?? .low
-        VStack(alignment: .leading, spacing: 2) {
-            Text(StyleGuard.dashes(entry.str("what"))).lineLimit(2)
-            HStack(spacing: 6) {
-                Text(entry.str("host")).monospaced()
-                Text(risk.label).foregroundStyle(risk.color)
-                Text(Homelab.ago(entry.string("at")))
-            }
-            .font(.caption).foregroundStyle(.secondary)
-        }
-        .contentShape(Rectangle())
     }
 }
 
@@ -711,7 +815,7 @@ struct MonitorDetailView: View {
         if let m = engine.get(id), !m.isDeleted {
             content(m)
         } else {
-            ContentUnavailableView("Monitor deleted", systemImage: "trash", description: Text("Go back to Ops."))
+            ContentUnavailableView("Check deleted", systemImage: "trash", description: Text("Go back to the Overview."))
         }
     }
 
@@ -743,6 +847,7 @@ struct MonitorDetailView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(checking || engine.client == nil)
+                if status == .down { ProposeFixButton(monitorId: m.id) }
                 if engine.client == nil { Text("Checking needs the hub.").font(.caption).foregroundStyle(.secondary) }
                 if let checkError { Text(checkError).font(.subheadline).foregroundStyle(.red) }
             }
@@ -828,7 +933,7 @@ struct MonitorDetailView: View {
         .sheet(item: $acking) { inc in AckSheet(incident: inc) }
         .task(id: m.string("last_check")) { await loadHistory() }
         .refreshable { await engine.sync(); await refreshMonitor(); await loadHistory() }
-        // Ops stops loading its board once this page is pushed, and each check's own fields (when it ran, the error,
+        // The Overview stops loading its board once this page is pushed, and each check's own fields (when it ran, the error,
         // a backup's job lines) reach no device by sync: read this monitor every 30 s while it is shown.
         .task(id: scenePhase.refreshes) {
             guard scenePhase.refreshes else { return }
@@ -1002,16 +1107,16 @@ struct MonitorEditor: View {
                     Toggle("On", isOn: $enabled)
                 }
                 if monitor != nil {
-                    SwiftUI.Section { Button("Delete monitor", role: .destructive) { confirmDelete = true } }
+                    SwiftUI.Section { Button("Delete check", role: .destructive) { confirmDelete = true } }
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle(monitor == nil ? "New monitor" : "Edit monitor")
+            .navigationTitle(monitor == nil ? "New check" : "Edit check")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(!valid) }
             }
-            .confirmationDialog("Delete this monitor?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            .confirmationDialog("Delete this check?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     if let m = monitor { Task { await engine.softDelete(m.id) } }
                     dismiss()

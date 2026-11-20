@@ -80,7 +80,7 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AeneasHub\app\deploy
 
 ## What other people's hubs cannot do
 
-- Reach the owner's machines. Their accounts have no SSH keys, and Homelab and Sensors start switched off.
+- Reach the owner's machines. Their accounts have no SSH keys, and Machines and Sensors (under Tech) start switched off.
 - Read this machine's disks or temperatures.
 - Use the image service. That is the owner's only.
 - Add people. Only the owner's hub offers that.

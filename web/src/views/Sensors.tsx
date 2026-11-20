@@ -4,7 +4,9 @@ import { engine } from "../sync/engine";
 import type { SensorRow } from "../sync/api";
 import { META } from "../sync/db";
 import { useMeta } from "../sync/hooks";
-import { Sparkline } from "../components/Sparkline";
+import { Chart } from "../components/Chart";
+import { dayPoints, shortDay, timePoints, type Series } from "../lib/dashboard";
+import { readingLabel, readingValue } from "../lib/tech";
 import { usePoll } from "../lib/usePoll";
 import { csvFilename, sensorState, sensorTone } from "../lib/body";
 import { relative } from "../lib/time";
@@ -21,7 +23,58 @@ function num(v: string): number | null {
   return v.trim() === "" || !Number.isFinite(n) ? null : n;
 }
 
-function SensorCard({ s, onSaved }: { s: SensorRow; onSaved: () => Promise<void> }) {
+type Span = "24h" | 7 | 30 | 90;
+const SPANS: Span[] = ["24h", 7, 30, 90];
+const DAY = 86400_000;
+
+/** The last 24 hours reading by reading, or a daily mean over 7 to 90 days. */
+function ReadingGraph({ s, label }: { s: SensorRow; label: string }) {
+  const [span, setSpan] = useState<Span>("24h");
+  const [series, setSeries] = useState<Series | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (span === "24h") return;
+    let alive = true;
+    setErr("");
+    engine.client
+      ?.dashboardSeries(`sensor:${s.name}`, span)
+      .then((r) => alive && setSeries(r))
+      .catch((e) => alive && setErr(plainError(e)));
+    return () => {
+      alive = false;
+    };
+  }, [s.name, span, s.last_at]);
+  const bounds = [s.min, s.max].filter((v): v is number => v != null);
+  const now = Date.now();
+  const daily = span !== "24h" && series && series.days === span ? series : null;
+  return (
+    <>
+      {span === "24h" ? (
+        <Chart points={timePoints(s.series_24h, now - DAY, now)} kind="line" unit={s.unit} bounds={bounds} height={80} label={`${label}, last 24 hours`} axis={["24 h ago", "now"]} />
+      ) : err ? (
+        <div className="error">{err}</div>
+      ) : daily ? (
+        <Chart points={dayPoints(daily.points)} kind="line" unit={s.unit} bounds={bounds} height={80} label={`${label}, daily mean over ${span} days`} axis={[shortDay(daily.from), "today"]} />
+      ) : (
+        <div className="muted small chart-empty">Loading</div>
+      )}
+      <div className="seg seg-sm" role="group" aria-label={`Range for ${label}`} style={{ marginTop: 6 }}>
+        {SPANS.map((v) => (
+          <button key={String(v)} type="button" className={span === v ? "on" : ""} aria-pressed={span === v} onClick={() => setSpan(v)}>
+            {v === "24h" ? "24h" : `${v}d`}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/**
+ * One reading: its value and state, a graph over 24 hours to 90 days, its alert bounds, Propose a fix while it alerts,
+ * and its CSV. On a machine's or place's page (`thing` set) it is named as people say it ("Disk P:").
+ */
+export function ReadingCard({ s, thing, onSaved }: { s: SensorRow; thing?: string; onSaved: () => Promise<void> }) {
+  const label = thing ? readingLabel(s.name, thing) : s.name;
   const [edit, setEdit] = useState<Settings>(() => settingsOf(s));
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -90,20 +143,20 @@ function SensorCard({ s, onSaved }: { s: SensorRow; onSaved: () => Promise<void>
   };
 
   return (
-    <div className="card sensor">
-      <div className="row between">
-        <div>
-          <strong>{s.name}</strong> {s.location && <span className="muted small">{s.location}</span>}
+    <div className="card sensor" id={`reading-${s.name}`}>
+      <div className="row between" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <strong style={{ overflowWrap: "anywhere" }} title={thing ? s.name : undefined}>{label}</strong> {!thing && s.location && <span className="muted small">{s.location}</span>}
         </div>
         <span className={`chip static tone-${tone}`}>{state}</span>
       </div>
       <div className="big" style={{ marginTop: 4 }}>
-        {s.last_value != null ? `${s.last_value} ${s.unit}` : "no reading"}
+        {readingValue(s)}
         {s.last_at && <span className="muted small"> {relative(s.last_at)}</span>}
       </div>
-      <Sparkline points={s.series_24h} hours={24} lines={bounds} />
+      <ReadingGraph s={s} label={label} />
       <div className="muted small">
-        24 h{bounds.length ? `, bounds ${s.min ?? "none"} to ${s.max ?? "none"} ${s.unit}` : ", no bounds"}
+        {bounds.length ? `Alerts ${[s.min != null ? `below ${s.min}` : "", s.max != null ? `above ${s.max}` : ""].filter(Boolean).join(" or ")}${s.unit === "%" ? "%" : s.unit ? ` ${s.unit}` : ""}${s.alert === false ? " (alerts off)" : ""}` : "No alert set"}
       </div>
       {err && <div className="error">{err}</div>}
       <div className="row" style={{ marginTop: 8 }}>
@@ -202,7 +255,7 @@ while True:
       {p.data && !list.length && <div className="empty">No sensors yet. The first reading posted creates one.</div>}
       <div className="grid2">
         {list.map((s) => (
-          <SensorCard key={s.id} s={s} onSaved={p.reload} />
+          <ReadingCard key={s.id} s={s} onSaved={p.reload} />
         ))}
       </div>
       <details className="card" style={{ marginTop: 12 }} open={howto} onToggle={(e) => setHowto((e.target as HTMLDetailsElement).open)}>

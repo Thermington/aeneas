@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Which Library areas (Plan, Notes, Homelab...) are open on this device. Every area starts closed so all of them fit
+ * Which Library areas (Plan, Notes, Tech...) are open on this device. Every area starts closed so all of them fit
  * on one screen; one you open stays open until you close it. The sidebar and the phone's Library tab share the list,
  * so opening Plan in one opens it in the other.
  */
@@ -14,7 +14,8 @@ const OLD_KEY = "ea.rail.collapsed";
 export function parseOpen(raw: string | null): string[] {
   try {
     const v = JSON.parse(raw ?? "[]") as unknown;
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    // Homelab was renamed Tech on 2026-11-19: an area opened under the old name stays open.
+    return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => (x === "Homelab" ? "Tech" : x)))] : [];
   } catch {
     return [];
   }

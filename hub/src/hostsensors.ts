@@ -8,10 +8,11 @@ import { feedStdin } from "./child.js";
 import { errCode } from "./logsafe.js";
 
 /**
- * Module 4 and 6: the homelab machines are sensors too, with nothing to set up. Every 10 minutes the hub reads disk
- * use, CPU, NVMe and GPU temperatures, GPU memory and ZFS pool health from the machines the person added (Machines,
+ * Module 4 and 6: the machines under Tech are sensors too, with nothing to set up. Every 10 minutes the hub reads CPU
+ * and memory use, disk use, CPU, NVMe and GPU temperatures, GPU memory and ZFS pool health from the machines the person added (Machines,
  * hosts.json, reached over ssh; the hub machine itself directly), with one fixed read-only script per OS. A sensor is
- * made the first time a value comes in, with thresholds that alert (a disk past 90%, a degraded pool). A reading is
+ * made the first time a value comes in, with thresholds that alert (a disk past 90%, a degraded pool); CPU and memory
+ * use have none, since a game or a build fills them for a while and that is fine; the owner can set one. A reading is
  * stored only when the value moved, the state changed or an hour passed, so a year stays small. A machine that is
  * asleep or away is skipped: its ping monitor already says so, and its sensors do not go stale for a week.
  */
@@ -26,6 +27,9 @@ interface Spec { unit: string; min?: number; max?: number; band: number }
 
 /** Thresholds and the change worth a reading, by what the value is (the last part of the sensor name). */
 function specFor(name: string): Spec {
+  // CPU is a 2-second sample every 10 minutes, so only a big move is worth a reading between the hourly ones.
+  if (/(^|\.)cpu\.used$/.test(name)) return { unit: "%", band: 15 };
+  if (/(^|\.)memory\.used$/.test(name)) return { unit: "%", band: 5 };
   if (name.endsWith(".used")) return { unit: "%", max: 90, band: 1 };
   if (name.endsWith(".pool")) return { unit: "%", max: 80, band: 1 };
   if (name.endsWith(".healthy")) return { unit: "", min: 1, band: 0 };
@@ -36,6 +40,9 @@ function specFor(name: string): Spec {
 }
 
 const LINUX = [
+  // CPU busy over 2 seconds (idle and iowait count as not busy), and memory in use (what MemAvailable says cannot be had back).
+  `a=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6; exit}' /proc/stat 2>/dev/null); sleep 2; b=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6; exit}' /proc/stat 2>/dev/null); echo "$a $b" | awk 'NF==4 {t=$3-$1; if (t>0) printf "cpu %.1f\\n", 100*(1-($4-$2)/t)}'`,
+  `awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END {if (t>0 && a!="") printf "mem %.1f\\n", 100*(t-a)/t}' /proc/meminfo 2>/dev/null`,
   // Disks, without pseudo and ZFS file systems (the pool line covers those) or boot partitions.
   `df -PT 2>/dev/null | awk 'NR>1 && $2 !~ /^(tmpfs|devtmpfs|overlay|squashfs|efivarfs|vfat|zfs|fuse.*|nfs.*|cifs)$/ && $7 !~ /^\\/(boot|snap|run|dev|sys|proc)/ {gsub("%","",$6); print "disk", $7, $6}'`,
   `for h in /sys/class/hwmon/hwmon*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in coretemp|k10temp|zenpower|cpu_thermal|nvme) t=$(cat "$h/temp1_input" 2>/dev/null) && echo "temp $n $t";; esac; done`,
@@ -45,12 +52,19 @@ const LINUX = [
 ].join("\n");
 
 const MACOS = [
+  // CPU from top's second sample (the first is since boot); memory from the system's own free percentage.
+  `top -l 2 -n 0 -s 1 2>/dev/null | awk '/CPU usage/ {i=$7} END {if (i!="") {gsub("%","",i); printf "cpu %.1f\\n", 100-i}}'`,
+  `memory_pressure -Q 2>/dev/null | awk -F': ' '/free percentage/ {gsub("%","",$2); printf "mem %.1f\\n", 100-$2}'`,
   `df -P /System/Volumes/Data 2>/dev/null | awk 'NR>1 {gsub("%","",$5); print "disk / " $5}'`,
   "true",
 ].join("\n");
 
 const WINDOWS = [
-  `Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { if ($_.Size -gt 0) { 'disk {0} {1}' -f $_.DeviceID.TrimEnd(':'), [math]::Round(100 * ($_.Size - $_.FreeSpace) / $_.Size, 1) } }`,
+  // Numbers are written with a dot whatever the machine's language (with -f, a German Windows wrote 89,3 and the hub read 89).
+  "$inv = [Globalization.CultureInfo]::InvariantCulture",
+  `$c = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; if ($c -ne $null) { [string]::Format($inv, 'cpu {0}', [math]::Round([double]$c, 1)) }`,
+  `$o = Get-CimInstance Win32_OperatingSystem; if ($o.TotalVisibleMemorySize -gt 0) { [string]::Format($inv, 'mem {0}', [math]::Round(100 * ($o.TotalVisibleMemorySize - $o.FreePhysicalMemory) / $o.TotalVisibleMemorySize, 1)) }`,
+  `Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { if ($_.Size -gt 0) { [string]::Format($inv, 'disk {0} {1}', $_.DeviceID.TrimEnd(':'), [math]::Round(100 * ($_.Size - $_.FreeSpace) / $_.Size, 1)) } }`,
   `if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { nvidia-smi --query-gpu=index,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits | ForEach-Object { 'gpu ' + $_ } }`,
   "",
 ].join("\n");
@@ -71,7 +85,9 @@ export function parseHostOutput(host: string, out: string): HostValue[] {
   for (const raw of out.split(/\r?\n/)) {
     const line = raw.trim();
     const [tag, ...rest] = line.split(/\s+/);
-    if (tag === "disk" && rest.length >= 2) {
+    if ((tag === "cpu" || tag === "mem") && rest.length === 1) {
+      add(tag === "cpu" ? "cpu.used" : "memory.used", parseFloat(rest[0]));
+    } else if (tag === "disk" && rest.length >= 2) {
       const mount = rest.slice(0, -1).join(" ");
       add(`disk.${mount === "/" ? "root" : slug(mount)}.used`, parseFloat(rest.at(-1)!));
     } else if (tag === "temp" && rest.length === 2) {

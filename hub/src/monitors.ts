@@ -517,7 +517,9 @@ export function opsView(hub: Hub, now: Date = new Date()): Record<string, unknow
   const watches = (hub.modules.on("renewals") ? hub.store.list({ kind: "watch", limit: 100000 }) : [])
     .filter((w) => { const due = localDateOf(w.fields.due).getTime(); return Number.isFinite(due) && due <= limit30; })
     .sort((a, b) => localDateOf(a.fields.due).getTime() - localDateOf(b.fields.due).getTime());
-  const journal = hub.store.list({ kind: "journal", limit: 100000 }).sort((a, b) => String(b.fields.at ?? "").localeCompare(String(a.fields.at ?? ""))).slice(0, 10);
+  // Changes made, newest first: the hub's own lines (a reading's alert) and approved lookups are not changes.
+  const journal = hub.store.list({ kind: "journal", limit: 100000 }).filter((j) => j.fields.source !== "hub" && j.fields.lookup !== true)
+    .sort((a, b) => String(b.fields.at ?? "").localeCompare(String(a.fields.at ?? ""))).slice(0, 10);
   return {
     monitors,
     incidents_open: open,
