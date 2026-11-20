@@ -6,6 +6,7 @@ import type { CheckRow, OpsData } from "../lib/ops";
 import type { Feel, FeelView } from "../feel/prefs";
 import type { Board, DashboardPrefs, MetricInfo, Series, Tile } from "../lib/dashboard";
 import type { WikiHit, WikiIndex, WikiPage } from "../lib/wiki";
+import type { MailList, MailMessage, MailMoved, MailRefresh } from "../lib/mail";
 import { directBase, hubFetch, isDirect } from "./direct";
 
 /** GET /feeds: keys that open one door each (the calendar feed, sensor readings). */
@@ -952,6 +953,37 @@ export class HubClient {
   }
   wikiSearch(q: string, limit = 30, signal?: AbortSignal) {
     return this.req<{ results: WikiHit[] }>("GET", `/wiki/search?q=${encodeURIComponent(q)}&limit=${limit}`, undefined, signal);
+  }
+
+  /** The Mail screen (module mail_inbox): the iCloud Inbox, sorted into bundles. */
+  mailList(signal?: AbortSignal) {
+    return this.req<MailList>("GET", "/mail", undefined, signal);
+  }
+  mailMessage(id: string) {
+    return this.req<MailMessage>("GET", `/mail/messages/${encodeURIComponent(id)}`);
+  }
+  mailRefresh() {
+    return this.req<MailRefresh>("POST", "/mail/refresh", {});
+  }
+  /** Done: the mails move to Archive in iCloud (a Sweep is many at once). */
+  mailDone(ids: string[]) {
+    return this.req<MailMoved>("POST", "/mail/done", { ids });
+  }
+  /** Undo, or Move to Inbox from Done: the mails move back from Archive to the Inbox. */
+  mailUndo(ids: string[]) {
+    return this.req<MailMoved>("POST", "/mail/undo", { ids });
+  }
+  /** Snooze a mail until a time: on the hub only, with a task titled with its subject. */
+  mailSnooze(id: string, until: string) {
+    return this.req<{ ok: true; until: string }>("POST", `/mail/messages/${encodeURIComponent(id)}/snooze`, { until });
+  }
+  /** Back to the Inbox now; its task is deleted. */
+  mailUnsnooze(id: string) {
+    return this.req<{ ok: true }>("POST", `/mail/messages/${encodeURIComponent(id)}/unsnooze`, {});
+  }
+  /** Pin or unpin a mail: kept on the hub only. */
+  mailPin(id: string, pinned: boolean) {
+    return this.req<{ ok: true; pinned: boolean }>("POST", `/mail/messages/${encodeURIComponent(id)}/pin`, { pinned });
   }
 
   gamePick(body: { players: string[]; hours?: number; coop?: boolean; exclude?: string[] }) {
