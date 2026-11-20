@@ -279,7 +279,7 @@ export class Gateway {
         const unseen = onMachine && !numbersChecked ? unshownNumbers(r.text, messages) : [];
         if (unseen.length) {
           numbersChecked = true;
-          messages.push({ role: "assistant", content: r.text }, { role: "user", content: `[Check from Aeneas, not typed by {{owner}}] Your reply gives ${unseen.slice(0, 6).join(", ")}, which no command output here shows.${held ? " The command that waits for approval has not run." : ""} Answer again with only what the output of the commands that ran shows; for a number you worked out from it, say what it came from.` });
+          messages.push({ role: "assistant", content: r.text }, { role: "user", content: `[Check from Aeneas, not typed by {{owner}}, who sees neither this nor your answer above] Your answer gives ${unseen.slice(0, 6).join(", ")}, which no command output here shows.${held ? " The command that waits for approval has not run." : ""} Write your answer to {{owner}}'s message again, from scratch, with only what the output of the commands that ran shows; for a number you worked out from it, say what it came from. Do not mention this check or your earlier answer.` });
           continue;
         }
         if (r.text.trim() || !actions.length) return { text: r.text, usage };
