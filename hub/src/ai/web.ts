@@ -183,6 +183,43 @@ async function getPublic(start: URL, signal: AbortSignal): Promise<{ body: strin
 }
 
 /**
+ * One picture for the Mail screen (mail-inbox.ts): a GET with redirects followed by hand (up to 5), each hop to a public
+ * address only, exactly as page reads (a mail cannot steer the hub to the router or another machine at home), no
+ * cookie, no referrer, at most `maxBytes` read. Null for anything that is not a 2xx answer; the caller checks the bytes
+ * are a picture.
+ */
+export async function fetchPublicBytes(url: string, timeoutMs = 15_000, maxBytes = 2_000_000): Promise<Buffer | null> {
+  let u: URL;
+  try { u = new URL(url); } catch { return null; }
+  return timed(timeoutMs, async (signal) => {
+    for (let hop = 0; hop <= 5; hop++) {
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      if (refused(u.hostname)) return null;
+      const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const req = (u.protocol === "https:" ? https : http).get(u, { signal, lookup: publicOnlyLookup, headers: { "user-agent": UA, accept: "image/webp,image/png,image/jpeg,image/gif,image/*;q=0.5" } }, resolve);
+        req.on("error", reject);
+      });
+      const status = res.statusCode ?? 0;
+      if (status >= 300 && status < 400 && res.headers.location) {
+        res.resume();
+        u = new URL(res.headers.location, u);
+        continue;
+      }
+      if (status < 200 || status >= 300) { res.resume(); return null; }
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of res) {
+        total += (chunk as Buffer).length;
+        if (total > maxBytes) { res.destroy(); return null; }
+        chunks.push(chunk as Buffer);
+      }
+      return Buffer.concat(chunks);
+    }
+    return null;
+  });
+}
+
+/**
  * Read a page for the assistant. Only public pages: an address on the owner's own network (a router's admin page,
  * another machine, the hub itself) is refused, so a page or a message cannot steer the assistant into reading
  * them; machines are reached with host commands (Homelab) instead.

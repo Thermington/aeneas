@@ -11,7 +11,7 @@ import { errCode } from "./logsafe.js";
 export const MODULE_IDS = [
   "voice", "notifications", "apple_reminders", "apple_calendar", "contacts",
   "renewals", "dashboard", "homelab", "projects", "music", "wiki", "images", "quiz",
-  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "web", "reference", "calendars",
+  "health", "pet", "food", "sensors", "games", "films", "calc", "jobs", "layouts", "mail", "mail_inbox", "web", "reference", "calendars",
 ] as const;
 export type ModuleId = (typeof MODULE_IDS)[number];
 
@@ -80,6 +80,7 @@ export const MODULES: ModuleDef[] = [
   { id: "jobs", title: "Job search", summary: "Job applications by stage, with cover letters drafted in your voice.", example: "You track five applications by stage, and the assistant drafts a cover letter that sounds like you.", group: "Life admin", default: false, prefixes: ["/applications", "/library/applications"], kinds: ["application"] },
   { id: "layouts", title: "Layout sketches", summary: "Move, resize or take away parts of a picture of any screen to show how you want it laid out.", example: "You want the Today screen rearranged. You drag and resize parts of a screenshot to show it, instead of describing it.", group: "Making", default: false, prefixes: ["/layouts"], kinds: [] },
   { id: "mail", title: "Mail receipts", summary: "Receipts, renewal notices and vet mail from Gmail or iCloud Mail, filed as renewals and pet visits.", example: "A renewal notice arrives in your inbox. It's filed as a renewal with its date and price, without you touching it.", reads: "Gmail or iCloud Mail messages that look like receipts, renewals or vet mail, read by your own model. The mail itself is not kept. iCloud Mail uses an app-specific password kept only on your hub; Apple's passwords of this kind open iCloud Mail, Contacts and Calendars (Aeneas only reads mail), so revoke it at account.apple.com when you stop using it.", setup: { minutes: "5 to 15", needs: "for Gmail, your own Google app and the hub reached through Tailscale (Google returns only to an https name); for iCloud Mail, an app-specific password you make at account.apple.com" }, group: "Life admin", default: false, wasCore: true, prefixes: ["/connections/google", "/connections/icloud"], kinds: [] },
+  { id: "mail_inbox", title: "Mail", summary: "Your iCloud Inbox, sorted into colored bundles (Purchases, Trips, Social, Promos, and Bills, Pet and Jobs from your other modules), with Pin, Snooze and Done.", example: "Three order notices and a receipt arrive overnight. In the morning they sit in one Purchases row, and Jordan's question about Saturday is on its own above them.", reads: "The mail in your iCloud Inbox (the last 90 days to start with), read-only but for Done: nothing is marked read or sent, and Done moves a mail to Archive in iCloud (Undo moves it back). Each message's text and its HTML, cleaned so nothing in it can run, is kept on the hub while it is in your Inbox, and never in backups, on your other devices or in the assistant's reach. The hub fetches every picture a mail shows from the web as it arrives, opened or not, so opening mail loads nothing and senders never see your device; they do see your hub's internet address. Attachments are never fetched. It uses the same app-specific password as iCloud Mail receipts.", setup: { minutes: "5", needs: "an app-specific password you make at account.apple.com" }, group: "Life admin", default: false, prefixes: ["/mail", "/connections/icloud"], kinds: [] },
   { id: "web", title: "Web lookups", summary: "The assistant searches the web and reads pages to answer what it does not know.", example: "You ask \"what time does the hardware store close today?\" The assistant looks it up through Tor and answers.", reads: "Searches go to DuckDuckGo, Brave, Mwmbl and Wikipedia through your hub's own search server, and the hub fetches the pages it reads, all only through Tor: the engines and sites see the words searched and a Tor address, never your home one. If Tor is not set up on the hub, lookups stay off. Captures are never searched.", group: "Assistant", default: false, wasCore: true, prefixes: [], kinds: [] },
   { id: "reference", title: "Offline reference", summary: "Wikipedia, dictionaries, medical and repair guides and more, kept on the hub: search and read them, and the assistant cites them, with no internet.", example: "The internet is down and your daughter has a fever. You search \"fever in children\" and read the medical guide's page on the iPad, and the assistant answers from it, naming the source and its date.", reads: "Nothing of yours. It downloads the public archives you pick from Kiwix's servers; searches and reading stay on the hub.", group: "Notes", default: false, prefixes: ["/reference"], kinds: [] },
 ];
@@ -101,6 +102,22 @@ export function moduleOfPath(p: string): ModuleId | null {
     }
   }
   return best?.id ?? null;
+}
+
+/**
+ * Every module that owns a hub path by its longest prefix: one, or more when modules share a prefix (iCloud Mail is
+ * linked for receipts and for the Mail screen alike). The path answers while any of them is on.
+ */
+export function modulesOfPath(p: string): ModuleId[] {
+  let len = -1;
+  let ids: ModuleId[] = [];
+  for (const m of MODULES) {
+    for (const pre of m.prefixes) {
+      if (!(p === pre || p.startsWith(pre + "/"))) continue;
+      if (pre.length > len) { len = pre.length; ids = [m.id]; } else if (pre.length === len && !ids.includes(m.id)) ids.push(m.id);
+    }
+  }
+  return ids;
 }
 
 export type ModuleCheck = (id: ModuleId) => boolean;

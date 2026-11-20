@@ -325,7 +325,8 @@ test("icloud routes: Mail off turns iCloud off, and the assistant can only ask f
   const t = makeHub();
   try {
     fakeICloud([]);
-    assert.equal((await t.api("/modules", { method: "PUT", json: { mail: false } })).status, 200);
+    // Since 2026-11-17 the link also serves the Mail screen (mail_inbox), so both are switched off here.
+    assert.equal((await t.api("/modules", { method: "PUT", json: { mail: false, mail_inbox: false } })).status, 200);
     const r = await t.api("/connections/icloud", { method: "PUT", json: { email: EMAIL, password: PASSWORD } });
     assert.equal(r.status, 404);
     assert.equal(((await r.json()) as { module: string }).module, "mail");
